@@ -48,6 +48,10 @@ const char* gameName();
 State state();
 bool isOnline();
 
+// The game's app object (CTrackMania*) read from the exe's global, nullptr while it does not exist yet or for an
+// unknown exe. Read only.
+void* appObject();
+
 // Copies the map into GameData\Tracks\Challenges\Downloaded\_Horizon\ (unique name), makes the game rescan its
 // track folders, picks the new entry and sets the main menu to "Play Track > Solo > OK" with it.
 // Main menu only. The race starts within the next frames; watch state() / the host's MapLoaded event.

@@ -8,6 +8,7 @@
 - Sunrise: start, checkpoint, finish and solo race end from the game (static addresses, hooked only when the bytes match; first test).
 - Buttons and tabs are one step lighter than the cards.
 - Icon font: 53 Lucide icons (ISC, 20 KB subset) merged into every host font; `HZ_ICON_*` codepoints in `horizon_imgui.h`, used in the sidebar and the bar.
+- Forever: game events by polling only (map loaded with medal times, race start, finish with time and PB, game state incl. end screen), no hooks (Competition Patch 2.0). gamectl and reflection now rebase their addresses, so game control and state also work on TMLoader's relocated TmForever 2.12.0. Not run in game yet.
 - TMX Upload plugin (`tmx-upload`, off by default, all games): offers new replays to TM Horizon or the browser extension over the local bridge protocol of the 100% TMX mod (127.0.0.1:27311-27315, pairing with Allow in the game); stays passive when the Bingo mod already runs the bridge.
 
 ## 0.1.0 (2026-11-11, first test build, not released)

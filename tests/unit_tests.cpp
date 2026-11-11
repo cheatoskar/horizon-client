@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <map>
 #include <string>
 
 #include "common/hotkeys.h"
@@ -10,6 +11,7 @@
 #include "common/settings.h"
 #include "common/util.h"
 #include "horizon_plugin.h"
+#include "host/game/forever_poll.h"
 
 using namespace horizon;
 
@@ -163,6 +165,253 @@ static void testIds() {
     CHECK(!validId("") && !validId(".x") && !validId("A") && !validId("a/b") && !validId("a..b") && !validId("a b"));
 }
 
+// ---------------------------------------------------------------- Forever polling (fake game memory)
+namespace {
+struct FakeMem : fpoll::Mem {
+    std::map<uint32_t, uint32_t> w;
+    std::map<uint32_t, fpoll::Kind> k;
+    std::wstring text;
+    uint32_t textAddr = 0;
+    bool read32(uintptr_t a, uint32_t* o) override {
+        auto it = w.find(static_cast<uint32_t>(a));
+        if (it == w.end()) return false;
+        *o = it->second;
+        return true;
+    }
+    fpoll::Kind kindOf(uintptr_t o) override {
+        auto it = k.find(static_cast<uint32_t>(o));
+        return it == k.end() ? fpoll::Kind::Unknown : it->second;
+    }
+    bool readWide(uintptr_t a, uint32_t len, wchar_t* out) override {
+        if (a != textAddr || len > text.size()) return false;
+        for (uint32_t i = 0; i < len; i++) out[i] = text[i];
+        return true;
+    }
+};
+const uint32_t kApp = 0x100000, kCh = 0x200000, kRace = 0x300000, kInfo = 0x400000, kPar = 0x500000;
+
+// A menu: app only. Then a map (challenge with a name), a race, the player info.
+void setApp(FakeMem& m, bool challenge, uint32_t race, fpoll::Kind raceKind) {
+    m.k[kApp] = fpoll::Kind::App;
+    m.w[kApp + 0x198] = challenge ? kCh : 0;
+    m.w[kApp + 0x414] = 0;
+    m.w[kApp + 0x454] = race;
+    if (challenge) {
+        m.k[kCh] = fpoll::Kind::Challenge;
+        m.w[kCh + 0x108] = 6; // name length
+        m.w[kCh + 0x10c] = 0x600000;
+        m.w[kCh + 0xb4] = kPar;
+        m.w[kCh + 0xf8] = 0;
+        m.w[kPar + 0x20] = 41000; m.w[kPar + 0x1c] = 43000; m.w[kPar + 0x18] = 48000; m.w[kPar + 0x14] = 60000; m.w[kPar + 0x28] = 0;
+        m.textAddr = 0x600000;
+        m.text = L"$o$f00A01 x";
+    }
+    if (race) {
+        m.k[kRace] = raceKind;
+        m.w[kRace + 0x98] = kInfo;
+        m.k[kInfo] = fpoll::Kind::PlayerInfo;
+    }
+}
+void setInfo(FakeMem& m, uint32_t state, int32_t time, uint32_t best) {
+    m.w[kInfo + 0x314] = state;
+    m.w[kInfo + 0x2b0] = static_cast<uint32_t>(time);
+    m.w[kInfo + 0x2b4] = best;
+}
+fpoll::Obs poll(FakeMem& m) {
+    fpoll::Obs o;
+    fpoll::Layout L;
+    fpoll::observe(m, L, kApp, &o);
+    return o;
+}
+} // namespace
+
+static void testForeverObserve() {
+    FakeMem m;
+    // menu: app only
+    setApp(m, false, 0, fpoll::Kind::Unknown);
+    fpoll::Obs o = poll(m);
+    CHECK(o.app && !o.challenge && !o.race && !o.haveInfo);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_MAIN_MENU);
+    // no app yet (startup) or a wrong object at the app global
+    fpoll::Obs none;
+    fpoll::Layout L;
+    FakeMem empty;
+    CHECK(!fpoll::observe(empty, L, kApp, &none) && !none.app);
+    CHECK(fpoll::stateOf(none) == HORIZON_STATE_LOADING);
+    // map set, race not there yet: loading
+    setApp(m, true, 0, fpoll::Kind::Unknown);
+    o = poll(m);
+    CHECK(o.challenge == kCh && o.nameLen == 6 && fpoll::stateOf(o) == HORIZON_STATE_LOADING);
+    // solo race: driving, then the end screen
+    setApp(m, true, kRace, fpoll::Kind::RaceSolo);
+    setInfo(m, 1, 12345, fpoll::kNoTime);
+    o = poll(m);
+    CHECK(o.haveInfo && o.infoPath == 1 && o.raceState == 1 && o.raceTime == 12345 && o.best == fpoll::kNoTime);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_SOLO_RACE && fpoll::playModeOf(o) == HORIZON_MODE_SOLO);
+    setInfo(m, 2, 45123, 45123);
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_END_RACE);
+    // a race state outside 0..2 is not trusted
+    setInfo(m, 7, 0, 0);
+    o = poll(m);
+    CHECK(!o.haveInfo && fpoll::stateOf(o) == HORIZON_STATE_SOLO_RACE);
+    // network race, replay race, editors
+    setApp(m, true, kRace, fpoll::Kind::RaceNet);
+    setInfo(m, 1, 100, fpoll::kNoTime);
+    o = poll(m);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_NET_RACE && fpoll::playModeOf(o) == HORIZON_MODE_NET);
+    setApp(m, true, kRace, fpoll::Kind::RaceOther);
+    o = poll(m);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_REPLAY && !o.haveInfo);
+    setApp(m, true, 0, fpoll::Kind::Unknown);
+    m.w[kApp + 0x414] = 0x700000;
+    m.k[0x700000] = fpoll::Kind::EditorOther;
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_EDITOR && fpoll::playModeOf(poll(m)) == HORIZON_MODE_EDITOR_TEST);
+    m.k[0x700000] = fpoll::Kind::EditorReplay;
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_REPLAY && fpoll::playModeOf(poll(m)) == HORIZON_MODE_REPLAY);
+    m.k[0x700000] = fpoll::Kind::Unknown; // an object that is not a known editor class is ignored
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_LOADING);
+    // the fallback path: target info missing, player array race+0x28 -> [0] -> +0x1c
+    setApp(m, true, kRace, fpoll::Kind::RaceSolo);
+    m.w[kRace + 0x98] = 0;
+    m.w[kRace + 0x24] = 1;
+    m.w[kRace + 0x28] = 0x800000;
+    m.w[0x800000] = 0x810000;
+    m.w[0x810000 + 0x1c] = kInfo;
+    setInfo(m, 0, -2000, fpoll::kNoTime);
+    o = poll(m);
+    CHECK(o.haveInfo && o.infoPath == 2 && o.raceState == 0 && o.raceTime == -2000);
+    // the target points at a wrong object class: fallback as well
+    m.w[kRace + 0x98] = 0x900000;
+    m.k[0x900000] = fpoll::Kind::App;
+    CHECK(poll(m).infoPath == 2);
+    // a bad player count blocks the fallback
+    m.w[kRace + 0x24] = 0;
+    CHECK(!poll(m).haveInfo);
+}
+
+static void testForeverTracker() {
+    using fpoll::Obs;
+    auto frame = [](uintptr_t ch, uint32_t nameLen, uintptr_t race, uint32_t state, int32_t time, uint32_t best) {
+        Obs o;
+        o.app = true;
+        o.challenge = ch;
+        o.nameLen = nameLen;
+        if (race) {
+            o.race = race;
+            o.raceKind = fpoll::Kind::RaceSolo;
+            o.info = 0x1000;
+            o.haveInfo = true;
+            o.raceState = state;
+            o.raceTime = time;
+            o.best = best;
+        }
+        return o;
+    };
+    fpoll::Tracker t;
+    // menu: nothing
+    fpoll::Step s = t.step(frame(0, 0, 0, 0, 0, 0));
+    CHECK(!s.mapLoaded && !s.mapGone && !s.raceStart && !s.finish);
+    // map set with its name: MAP_LOADED once
+    s = t.step(frame(0x2000, 6, 0, 0, 0, 0));
+    CHECK(s.mapLoaded);
+    CHECK(!t.step(frame(0x2000, 6, 0, 0, 0, 0)).mapLoaded);
+    // race appears, countdown (0), start (1)
+    s = t.step(frame(0x2000, 6, 0x3000, 0, -1500, fpoll::kNoTime));
+    CHECK(!s.raceStart && !s.finish);
+    s = t.step(frame(0x2000, 6, 0x3000, 1, 10, fpoll::kNoTime));
+    CHECK(s.raceStart);
+    CHECK(!t.step(frame(0x2000, 6, 0x3000, 1, 5000, fpoll::kNoTime)).raceStart);
+    // finish 1 -> 2: first finish is a PB, the time is read once
+    s = t.step(frame(0x2000, 6, 0x3000, 2, 45123, 45123));
+    CHECK(s.finish && s.finishTime == 45123 && s.pb);
+    CHECK(!t.step(frame(0x2000, 6, 0x3000, 2, 45123, 45123)).finish); // stays on the end screen: no second finish
+    // restart through the countdown, slower run: finish, not a PB
+    s = t.step(frame(0x2000, 6, 0x3000, 0, -1500, 45123));
+    CHECK(!s.raceStart);
+    s = t.step(frame(0x2000, 6, 0x3000, 1, 5, 45123));
+    CHECK(s.raceStart);
+    s = t.step(frame(0x2000, 6, 0x3000, 2, 46000, 45123));
+    CHECK(s.finish && s.finishTime == 46000 && !s.pb);
+    // restart from the end screen with a faster run: PB
+    t.step(frame(0x2000, 6, 0x3000, 0, -1500, 45123));
+    CHECK(t.step(frame(0x2000, 6, 0x3000, 1, 5, 45123)).raceStart);
+    s = t.step(frame(0x2000, 6, 0x3000, 2, 44000, 45123));
+    CHECK(s.finish && s.pb);
+    // restart while driving, without a countdown frame in between: the time goes back
+    t.step(frame(0x2000, 6, 0x3000, 0, -1500, 44000));
+    t.step(frame(0x2000, 6, 0x3000, 1, 100, 44000));
+    t.step(frame(0x2000, 6, 0x3000, 1, 9000, 44000));
+    CHECK(t.step(frame(0x2000, 6, 0x3000, 1, 40, 44000)).raceStart);
+    // back to the menu, then another map: map gone, new MAP_LOADED, the session best starts over
+    s = t.step(frame(0, 0, 0, 0, 0, 0));
+    CHECK(s.mapGone);
+    s = t.step(frame(0x2800, 5, 0, 0, 0, 0));
+    CHECK(s.mapLoaded);
+    t.step(frame(0x2800, 5, 0x3800, 0, -1500, fpoll::kNoTime));
+    t.step(frame(0x2800, 5, 0x3800, 1, 5, fpoll::kNoTime));
+    s = t.step(frame(0x2800, 5, 0x3800, 2, 60000, 60000));
+    CHECK(s.finish && s.pb);
+    // a best time the game already had (earlier run) that is not worse: not a PB even as first finish of this map
+    t.step(frame(0, 0, 0, 0, 0, 0));
+    t.step(frame(0x2900, 5, 0, 0, 0, 0));
+    t.step(frame(0x2900, 5, 0x3900, 0, -1500, 40000));
+    t.step(frame(0x2900, 5, 0x3900, 1, 5, 40000));
+    s = t.step(frame(0x2900, 5, 0x3900, 2, 41000, 40000));
+    CHECK(s.finish && !s.pb);
+}
+
+static void testForeverTrackerEdges() {
+    using fpoll::Obs;
+    fpoll::Tracker t;
+    auto race = [](uint32_t state, int32_t time, fpoll::Kind kind, uintptr_t info) {
+        Obs o;
+        o.app = true;
+        o.challenge = 0x2000;
+        o.nameLen = 4;
+        o.race = 0x3000;
+        o.raceKind = kind;
+        o.info = info;
+        o.haveInfo = kind == fpoll::Kind::RaceSolo || kind == fpoll::Kind::RaceNet;
+        o.raceState = state;
+        o.raceTime = time;
+        return o;
+    };
+    // the host starts on the end screen: a stale finished state is not a finish
+    fpoll::Step s = t.step(race(2, 30000, fpoll::Kind::RaceSolo, 0x1000));
+    CHECK(s.mapLoaded && !s.finish && !s.raceStart);
+    // the host starts mid-run: counts as a start
+    fpoll::Tracker u;
+    s = u.step(race(1, 8000, fpoll::Kind::RaceSolo, 0x1000));
+    CHECK(s.raceStart);
+    // replays and video races give no run events
+    fpoll::Tracker r;
+    r.step(race(0, 0, fpoll::Kind::RaceOther, 0));
+    s = r.step(race(1, 5, fpoll::Kind::RaceOther, 0));
+    CHECK(!s.raceStart && !s.finish);
+    // a new info object (new race) is a new run: no finish from the old state
+    fpoll::Tracker n;
+    n.step(race(1, 9000, fpoll::Kind::RaceSolo, 0x1000));
+    s = n.step(race(2, 100, fpoll::Kind::RaceSolo, 0x1200));
+    CHECK(!s.finish);
+    // the map name never shows: MAP_LOADED after the wait
+    fpoll::Tracker w;
+    Obs noName = race(0, 0, fpoll::Kind::Unknown, 0);
+    noName.nameLen = 0;
+    noName.race = 0;
+    bool got = false;
+    int at = 0;
+    for (int i = 1; i <= 200 && !got; i++) {
+        got = w.step(noName).mapLoaded;
+        at = i;
+    }
+    CHECK(got && at == fpoll::Tracker::kMapWaitFrames);
+    // pieces
+    CHECK(utf8(fpoll::stripCodes(L"$o$f00A01 $$ W$wor$ld", 21)) == "A01 $ Word");
+    CHECK(fpoll::stripCodes(L"ab$", 3) == L"ab");
+    CHECK(fpoll::mapTime(0) == -1 && fpoll::mapTime(45000) == 45000 && fpoll::mapTime(0xffffffffu) == -1);
+    CHECK(fpoll::validTime(1) && !fpoll::validTime(0) && !fpoll::validTime(fpoll::kNoTime));
+}
+
 int main() {
     testProfile();
     testManifest();
@@ -170,6 +419,9 @@ int main() {
     testSettings();
     testJsonRoundTrip();
     testIds();
+    testForeverObserve();
+    testForeverTracker();
+    testForeverTrackerEdges();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

@@ -70,6 +70,10 @@ Game g_game = Game::Unknown;
 LogFn g_log = nullptr;
 wchar_t g_lastPath[MAX_PATH] = {};
 bool g_experimental = false;
+// Image base minus the link base 0x400000: TMLoader's TmForever 2.12.0 is relocated (ASLR), 2.12.0-compat and the
+// original exes load at 0x400000 (delta 0). Every link address of a Spec is moved by it.
+uintptr_t g_delta = 0;
+inline uintptr_t A(uintptr_t link) { return link + g_delta; }
 
 void logf(const char* fmt, ...) {
     if (!g_log) return;
@@ -92,7 +96,7 @@ template <typename T> bool readAt(const void* base, size_t off, T* out) {
 
 void* appPtr() {
     void* app = nullptr;
-    if (!g_spec || !readAt(reinterpret_cast<const void*>(g_spec->app), 0, &app)) return nullptr;
+    if (!g_spec || !readAt(reinterpret_cast<const void*>(A(g_spec->app)), 0, &app)) return nullptr;
     return app;
 }
 
@@ -163,7 +167,7 @@ bool makeDirs(const wchar_t* dir) {
 
 int refreshAndFindNew(void* app, void** newInfo) {
     __try {
-        Buffer* infos = reinterpret_cast<Buffer*>(g_spec->infos);
+        Buffer* infos = reinterpret_cast<Buffer*>(A(g_spec->infos));
         const uint32_t before = infos->count;
         void** snapshot = static_cast<void**>(HeapAlloc(GetProcessHeap(), 0, (before + 1) * sizeof(void*)));
         if (!snapshot) return -1;
@@ -171,10 +175,10 @@ int refreshAndFindNew(void* app, void** newInfo) {
         void* folders = g_spec->foldersEmbedded ? static_cast<char*>(app) + g_spec->appFolders
                                                  : *reinterpret_cast<void**>(static_cast<char*>(app) + g_spec->appFolders);
         if (g_spec->refreshArgs == 3)
-            reinterpret_cast<void(__cdecl*)(void*, int, int)>(g_spec->refresh)(folders, 0, 0);
+            reinterpret_cast<void(__cdecl*)(void*, int, int)>(A(g_spec->refresh))(folders, 0, 0);
         else
-            reinterpret_cast<void(__cdecl*)(void*, void*)>(g_spec->refresh)(folders, nullptr);
-        reinterpret_cast<void(__cdecl*)()>(g_spec->sortByName)();
+            reinterpret_cast<void(__cdecl*)(void*, void*)>(A(g_spec->refresh))(folders, nullptr);
+        reinterpret_cast<void(__cdecl*)()>(A(g_spec->sortByName))();
         int added = 0;
         for (uint32_t i = 0; i < infos->count; i++) {
             void* p = infos->items[i];
@@ -201,9 +205,9 @@ bool setMenuToPlay(void* app, void* menus, void* info) {
             Buffer& chosen = *reinterpret_cast<Buffer*>(m + g_spec->menusChosen);
             if (chosen.capacity < 1 || !chosen.items) {
                 void** items = static_cast<void**>(
-                    reinterpret_cast<void*(__cdecl*)(size_t)>(g_spec->gameMalloc)(4 * sizeof(void*)));
+                    reinterpret_cast<void*(__cdecl*)(size_t)>(A(g_spec->gameMalloc))(4 * sizeof(void*)));
                 if (!items) return false;
-                if (chosen.items) reinterpret_cast<void(__cdecl*)(void*)>(g_spec->gameFree)(chosen.items);
+                if (chosen.items) reinterpret_cast<void(__cdecl*)(void*)>(A(g_spec->gameFree))(chosen.items);
                 chosen.items = items;
                 chosen.capacity = 4;
             }
@@ -224,7 +228,7 @@ bool setMenuToPlay(void* app, void* menus, void* info) {
 
 bool pressQuit(void* race) {
     __try {
-        reinterpret_cast<void(__thiscall*)(void*)>(g_spec->quitButton)(race);
+        reinterpret_cast<void(__thiscall*)(void*)>(A(g_spec->quitButton))(race);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         logf("gamectl: exception 0x%08X in ButtonQuitOnClick", GetExceptionCode());
@@ -284,13 +288,14 @@ Game init(LogFn log, bool allowExperimentalOriginal) {
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
     const uint32_t ts = nt->FileHeader.TimeDateStamp;
     g_spec = nullptr;
-    if (reinterpret_cast<uintptr_t>(base) == 0x400000)
-        for (const Spec& s : kSpecs)
-            if (s.timestamp == ts) g_spec = &s;
+    g_delta = reinterpret_cast<uintptr_t>(base) - 0x400000;
+    for (const Spec& s : kSpecs)
+        if (s.timestamp == ts) g_spec = &s;
     const bool reflection = reflect::init(ts);
     if (g_spec) {
         g_game = g_spec->game;
-        logf("gamectl: %s (PE timestamp %08X), reflection %s", g_spec->name, ts, reflection ? "ok" : "missing");
+        logf("gamectl: %s (PE timestamp %08X, image base %p%s), reflection %s", g_spec->name, ts, base,
+             g_delta ? ", relocated: link addresses moved" : "", reflection ? "ok" : "missing");
         return g_game;
     }
     g_game = Game::Unknown;
@@ -305,6 +310,8 @@ Game init(LogFn log, bool allowExperimentalOriginal) {
 }
 
 Game game() { return g_game; }
+
+void* appObject() { return appPtr(); }
 
 const char* gameName() {
     if (g_spec) return g_spec->name;

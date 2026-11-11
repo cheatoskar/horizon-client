@@ -21,6 +21,7 @@ const Exe kExes[] = {
     {0x4b9e8add, 0x00d74aec, false}, // TMUF (registration code writes the head here, like TMNF 0xd7348c)
 };
 const Exe* g_exe = nullptr;
+uintptr_t g_delta = 0; // image base - 0x400000 for the link addresses of kExes (relocated TMLoader 2.12.0)
 
 template <typename T> bool readAt(const void* base, size_t off, T* out) {
     __try {
@@ -51,7 +52,7 @@ bool equals(const char* a, const char* b) {
 
 const ClassInfo* firstClass() {
     const ClassInfo* c = nullptr;
-    if (!g_exe || !readAt(reinterpret_cast<const void*>(g_exe->first), 0, &c)) return nullptr;
+    if (!g_exe || !readAt(reinterpret_cast<const void*>(g_exe->first + g_delta), 0, &c)) return nullptr;
     return c;
 }
 
@@ -103,8 +104,10 @@ Exe g_scanned = {0, 0, false};
 
 bool init(uint32_t exeTimestamp) {
     g_exe = nullptr;
+    g_delta = 0;
     for (const Exe& e : kExes)
         if (e.timestamp == exeTimestamp) g_exe = &e;
+    if (g_exe) g_delta = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) - 0x400000;
     if (!g_exe) {
         __try {
             g_scanned.first = scanRegistryHead();

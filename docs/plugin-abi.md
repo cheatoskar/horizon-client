@@ -72,18 +72,33 @@ The only function that is safe from any thread is `run_on_game_thread(plugin, ca
 
 Subscribe with `host->subscribe(plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) | ...)`. Without a subscription `OnEvent` is never called. Check `e->size` before reading fields a newer host may have added.
 
-| Event | Fields | ESWC today | Sunrise / Forever |
+| Event | Fields |
+|---|---|
+| `MAP_LOADED` | `map` (path, uid, name, author, environment, medal times) |
+| `RACE_START` | |
+| `RESPAWN` | `respawns` |
+| `CHECKPOINT` | `time_ms`, `checkpoint_index` |
+| `FINISH` | `time_ms`, `is_local_player`, `respawns`, `play_mode`, `is_pb` |
+| `RACE_END` | `end_screen`, `engine_replay` |
+| `MENU_ENTERED` | |
+| `REPLAY_SAVED` | `path`, `source` ("game" or the plugin id) |
+| `ONLINE_CHANGED` | `is_online` (sent to every plugin, gated or not) |
+| `GAME_STATE` | `game_state` |
+
+Which game delivers what, and how (`poll` = read once a frame from the game's objects, nothing hooked; `hook` = inline hook with the prologue checked byte for byte):
+
+| Event | ESWC | Sunrise (first test) | Forever (TMNF/TMUF) |
 |---|---|---|---|
-| `MAP_LOADED` | `map` (path, uid, name, author, environment, medal times) | yes | planned |
-| `RACE_START` | | yes | not yet |
-| `RESPAWN` | `respawns` | yes | not yet |
-| `CHECKPOINT` | `time_ms`, `checkpoint_index` | yes | not yet |
-| `FINISH` | `time_ms`, `is_local_player`, `respawns`, `play_mode`, `is_pb` | yes, local finishes only (race state 1 to 2) | not yet |
-| `RACE_END` | `end_screen`, `engine_replay` | yes | not yet |
-| `MENU_ENTERED` | | yes | planned |
-| `REPLAY_SAVED` | `path`, `source` ("game" or the plugin id) | yes | not yet |
-| `ONLINE_CHANGED` | `is_online` (sent to every plugin, gated or not) | yes | not yet |
-| `GAME_STATE` | `game_state` | yes | planned |
+| `MAP_LOADED` | poll | poll | poll (uid/author/path only for maps gamectl started; times from the challenge) |
+| `RACE_START` | poll (start counter) | hook (`OnStartLine`) | poll (RaceState to 1, also each restart) |
+| `RESPAWN` | poll (respawn counter) | no | no |
+| `CHECKPOINT` | poll (checkpoint counter) | hook (`OnCheckpoint`) | no |
+| `FINISH` | hook (`OnFinishLine`) | hook (`OnFinishLine`) | poll (RaceState 1 to 2, time read once) |
+| `RACE_END` | hook (replay stop, solo race end) | hook (solo race end, no replay pointer) | no (no reliable signal; the end screen is the `END_RACE` game state) |
+| `MENU_ENTERED`, `GAME_STATE`, `ONLINE_CHANGED` | poll | poll | poll |
+| `REPLAY_SAVED` | yes | no | no |
+
+Forever never hooks, writes game memory or touches input, because Competition Patch 2.0 may treat changed code bytes as tampering. Everything above is read through reflection member names with every read SEH-guarded. Game states there: `SOLO_RACE` while driving, `END_RACE` once RaceState is finished, `NET_RACE` (online), `EDITOR`, `REPLAY` (replay editor or another race class), `LOADING` (map set, no race yet), `MAIN_MENU`. Replay and editor give no run events. The editor/replay split and the finish time on the end screen are unverified in game (first test).
 
 Notes for ESWC:
 
