@@ -1,0 +1,100 @@
+# Horizon Performance
+
+A Horizon plugin (`plugins/performance`, id `performance`) for TMNF, TMUF, Nations ESWC and Sunrise: measure first, then switch single options on and compare. Plus a hang log for long loading stalls. The launcher side ("Optimieren", benchmark button, replay archive, start recorder, DXVK) lives in `tm-hub-mono/apps/launcher/docs/optimize.md`.
+
+Status 2026-11-11: built and tested without the game (real host + plugin on a Direct3D 9 device made like the game's, fake host on all four games). **No number in this file comes from the game yet.** My test plan for the game is in `TESTPLAN.md`, section "Horizon Performance".
+
+## What it measures
+
+| Value | How |
+|---|---|
+| Frame time | From one `Present` call to the next (the moment the game hands a finished frame over). |
+| Game / Present / limiter | "Present" is the time inside `Present` incl. Horizon's own menu drawing (long = waiting for the GPU or V-Sync); "limiter" is the frame limiter's wait; "game" is the rest: the engine's own work for the frame. Needs host ABI 1.3 (`post_present`); with an older host only the frame time is right. |
+| 1 % low / 0.1 % low | 1000 / mean of the slowest 1 % (0.1 %) of frame times in the window. |
+| Stutter | A frame longer than 2x the median frame time of the window. |
+| Direct3D calls (switch "Count Direct3D calls") | Per frame: draws (and how many with software vertex processing), render/sampler/texture-stage states and how many repeat the value already set, textures, shaders, constant uploads, streams, render targets, locks (and how many without DISCARD/NOOVERWRITE, with their time), readbacks (`GetRenderTargetData`), query polls and the time the CPU waited for the GPU through them. |
+
+Frames longer than 5 s (loading screens) are kept out of the statistics; the hang log covers them.
+
+Everything is in the "Frame times" window (a Horizon HUD panel: FPS, lows, a graph of the last frames with the stutter line, the call counts) and on the plugin's page. Every 30 s one `stats:` line goes into the Horizon log, so two starts can be compared from the logs alone.
+
+Cost of measuring: the frame timer costs nothing measurable. The call counter goes through 36 hooked methods; in my synthetic test (200 draws, 1800 state calls, ~2600 hooked calls per frame) the difference was inside the noise (1.27 ms without, 1.40 ms with, +-0.2 ms between runs). **Benchmarks of other options run with the counter off.**
+
+## Benchmark
+
+- **By hand:** Seconds and Label on the page, then "Start" (or Ctrl+F10). Records from now on.
+- **From the launcher ("Benchmark starten"):** the launcher writes `<data>\bench-request.json` and starts the game. Mode `map`: as soon as the main menu is there (3 s settled), the plugin starts the chosen map in solo, waits for the race, warms up (default 5 s) and records `runs` windows of `seconds` one after another while the car stands at the start (a fixed camera on a known map), then goes back to the menu. Mode `replay`: I open a replay myself; recording starts when the game state is "replay". The request is renamed to `bench-request.taken.json` at once, so a crash never repeats it.
+- Results: `<data>\bench\<yyyymmdd-hhmmss>_<label>[_<run>].json` (summary) and `.csv` (one line per frame, all counters). `<data>` is `horizon\data\performance\` (ESWC/Sunrise) or `...\TMLoader\...\products\Horizon Host\data\performance\` (Forever). The summary holds every switch's state (`options`), so a result says what was on.
+
+Summary fields: `version, game, label, request (map/replay/manual), run, started, seconds, frames, avgFps, avgMs, medianMs, p99Ms, p999Ms, maxMs, low1Fps, low01Fps, stutters, presentMsAvg, cpuMsAvg, sleepMsAvg, drawsPerFrame, options{}`.
+
+## Where the frame time goes (static analysis, test copies only)
+
+From the exes in `C:\Users\osaro\Games\*-test` (imports, call sites with capstone, TMNF symbols from `TmForever.map`), and TM Vibrant Shaders' notes. Measured in the game: nothing yet.
+
+| Finding | Meaning |
+|---|---|
+| TMNF/TMUF create a **mixed vertex processing** device (flags 0x80), not pure, not multithreaded (TMVS GOTCHA; my test device uses the same flags). ESWC/Sunrise: the plugin logs the flags at the first start. | The D3D9 runtime keeps the device state for non-pure devices, so a state filter in front of it saves little; the counter shows how many calls repeat. No `MULTITHREADED` lock cost. |
+| The engine compiles its shaders at run time (`d3dx9_30!D3DXCompileShader`, TMNF/TMUF). | A source of hitches when a material is seen first. A shader cache would need an IAT hook of the exe: not built (Competition Patch rule for Forever; unmeasured on ESWC/Sunrise). |
+| **GPU sync:** `CVisionViewportDx9::SyncGpuWaitQuery` (TMNF 0x98b890) polls an event query with `D3DGETDATA_FLUSH` and `Sleep(0)` until the GPU is done; the game's own setting `GpuSync` / `GpuSyncTimeOut` (CSystemConfigDisplay) controls it. | The CPU waits for the GPU every frame while it is on: lower input delay, fewer FPS. The counter's "GPU wait" shows exactly this time. A second render-ahead limiter of my own would duplicate it: not built. |
+| `MwSystemTimerInit` calls `timeBeginPeriod(<minimum>)` (1 ms) at start (TMNF disassembled; TMUF, ESWC and Sunrise import the same functions). | The usual "timer resolution fix" is already done by the game. Only 0.5 ms (option "Fine timer") is left, and on Windows 11 only matters for waits; expect little. |
+| `CSystemEngine::CaptureInfoOsCpu` sets REALTIME priority, thread priority 15 and affinity 1 **only around its CPU speed measurement at start**, then restores the old values. | The game does not pin itself to one core and keeps normal priority while playing. |
+| Adaptive view distance: `CHmsViewport.TargetFps*` / `CSystemConfigDisplay.ZClip`, `ZClipAuto` (the engine cuts the view distance when FPS drop); `Shadows`, `LightMapQuality`, `TexturesQuality`, `VertexProcess`, `MultiThreadEnable` (TMNF) are game settings. | These are better set in the game's own config (the launcher shows them) than overwritten at run time. The page shows the engine's own FPS and the adaptive view distance read-only. |
+| No exe is large address aware (2 GB). | The page shows used address space; I do not patch the exe. |
+
+## Options
+
+All off by default. Each one is a switch with a one-line explanation on the page.
+
+| Option | What it does | Games | Competition Patch | Online | Expected effect | Measured (offline) |
+|---|---|---|---|---|---|---|
+| Frame limit | Waits after `Present` until the next frame slot (high-resolution waitable timer, last 0.7 ms spinning). No catch-up bursts after a hitch. | all | yes (only Present timing) | yes | Steadier frame times, less heat; lower FPS by design. Physics is a fixed 100 Hz tick, so it does not change driving. | 60 fps target: 16.669 ms mean over 100 frames (target 16.667). |
+| V-Sync | `PresentationInterval` at device creation / Reset: as the game sets it, off, on. | all | yes | yes | Off + limiter: less input delay than V-Sync. | not measured |
+| Skip repeated states (experimental) | Does not pass `SetRenderState`/`SetSamplerState`/`SetTextureStageState`/`SetTexture`/`Set*Shader` on when the value is already set. Off while a state block records; forgets everything after `StateBlock::Apply`, Reset and each frame's pointers. Blocked when another mod hooks a slot before mine or a wrapper/non-system `d3d9.dll` is used (TMVS standalone, Sunrise proxy, DXVK). | all | **off** (patches d3d9's method tables) | yes | Small: the runtime already keeps the state. Only worth it if the counter shows many repeats AND the game is CPU-bound. | Image pixel-identical with and without (checksum of the test scene, native d3d9 and DXVK). Frame time difference within noise. |
+| Fine timer (0.5 ms) | `NtSetTimerResolution(0.5 ms)` while the game runs; given back at exit. | all | yes | yes | Small: the game already asks for 1 ms. | timer reads back 0.5 ms |
+| No power throttling | `SetProcessInformation(ProcessPowerThrottling)`: no EcoQoS, and Windows 11 keeps honouring the timer when the window is hidden. | all | yes | yes | Helps laptops/hybrid CPUs that park the game on efficiency cores. | not measured |
+| Priority | Above normal / high (process priority class). | all | yes | yes | Fewer stutters from background load; nothing on an idle PC. | not measured |
+| CPU cores | All but CPU 0, or performance cores only (hybrid CPUs, by EfficiencyClass). | all | yes | yes | Hybrid Intel CPUs: may help 1 % lows. Elsewhere: nothing or worse. | not measured |
+| Count Direct3D calls | Measurement only (see above). | all | **off** | yes | costs a little | see above |
+| Hang log | See below. | all | yes (reads only, never during a race) | yes | none | caught a 2.5 s stall with the right stack |
+
+Not built, and why:
+- **Shader cache / texture preload:** needs hooks in the exe (D3DX import) or engine calls; not allowed on Forever with Competition Patch, and without a measured hitch on ESWC/Sunrise it would be a guess.
+- **Large Address Aware patch:** changes the exe; I only show the address space.
+- **Writing engine values (view distance, shadows) at run time:** the game's own settings do it; the launcher shows them. Forever never gets game-memory writes.
+- **Render-ahead limiter:** the engine has its own (`GpuSync`).
+
+## Hang log (startup stall, replay list refresh)
+
+While the game thread sends no frame for longer than "after ms" (default 1.5 s) and no race runs, a watcher thread suspends the game thread for a few microseconds, copies its registers and the top 16 KB of its stack, resumes it, and only then writes the return addresses to `<data>\hangs.log` (`module+offset`, export names of system DLLs, TMNF function names from `TmForever.map` in the game folder). At the end of a stall: duration, disk read/write bytes and operations of the process during the stall, and the function most samples were in. Game states and map loads are written with seconds since the process started. Nothing is hooked; it works with or without TMLoader. Offline test: a 2.5 s `Sleep` in the test program was found as `KERNELBASE.dll!SleepEx` -> `perf_test.exe+0x1307b` in 3 of 3 samples.
+
+### Startup stall after choosing the profile: what the code says (TMNF, `TmForever.map`)
+
+Right after the profile is chosen the game runs `CGameCtnApp::InitAfterProfiles` (0x6057e0). In it, ranked by how well they fit "sometimes very long, the 2nd/3rd start is fine, TMNF and TMUF, with and without TMLoader, shared `Documents\TrackMania`":
+
+1. **File cache refresh** `CGameCtnApp::LoadAndRefreshFidCache` (0x5eb690, called from InitAfterProfiles+0x268). It loads `Game.FidCache.Gbx` (`C:\ProgramData\TrackMania`) and `Config\User.FidCache.Gbx` (`Documents\TrackMania`), then `CPlugFileFidCache::InstallAndUpdate`: every folder marked dirty is re-read file by file (`CreateCache_FromFolder`: `UpdateFidProps` + `LoadHeaderUserData` for each file), and the cache is written back. The same function runs at a normal quit (`QuitGameInternal`). So: a crash, a kill or a start after the other game (TMNF and TMUF share `Documents\TrackMania`) leaves dirty folders; with ~3000 replays one changed folder means thousands of header reads at the next start, and the start after that is fast again. My file shows `User.FidCache.Gbx` at 1.8 MB. **Best fit.**
+2. **Replay scan** `ScanDiskForReplays` (InitAfterProfiles+0x642) -> `CGameCtnReplayRecordInfo::RefreshFromDisk`: lists every replay under the replay folders recursively (`GetAllChildFidByClassId`, depth -1) and builds an info object per file. Cheap with a warm cache, slow without (point 1) or with a virus scanner checking each `.Gbx` it opens.
+3. **Internet check and master server login**: `CGameNetwork::CheckInternetAtStart` and `CGameMasterServer::GetMSConnectionAndGameParams` call `CNetHttpClient::CheckInternetConnection` = `InternetCheckConnectionA` (synchronous WinINet); `CNetSystem::GetHost` / `GetAddressFromName` use blocking `gethostbyname`. A dead route, slow DNS or an IPv6 address that does not answer blocks the game thread until the TCP/DNS timeout (typically 20-30 s). Fits "very long", fits less "2nd start fine" (unless DNS is cached the second time).
+4. Profile, scores and lightmap cache reads (`ScanDiskForProfilesAndScores`, `ScanDiskForLightMaps`): same pattern as 1, smaller folders.
+
+What tells them apart: `hangs.log` names the function (FidCache/ReplayRecordInfo vs `wininet`/`ws2_32`), and the disk numbers at the stall end (many read operations = 1/2/4; almost none = 3). The launcher's start recorder (no hooks, no Horizon needed) records file activity per folder, `User.FidCache.Gbx` size/time before and after, and whether the window hangs.
+
+Safe fixes that are mine to make: none in game code. On my side: keep the replay folder small (launcher "Replay-Archiv" moves old replays out of `Documents\TrackMania` entirely, undoable), quit the game normally (the cache is saved at quit), and if it is point 3: check DNS/IPv6. A virus scanner exclusion for `Documents\TrackMania` would help points 1/2 but is my decision, not the launcher's. `/noscancache` (a real switch, `LoadAndRefreshFidCache` returns at once) turns the cache **off**, which makes every start read all headers: useful only as a diagnosis ("is it the cache?"), not as a fix.
+
+### Replay list "Refresh"
+
+`CGameCtnMenus::MenuReplay_OnRefresh` -> `ScanDiskForReplays` -> `RefreshFromDisk`: re-lists the whole replay tree (recursive) and builds every entry again, on the game thread. An archive subfolder inside `Tracks\Replays` would still be scanned, so the launcher's archive lives in `Documents\TM Horizon\Replay-Archiv\<game>\`, outside the game's user folder. A Horizon header cache inside the game would need a hook in `RefreshFromDisk` (ESWC/Sunrise allowed, Forever not with Competition Patch); not built before the hang log shows the time is really there.
+
+## DXVK
+
+DXVK 3.1.1 (`x32\d3d9.dll`) works with the Horizon host and this plugin in my offline test: device created through the host's hooks, all 36 counter slots hooked, frame limiter exact (16.668 ms at 60), filter blocked (non-system d3d9) as intended, hang log works. Chaining:
+
+- **TM Vibrant Shaders as standalone `d3d9.dll`** (ESWC, Forever without TMLoader) loads the system `d3d9.dll` by full path (`src/proxy.cpp`), so DXVK cannot sit behind it without a change in TMVS (proposal for TMVS 2.0: load `d3d9.chain.dll` or `dxvk\d3d9.dll` from the game folder first if present). The launcher refuses DXVK when another `d3d9.dll` is in the game folder.
+- **TMVS through TMLoader** (`TMVibrantShaders.dll`) hooks whatever `d3d9.dll` the game uses: DXVK in the game folder + TMVS via TMLoader should work (untested).
+- **Sunrise repack** has its own `d3d9.dll` proxy: same refusal.
+- Competition Patch acceptance of DXVK is **unknown**. Online: DXVK only changes how the image is drawn, not what the game sends.
+- Expected gain: mainly on GPUs whose D3D9 driver is weak (Intel Arc runs D3D9 through D3D9On12, see TMVS GOTCHA) and for frame pacing; on a good NVIDIA/AMD D3D9 driver often none. First-time pipeline compiles can stutter. Untested in the game.
+
+## Tests (no game)
+
+`tests\run_perf_tests.cmd` (after `build.cmd` and `tests\build_fake_host.cmd`): 61 unit checks (statistics, limiter maths, state cache, request parsing, CSV/JSON), the real host with the plugin on a mixed-VP device (counting on, screenshot `screens\perf-menu.png`), the same with the state filter (scene checksum identical), the 60 fps limiter (within 4 %), the hang log on a 2.5 s stall, and the fake host on ESWC, Sunrise, TMNF and TMUF.

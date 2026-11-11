@@ -380,6 +380,8 @@ void overlayCreateContext() {
     if (state().loader == LoaderKind::Test && GetEnvironmentVariableW(L"HORIZON_TEST_MENU", env, 8) && env[0] == L'1') {
         g_menu = true;
         HLOG("menu: open (test program)");
+        char page[64] = {};
+        if (GetEnvironmentVariableA("HORIZON_TEST_PAGE", page, sizeof(page)) && page[0]) ui::showPage(page); // e.g. "plugin:performance"
     }
     fillStyle();
 }

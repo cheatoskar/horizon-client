@@ -128,6 +128,7 @@ void pluginsAdjustParams(void* params);
 void pluginsBeforeReset(void* device);
 void pluginsAfterReset(void* device, long hr);
 void pluginsPrePresent(void* device);
+void pluginsPostPresent(void* device, long hr);
 void pluginsDeliver(const HorizonEvent& e);
 void pluginsRunQueued();              // RunOnGameThread queue (end of frame)
 void pluginsSaveSettings(bool force); // dirty settings to disk

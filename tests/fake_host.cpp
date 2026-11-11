@@ -1,6 +1,6 @@
 // fake_host: a stand-in for Horizon Host that loads one plugin DLL and exercises it.
 //
-//   fake_host.exe <plugin dll> [--game eswc|sunrise|tmnf] [--expect-init <n>]
+//   fake_host.exe <plugin dll> [--game eswc|sunrise|tmnf|tmuf] [--expect-init <n>]
 //
 // It fills a HorizonHostApi with stubs (log calls are printed, settings live in a std::map, the data
 // folder is build\test\data\<id>\), creates a headless Dear ImGui context, calls Info and Init, sends a
@@ -522,7 +522,7 @@ int main(int argc, char** argv) {
         else dll = argv[i];
     }
     if (!dll) {
-        printf("usage: fake_host <plugin dll> [--game eswc|sunrise|tmnf] [--expect-init <n>]\n");
+        printf("usage: fake_host <plugin dll> [--game eswc|sunrise|tmnf|tmuf] [--expect-init <n>]\n");
         return 2;
     }
 
@@ -554,6 +554,12 @@ int main(int argc, char** argv) {
         g_gameInfo.game_name = "TrackMania Nations Forever";
         g_gameInfo.exe_version = "fake";
         g_gameInfo.exe_sha256 = "1111111111111111111111111111111111111111111111111111111111111111";
+        g_gameInfo.loader = 2;
+    } else if (!strcmp(gameName, "tmuf")) {
+        g_gameInfo.game = HORIZON_GAME_TMUF;
+        g_gameInfo.game_name = "TrackMania United Forever";
+        g_gameInfo.exe_version = "fake";
+        g_gameInfo.exe_sha256 = "2222222222222222222222222222222222222222222222222222222222222222";
         g_gameInfo.loader = 2;
     } else {
         printf("unknown game %s\n", gameName);
