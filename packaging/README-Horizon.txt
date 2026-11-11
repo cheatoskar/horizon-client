@@ -1,5 +1,6 @@
-Horizon Client - in-game mod host of TM Horizon (test build)
-==============================================================
+=======
+Horizon Client - in-game menu and modules of TM Horizon (test build)
+====================================================================
 
 DEUTSCH
 

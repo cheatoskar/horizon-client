@@ -53,7 +53,8 @@ bool isOnline();
 void* appObject();
 
 // Copies the map into GameData\Tracks\Challenges\Downloaded\_Horizon\ (unique name), makes the game rescan its
-// track folders, picks the new entry and sets the main menu to "Play Track > Solo > OK" with it.
+// track folders (once before the copy, so other new files there do not count), picks the new entry and sets the
+// main menu to "Play Track > Solo > OK" with it.
 // Main menu only. The race starts within the next frames; watch state() / the host's MapLoaded event.
 Result playMapFile(const wchar_t* path);
 

@@ -2,4 +2,4 @@ name: Horizon Client
 author: cheatoskar
 type: modification
 homepage: 'https://github.com/cheatoskar'
-description: 'In-game mod host of TM Horizon (experimental): one menu for Horizon plugins, a slim bar at the top screen edge, hotkeys with conflict display, one log per start. Open the menu with Insert. Never touches timing, physics, input or replays.'
+description: 'In-game menu and modules of TM Horizon (experimental). Open the menu with Insert. Never touches timing, physics, input or replays.'

@@ -461,7 +461,7 @@ void loadOne(Plugin* p) {
         p->statusText = "HorizonPlugin_Info failed";
     } else if (info->abi != HORIZON_ABI) {
         p->status = ui::PluginStatus::Failed;
-        p->statusText = "made for plugin ABI " + std::to_string(info->abi) + ", this host has " + std::to_string(HORIZON_ABI);
+        p->statusText = "made for plugin ABI " + std::to_string(info->abi) + ", Horizon Client has " + std::to_string(HORIZON_ABI);
     } else if (!info->id || p->id != info->id) {
         p->status = ui::PluginStatus::Failed;
         p->statusText = std::string("its id \"") + (info->id ? info->id : "") + "\" differs from its folder";

@@ -1,8 +1,9 @@
 // The TM Horizon bridge (docs/client-bridge.md), the parts without sockets or threads: HTTP answer
-// parsing, the per-plugin rate limit, the events JSON. Unit tested in tests/unit_tests.cpp.
+// parsing, the per-plugin rate limit, the events JSON, the play_map checks. Unit tested in tests/unit_tests.cpp.
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -72,7 +73,9 @@ private:
 
 struct Event {
     long long id = 0;
+    long long at = 0; // ms since 1970 (TM Horizon's clock, same PC)
     std::string kind, level, title, text;
+    std::string game, path; // play_map: target site code, map path relative to the game's Tracks folder
 };
 
 // {"ok":true,"last":N,"events":[...]}: the events and the new cursor. False on bad JSON.
@@ -90,8 +93,11 @@ inline bool parseEvents(const std::string& body, std::vector<Event>* events, lon
             if (const Json* v = e.get("level")) ev.level = v->asString();
             if (const Json* v = e.get("title")) ev.title = v->asString();
             if (const Json* v = e.get("text")) ev.text = v->asString();
-            if (ev.title.empty()) continue;
+            if (const Json* v = e.get("at")) ev.at = v->asInt(0);
+            if (const Json* v = e.get("game")) ev.game = v->asString();
+            if (const Json* v = e.get("path")) ev.path = v->asString();
             if (ev.id > *last) *last = ev.id;
+            if (ev.title.empty() && ev.kind != "play_map") continue;
             events->push_back(ev);
         }
     }
@@ -141,6 +147,70 @@ inline const char* siteCode(uint32_t game) {
     case 0x10u: return "tmuf";
     default: return "";
     }
+}
+
+// ---- play_map (TM Horizon asks the game to open a map file)
+
+constexpr const char* kCaps = "play_map";
+constexpr long long kPlayMapMaxAgeMs = 120000; // older requests (e.g. after a reconnect) are dropped
+
+// Games whose host advertises and runs play_map: ESWC, Sunrise and Original (gamectl). Forever is never driven from here.
+inline bool playMapGame(uint32_t game) { return game == 0x01u || game == 0x02u || game == 0x04u; }
+
+// The long-poll path: the first call (no cursor) and the cursor calls, with the capability flag when set.
+inline std::string eventsPath(bool haveCursor, long long last, bool playMap) {
+    std::string p = "/v1/client/events";
+    if (haveCursor) p += "?since=" + std::to_string(last) + "&wait=20";
+    if (playMap) p += std::string(haveCursor ? "&" : "?") + "caps=" + kCaps;
+    return p;
+}
+
+// A play_map event meant for this host (several games can be paired at once).
+inline bool playMapFor(const Event& e, const char* site) {
+    return e.kind == "play_map" && site && *site && e.game == site;
+}
+
+// at 0 = unknown (kept). A request from the future (clock change) is kept too.
+inline bool playMapFresh(long long at, long long nowMs) { return at <= 0 || nowMs - at <= kPlayMapMaxAgeMs; }
+
+// The map path of a play_map event, relative to the game's Tracks folder ('/' or '\'), checked and with
+// backslashes; "" when refused: absolute, drive, UNC or stream (':'), "." / ".." / empty parts, parts ending
+// in '.' or ' ', reserved device names, control or reserved characters, not a .Challenge.Gbx.
+inline std::string mapRelPath(const std::string& in) {
+    if (in.empty() || in.size() > 400) return std::string();
+    std::string p = in;
+    for (char& c : p) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 32 || u == 127 || strchr(":*?\"<>|", c)) return std::string();
+        if (c == '/') c = '\\';
+    }
+    if (p[0] == '\\') return std::string();
+    static const char kSuffix[] = ".challenge.gbx";
+    const size_t sl = sizeof(kSuffix) - 1;
+    const size_t file = p.rfind('\\') == std::string::npos ? 0 : p.rfind('\\') + 1;
+    if (p.size() - file <= sl) return std::string(); // a name before the suffix
+    for (size_t i = 0; i < sl; i++) {
+        char c = p[p.size() - sl + i];
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+        if (c != kSuffix[i]) return std::string();
+    }
+    size_t at = 0;
+    while (at <= p.size()) {
+        size_t end = p.find('\\', at);
+        if (end == std::string::npos) end = p.size();
+        const std::string part = p.substr(at, end - at);
+        if (part.empty() || part == "." || part == ".." || part.back() == '.' || part.back() == ' ') return std::string();
+        std::string stem = part.substr(0, part.find('.'));
+        for (char& c : stem) c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
+        while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+        static const char* const kDevices[] = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"};
+        for (const char* d : kDevices)
+            if (stem == d) return std::string();
+        if (stem.size() == 4 && (stem.compare(0, 3, "COM") == 0 || stem.compare(0, 3, "LPT") == 0) && stem[3] >= '0' && stem[3] <= '9')
+            return std::string();
+        at = end + 1;
+    }
+    return p;
 }
 
 } // namespace bridge
