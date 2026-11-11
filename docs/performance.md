@@ -22,7 +22,8 @@ Cost of measuring: the frame timer costs nothing measurable. The call counter go
 
 ## Benchmark
 
-- **By hand:** Seconds and Label on the page, then "Start" (or Ctrl+Shift+B; until 2026-11-12 Ctrl+F10, which Legacy Randomizer also uses: the host switched the benchmark key off). Records from now on.
+- **By hand:** Seconds and Label on the page, then "Start" (or the hotkey). Records from now on.
+- **Hotkey:** one key, default **Ctrl+Shift+B** ("Benchmark start/stop", rebindable on the Hotkeys page): starts a manual benchmark, starts a waiting request, and stops a running launcher benchmark or series. Ctrl+F10 is deliberately not used because Legacy Randomizer uses it for its gold skip; a key stored in an earlier test (Ctrl+F10) stays until you rebind it on the Hotkeys page.
 - **From the launcher ("Benchmark starten"):** the launcher writes `<data>\bench-request.json` and starts the game. Mode `map`: as soon as the main menu is there (3 s settled), the plugin starts the chosen map in solo, waits for the race, warms up (default 5 s) and records `runs` windows of `seconds` one after another while the car stands at the start (a fixed camera on a known map), then goes back to the menu. Mode `replay`: I open a replay myself; recording starts when the game state is "replay". The request is renamed to `bench-request.taken.json` at once, so a crash never repeats it.
 - Results: `<data>\bench\<yyyymmdd-hhmmss>_<label>[_<run>].json` (summary) and `.csv` (one line per frame, all counters). `<data>` is `horizon\data\performance\` (ESWC/Sunrise) or `...\TMLoader\...\products\Horizon Host\data\performance\` (Forever). The summary holds every switch's state (`options`), so a result says what was on.
 
