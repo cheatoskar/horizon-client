@@ -29,7 +29,7 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 0
+#define HORIZON_ABI_MINOR 1 /* 1: create_texture_rgba, release_texture, save_replay */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -273,10 +273,12 @@ typedef struct HorizonHostApi {
     /* 1 when this plugin may act now (not gated: online for solo-only plugins, Competition Patch run). */
     int32_t (HORIZON_CALL* actions_allowed)(HorizonPluginHandle plugin);
 
-    /* --- threads: queue cb to run on the game's main thread at the end of a frame (safe point). Any thread. */
+    /* --- threads: queue cb to run on the game's main thread at the end of a frame (safe point). Any thread.
+     * Queued calls of a plugin have run (or were dropped) before its HorizonPlugin_Shutdown is called. */
     void (HORIZON_CALL* run_on_game_thread)(HorizonPluginHandle plugin, HorizonCallback callback, void* user);
 
-    /* --- device access (HORIZON_CAP_DEVICE). device(): IDirect3DDevice9* or NULL before creation. */
+    /* --- device access. device(): the game's IDirect3DDevice9* (for every plugin), NULL before creation.
+     * set_device_callbacks: for HORIZON_CAP_DEVICE plugins (renderers). */
     void* (HORIZON_CALL* device)(void);
     void (HORIZON_CALL* set_device_callbacks)(HorizonPluginHandle plugin, const HorizonDeviceCallbacks* callbacks);
 
@@ -288,6 +290,17 @@ typedef struct HorizonHostApi {
      * -1 / NULL when not found. */
     int32_t (HORIZON_CALL* reflect_offset)(const char* class_name, const char* member_name);
     void* (HORIZON_CALL* reflect_method)(const char* class_name, const char* member_name);
+
+    /* ---- ABI minor 1 (check host->abi_minor >= 1 or host->size before use) ---------------------- */
+    /* A texture for ImGui::Image (e.g. map thumbnails): w*h RGBA8 pixels, rows top to bottom. Returns an
+     * ImTextureID (an IDirect3DTexture9* in the managed pool, survives Reset), 0 if there is no device yet
+     * or it failed. Game thread only. Release it with release_texture (also before Shutdown returns). */
+    uint64_t (HORIZON_CALL* create_texture_rgba)(HorizonPluginHandle plugin, uint32_t width, uint32_t height, const void* rgba);
+    void (HORIZON_CALL* release_texture)(HorizonPluginHandle plugin, uint64_t texture);
+    /* Saves the replay of the current/last run like the game's "Save replay", without dialogs.
+     * name_utf8: file name without extension ("" = the game's default name). HORIZON_ERR_NOT_SUPPORTED
+     * where the host does not do it yet (host 0.1.0: everywhere; the ESWC Autosave plugin saves on ESWC). */
+    HorizonResult (HORIZON_CALL* save_replay)(HorizonPluginHandle plugin, const char* name_utf8);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

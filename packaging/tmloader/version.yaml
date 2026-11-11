@@ -1,0 +1,5 @@
+executable: HorizonHost.dll
+dependencies:
+  - id: CoreMod
+    version: ^1.0.1
+changelog: '- @VERSION@: first test build (experimental on Forever): menu, top bar, hotkeys, log, plugin loading. No game hooks on Forever.'

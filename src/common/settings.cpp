@@ -1,0 +1,165 @@
+#include "common/settings.h"
+
+#include "common/json.h"
+#include "common/util.h"
+
+#include <cstdlib>
+
+namespace horizon {
+
+bool SettingsFile::load(const std::wstring& path) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        path_ = path;
+        values_.clear();
+        dirty_ = false;
+    }
+    std::string text;
+    if (!readFile(path, text)) return true; // missing: empty
+    return loadText(text);
+}
+
+bool SettingsFile::loadText(const std::string& text) {
+    Json root;
+    std::string err;
+    std::lock_guard<std::mutex> lock(mutex_);
+    values_.clear();
+    if (!JsonParser::parse(text, root, err) || root.type != Json::Object) return false;
+    for (const auto& kv : root.obj) {
+        Value v;
+        switch (kv.second.type) {
+        case Json::String: v.text = kv.second.str; break;
+        case Json::Number: v.isString = false; v.number = kv.second.num; break;
+        case Json::Bool: v.isString = false; v.number = kv.second.b ? 1 : 0; break;
+        default: continue; // nested values are not settings
+        }
+        values_.emplace_back(kv.first, v);
+    }
+    return true;
+}
+
+const SettingsFile::Value* SettingsFile::lookup(const std::string& key) const {
+    for (const auto& kv : values_)
+        if (kv.first == key) return &kv.second;
+    return nullptr;
+}
+
+bool SettingsFile::has(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lookup(key) != nullptr;
+}
+
+std::string SettingsFile::getString(const std::string& key, const std::string& fallback) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Value* v = lookup(key);
+    if (!v) return fallback;
+    if (v->isString) return v->text;
+    char buf[64];
+    if (v->number == static_cast<double>(static_cast<long long>(v->number))) snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(v->number));
+    else snprintf(buf, sizeof(buf), "%.9g", v->number);
+    return buf;
+}
+
+int SettingsFile::getInt(const std::string& key, int fallback) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Value* v = lookup(key);
+    if (!v) return fallback;
+    if (!v->isString) return static_cast<int>(v->number);
+    char* end = nullptr;
+    const long r = strtol(v->text.c_str(), &end, 0);
+    return end && end != v->text.c_str() ? static_cast<int>(r) : fallback;
+}
+
+float SettingsFile::getFloat(const std::string& key, float fallback) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Value* v = lookup(key);
+    if (!v) return fallback;
+    if (!v->isString) return static_cast<float>(v->number);
+    char* end = nullptr;
+    const double r = strtod(v->text.c_str(), &end);
+    return end && end != v->text.c_str() ? static_cast<float>(r) : fallback;
+}
+
+void SettingsFile::setString(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& kv : values_) {
+        if (kv.first == key) {
+            if (kv.second.isString && kv.second.text == value) return;
+            kv.second = Value{true, value, 0};
+            dirty_ = true;
+            return;
+        }
+    }
+    values_.emplace_back(key, Value{true, value, 0});
+    dirty_ = true;
+}
+
+void SettingsFile::setNumber(const std::string& key, double value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& kv : values_) {
+        if (kv.first == key) {
+            if (!kv.second.isString && kv.second.number == value) return;
+            kv.second = Value{false, std::string(), value};
+            dirty_ = true;
+            return;
+        }
+    }
+    values_.emplace_back(key, Value{false, std::string(), value});
+    dirty_ = true;
+}
+
+void SettingsFile::remove(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t i = 0; i < values_.size(); i++) {
+        if (values_[i].first == key) {
+            values_.erase(values_.begin() + static_cast<std::ptrdiff_t>(i));
+            dirty_ = true;
+            return;
+        }
+    }
+}
+
+std::string SettingsFile::toText() const {
+    Json root;
+    root.type = Json::Object;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& kv : values_) {
+            Json v;
+            if (kv.second.isString) {
+                v.type = Json::String;
+                v.str = kv.second.text;
+            } else {
+                v.type = Json::Number;
+                v.num = kv.second.number;
+            }
+            root.obj.emplace_back(kv.first, v);
+        }
+    }
+    std::string out;
+    jsonWrite(out, root);
+    out += "\n";
+    return out;
+}
+
+bool SettingsFile::dirty() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dirty_;
+}
+
+bool SettingsFile::saveIfDirty() {
+    std::wstring path;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!dirty_ || path_.empty()) return true;
+        path = path_;
+    }
+    const std::string text = toText();
+    ensureDir(folderOf(path));
+    if (!writeFileAtomic(path, text)) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    dirty_ = false;
+    return true;
+}
+
+} // namespace horizon

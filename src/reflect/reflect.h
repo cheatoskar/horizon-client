@@ -33,6 +33,12 @@ void* methodAddress(const ParamInfo* p);
 int offsetOf(const char* cls, const char* member);
 void* methodOf(const char* cls, const char* member);
 
+// Class of a live engine object (CMwNod*), read from vtable slot 2 (MwGetClassInfo, `mov eax, imm32; ret`)
+// without calling anything. nullptr if obj is not a readable nod or the slot looks different.
+const ClassInfo* classOfObject(const void* obj);
+// True if c is the class `name` or derives from it.
+bool isKindOf(const ClassInfo* c, const char* name);
+
 // Calls fn(classInfo, user) for every registered class; stops when fn returns false.
 void forEachClass(bool (*fn)(const ClassInfo*, void*), void* user);
 size_t paramCount(const ClassInfo* c);
