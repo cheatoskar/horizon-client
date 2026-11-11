@@ -1,5 +1,6 @@
 // Event dispatch, the current map, online and game-state changes as events.
 #include "host/host.h"
+#include "host/stats.h"
 
 #include <string>
 
@@ -68,6 +69,7 @@ void dispatchEvent(HorizonEvent& e) {
     case HORIZON_EVENT_GAME_STATE: HLOG("event: game state %s", gameStateText(static_cast<int>(e.game_state))); break;
     default: break;
     }
+    statsEvent(e);
     pluginsDeliver(e);
 }
 

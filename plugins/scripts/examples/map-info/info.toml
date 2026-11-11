@@ -1,0 +1,8 @@
+# Map Info: name, author and medal times of the map that is running.
+name = "Map Info"
+author = "cheatoskar"
+version = "1.0.0"
+description = "Name, author and medal times of the running map."
+games = ["eswc", "sunrise", "tmnf", "tmuf"]
+online = "online-ok"
+permissions = ["ui", "settings", "read-game"]

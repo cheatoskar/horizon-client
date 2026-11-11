@@ -40,10 +40,28 @@ Encoding UTF-8, with or without BOM.
 | `safe_mode` | bool | no (false) | `true` = "Start without mods": the host runs, no plugin is loaded. Same as holding Shift at start. |
 | `menu_key` | string | no ("Insert") | Default key of the Horizon menu, e.g. `"Insert"`, `"Ctrl+Tab"`, `"F2"`. A key rebound in the menu's Hotkeys page wins over this value (stored in `settings\host.json`). |
 | `bar` | bool | no (true) | `false` hides the Horizon bar at the top screen edge. |
+| `stats_dir` | string | no | A folder TM Horizon reads for its statistics page. The host appends one JSON line per map load, start, respawn and finish to `<stats_dir>\<yyyy-mm>.jsonl` (see below). Missing: nothing is written. Safe mode writes nothing. |
 | `plugins` | array | no ([]) | The plugins this profile enables, see below. Missing or empty array: no plugin is loaded. |
 | `written_by`, `written_at` | string | no | For the log. |
 
 Unknown keys are ignored (the launcher can add fields without breaking older hosts).
+
+### Play events (`stats_dir`)
+
+One line per event, UTF-8, `\n` at the end, file opened for appending (a half-written last line after a crash is skipped by TM Horizon). `v` is the format (1), `t` Unix time in ms, `uid` the map uid.
+
+| `ev` | When | Other fields |
+|---|---|---|
+| `map` | MAP_LOADED | `name`, `author` and `env` when known |
+| `start` | RACE_START (each start and restart) | |
+| `respawn` | RESPAWN (ESWC/Sunrise; Forever has no respawn event) | `respawns`: count in this run |
+| `finish` | FINISH | `time_ms`, `respawns`, `local`, `pb`, `mode` (`solo`, `net`, `unknown`) |
+
+```
+{"v":1,"t":1794326446230,"ev":"finish","uid":"7GK45NEyMOif7S9jicImvQNz7gf","time_ms":45230,"respawns":0,"local":true,"pb":true,"mode":"solo"}
+```
+
+Replays and the editor's test drives write nothing. The uid comes from the map file when the host started the map; for a map picked in the game's menus it is read from the engine's id table (plain reads, no game code is called). If neither works the line has no `uid` and TM Horizon skips it. The writes run on a worker thread; the host never reads, rewrites or deletes these files.
 
 ### `plugins` entries
 

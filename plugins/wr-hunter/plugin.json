@@ -1,0 +1,18 @@
+{
+  "id": "wr-hunter",
+  "name": "WR Hunter",
+  "version": "0.1.0",
+  "dll": "wr-hunter.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Split times against your best and the TMX record, with gold sectors and history.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": true
+}

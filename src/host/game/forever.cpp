@@ -135,6 +135,16 @@ public:
         return fromGamectl(gamectl::returnToMenu());
     }
     bool usesDirectInputBlock() const override { return false; }
+    // The objects this frame's poll found (read only; plugins read them by reflection names).
+    void* engine(uint32_t which) override {
+        if (!known_) return nullptr;
+        switch (which) {
+        case HORIZON_ENGINE_APP: return gamectl::appObject();
+        case HORIZON_ENGINE_RACE: return reinterpret_cast<void*>(obs_.race);
+        case HORIZON_ENGINE_CHALLENGE: return reinterpret_cast<void*>(obs_.challenge);
+        default: return nullptr;
+        }
+    }
     std::string status() const override { return status_; }
 
 private:

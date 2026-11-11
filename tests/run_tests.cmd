@@ -15,6 +15,9 @@ mkdir %T%\horizon
 copy /y dist\legacy\dinput8.dll %T%\ >nul
 copy /y build\test\dinput8.chain.dll %T%\ >nul
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+rem no TM Horizon bridge in tests (it would ask a running TM Horizon on this PC to pair)
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
 build\test\host_test.exe loader "%CD%\%T%" || set FAIL=1
 
 echo === host + sample plugin (no profile.json: every plugin loads) + D3D9 device + menu
@@ -22,6 +25,9 @@ set "T=build\test\run-host"
 if exist %T% rmdir /s /q %T%
 mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+rem no TM Horizon bridge in tests (it would ask a running TM Horizon on this PC to pair)
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
@@ -33,6 +39,9 @@ set "T=build\test\run-safe"
 if exist %T% rmdir /s /q %T%
 mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+rem no TM Horizon bridge in tests (it would ask a running TM Horizon on this PC to pair)
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
@@ -43,14 +52,29 @@ set "T=build\test\run-profile"
 if exist %T% rmdir /s /q %T%
 mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+rem no TM Horizon bridge in tests (it would ask a running TM Horizon on this PC to pair)
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
-> %T%\horizon\profile.json echo {"format": 1, "profile": "Test", "plugins": [{"id": "eswc-autosave", "enabled": true}]}
+set "SD=%CD:\=/%/%T:\=/%/stats"
+> %T%\horizon\profile.json echo {"format": 1, "profile": "Test", "stats_dir": "%SD%", "plugins": [{"id": "eswc-autosave", "enabled": true}]}
 build\test\host_test.exe host "%CD%\%T%" expect-no-plugin || set FAIL=1
+rem stats_dir from the profile: the writer starts and stops with the host (no race here, so no lines)
+findstr /c:"stats: play events go to" %T%\horizon\logs\*.log >nul && echo PASS  stats writer started || (echo FAIL  stats writer & set FAIL=1)
 
 echo === plugins against the fake host
 call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autosave + tmx-upload) || (echo FAIL  fake host & set FAIL=1)
+
+echo === node explorer: unit tests, fake engine graph, DLL in a fake host
+call plugins\node-explorer\tests\run_tests.cmd >nul 2>&1 && echo PASS  node explorer || (echo FAIL  node explorer & set FAIL=1)
+
+echo === horizon scripts: unit and engine tests, both example scripts in a fake host (ESWC, Sunrise, TMNF, TMUF)
+call plugins\scripts\tests\run_tests.cmd >nul 2>&1 && echo PASS  horizon scripts || (echo FAIL  horizon scripts & set FAIL=1)
+
+echo === client mods: WR Hunter, Input Display, TMX Browser (ESWC, Sunrise, TMNF, TMUF)
+call plugins\client-common\tests\run_tests.cmd >nul 2>&1 && echo PASS  client mods || (echo FAIL  client mods & set FAIL=1)
 
 if %FAIL%==0 (echo ALL TESTS PASSED) else (echo SOME TESTS FAILED)
 exit /b %FAIL%

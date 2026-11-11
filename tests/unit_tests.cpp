@@ -12,6 +12,9 @@
 #include "common/util.h"
 #include "horizon_plugin.h"
 #include "host/game/forever_poll.h"
+#include "host/bridge_logic.h"
+#include "host/stats_log.h"
+#include "host/toast_queue.h"
 
 using namespace horizon;
 
@@ -412,6 +415,159 @@ static void testForeverTrackerEdges() {
     CHECK(fpoll::validTime(1) && !fpoll::validTime(0) && !fpoll::validTime(fpoll::kNoTime));
 }
 
+// ABI 1.3: toasts (queue, do not disturb, hold while driving, capture pause) and the bridge's pure parts
+static void testToasts() {
+    ToastQueue q;
+    auto item = [](const char* t, bool important = false) {
+        ToastItem i;
+        i.title = t;
+        i.durationMs = 1000;
+        i.important = important;
+        return i;
+    };
+    ToastConditions c;
+    for (int i = 0; i < 5; i++) q.push(item("t"));
+    q.step(0, c);
+    CHECK(q.visible().size() == ToastQueue::kMaxVisible && q.pending().size() == 2);
+    q.step(1300, c); // the first three ran out
+    CHECK(q.history().size() == 3 && !q.history()[0].missed);
+    q.step(0, c);
+    CHECK(q.visible().size() == 2 && q.pending().empty());
+    // capture: timers paused, nothing moves
+    c.hidden = true;
+    q.push(item("during capture"));
+    q.step(5000, c);
+    CHECK(q.visible().size() == 2 && q.pending().size() == 1);
+    c.hidden = false;
+    // do not disturb: straight into the history as missed; important ones still show
+    q.step(1300, c);
+    ToastQueue d;
+    ToastConditions dnd;
+    dnd.dnd = true;
+    d.push(item("quiet"));
+    d.push(item("loud", true));
+    d.step(0, dnd);
+    CHECK(d.visible().size() == 1 && d.visible()[0].title == "loud" && d.history().size() == 1 && d.history()[0].missed);
+    // hold while driving
+    ToastQueue h;
+    ToastConditions drive;
+    drive.driving = true;
+    drive.holdWhileDriving = true;
+    h.push(item("later"));
+    h.step(100, drive);
+    CHECK(h.visible().empty() && h.pending().size() == 1);
+    drive.driving = false;
+    h.step(100, drive);
+    CHECK(h.visible().size() == 1);
+    // fade
+    ToastItem f = item("f");
+    f.shownMs = 0;
+    CHECK(ToastQueue::alpha(f) == 0.0f);
+    f.shownMs = 500;
+    CHECK(ToastQueue::alpha(f) == 1.0f);
+    // limits
+    ToastQueue big;
+    for (int i = 0; i < 40; i++) big.push(item("x"));
+    CHECK(big.pending().size() == ToastQueue::kMaxPending && big.history().size() == 16);
+    ToastItem longOne = item("y");
+    longOne.durationMs = 999999;
+    big.push(longOne);
+    CHECK(big.pending().back().durationMs == 30000);
+}
+
+static void testBridgeLogic() {
+    bridge::HttpAnswer a;
+    CHECK(bridge::parseAnswer("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nabcdEXTRA", &a));
+    CHECK(a.status == 200 && a.contentType == "image/jpeg" && a.body == "abcd");
+    CHECK(bridge::parseAnswer("HTTP/1.1 429 Too Many\r\nRetry-After: 3\r\n\r\n", &a) && a.status == 429 && a.retryAfterS == 3);
+    CHECK(!bridge::parseAnswer("garbage", &a));
+    CHECK(!bridge::parseAnswer("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort", &a));
+    bridge::RateLimit rl(4.0, 8.0);
+    int ok = 0;
+    for (int i = 0; i < 20; i++) ok += rl.take(1000) ? 1 : 0;
+    CHECK(ok == 8);
+    CHECK(!rl.take(1100) && rl.take(1300)); // 0.4 then 1.2 tokens
+    std::vector<bridge::Event> ev;
+    long long last = 0;
+    CHECK(bridge::parseEvents(R"({"ok":true,"last":7,"events":[{"id":5,"kind":"upload","level":"ok","title":"Upload done","text":"A01"},
+                                  {"id":7,"kind":"mod","level":"info","title":""}]})", &ev, &last));
+    CHECK(ev.size() == 1 && ev[0].title == "Upload done" && last == 7);
+    CHECK(!bridge::parseEvents("{oops", &ev, &last));
+    std::string key;
+    CHECK(bridge::parsePair(R"({"ok":true,"key":"0123456789abcdef0123"})", &key) == "ok" && key.size() == 20);
+    CHECK(bridge::parsePair(R"({"ok":false,"status":"pending"})", &key) == "pending");
+    CHECK(bridge::parsePair(R"({"ok":true,"key":"short"})", &key) == "");
+    CHECK(bridge::validPath("/v1/tmx/search?game=tmnf&name=a%20b"));
+    CHECK(!bridge::validPath("/v1/client/pair") && !bridge::validPath("/v2/x") && !bridge::validPath("/v1/a b") && !bridge::validPath(nullptr));
+    CHECK(std::string(bridge::siteCode(HORIZON_GAME_ESWC)) == "tmn" && std::string(bridge::siteCode(HORIZON_GAME_TMUF)) == "tmuf");
+    CHECK(bridge::toastKind("error") == HORIZON_TOAST_ERROR && bridge::toastKind("x") == HORIZON_TOAST_INFO);
+}
+
+// Statistics lines for TM Horizon (profile.json stats_dir): a whole run as the host dispatches it
+static void testStatsLines() {
+    Profile p = parseProfile(R"({"format":1,"plugins":[],"stats_dir":"  C:\\Users\\me\\host-stats\\tmnf  "})");
+    CHECK(p.valid && p.statsDir == "C:\\Users\\me\\host-stats\\tmnf");
+    CHECK(parseProfile(R"({"format":1,"plugins":[]})").statsDir.empty());
+
+    stats::Recorder r;
+    HorizonMapInfo mi = {};
+    HorizonEvent e = {};
+    e.map = &mi;
+    e.play_mode = HORIZON_MODE_SOLO;
+    e.type = HORIZON_EVENT_MAP_LOADED;
+    const std::string uid = "7GK45NEyMOif7S9jicImvQNz7gf";
+    std::string l = r.line(e, uid, "A01 \"Race\"", "", "Stadium", 1794326400123LL);
+    CHECK(l == "{\"v\":1,\"t\":1794326400123,\"ev\":\"map\",\"uid\":\"7GK45NEyMOif7S9jicImvQNz7gf\",\"name\":\"A01 \\\"Race\\\"\",\"env\":\"Stadium\"}\n");
+    e.type = HORIZON_EVENT_RACE_START;
+    CHECK(r.line(e, uid, "", "", "", 1) == "{\"v\":1,\"t\":1,\"ev\":\"start\",\"uid\":\"7GK45NEyMOif7S9jicImvQNz7gf\"}\n");
+    e.type = HORIZON_EVENT_RESPAWN;
+    e.respawns = -1; // unknown: counted here
+    r.line(e, uid, "", "", "", 2);
+    l = r.line(e, uid, "", "", "", 3);
+    CHECK(l.find("\"ev\":\"respawn\"") != std::string::npos && l.find("\"respawns\":2}") != std::string::npos);
+    e.type = HORIZON_EVENT_FINISH;
+    e.time_ms = 45230;
+    e.is_local_player = 1;
+    e.is_pb = 1;
+    l = r.line(e, uid, "", "", "", 4);
+    CHECK(l == "{\"v\":1,\"t\":4,\"ev\":\"finish\",\"uid\":\"7GK45NEyMOif7S9jicImvQNz7gf\",\"time_ms\":45230,\"respawns\":2,\"local\":true,\"pb\":true,\"mode\":\"solo\"}\n");
+    // the host's own respawn count wins when it has one; a restart resets it
+    e.type = HORIZON_EVENT_RACE_START;
+    r.line(e, uid, "", "", "", 5);
+    e.type = HORIZON_EVENT_FINISH;
+    e.respawns = 0;
+    e.is_pb = 0;
+    e.play_mode = HORIZON_MODE_NET;
+    l = r.line(e, uid, "", "", "", 6);
+    CHECK(l.find("\"respawns\":0,") != std::string::npos && l.find("\"pb\":false") != std::string::npos && l.find("\"mode\":\"net\"") != std::string::npos);
+    // replays and editor test drives write nothing, nor do other events
+    e.play_mode = HORIZON_MODE_REPLAY;
+    CHECK(r.line(e, uid, "", "", "", 7).empty());
+    e.play_mode = HORIZON_MODE_EDITOR_TEST;
+    CHECK(r.line(e, uid, "", "", "", 7).empty());
+    e.play_mode = HORIZON_MODE_SOLO;
+    e.type = HORIZON_EVENT_CHECKPOINT;
+    CHECK(r.line(e, uid, "", "", "", 7).empty());
+    e.type = HORIZON_EVENT_FINISH;
+    e.time_ms = 0;
+    CHECK(r.line(e, uid, "", "", "", 7).empty());
+    // no uid known: the line goes out without it (TM Horizon skips it)
+    e.type = HORIZON_EVENT_RACE_START;
+    CHECK(r.line(e, "", "", "", "", 8).find("uid") == std::string::npos);
+    // file per month, appended
+    const std::string f = stats::fileName(stats::nowMs());
+    CHECK(f.size() == 13 && f[4] == '-' && f.substr(7) == ".jsonl");
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    const std::wstring dir = std::wstring(tmp) + L"horizon-stats-test\\nested";
+    DeleteFileW((dir + L"\\t.jsonl").c_str());
+    CHECK(stats::append(dir, "t.jsonl", "{\"a\":1}\n") && stats::append(dir, "t.jsonl", "{\"b\":2}\n"));
+    std::string back;
+    CHECK(readFile(dir + L"\\t.jsonl", back) && back == "{\"a\":1}\n{\"b\":2}\n");
+    DeleteFileW((dir + L"\\t.jsonl").c_str());
+    CHECK(!stats::append(L"", "t.jsonl", "x"));
+}
+
 int main() {
     testProfile();
     testManifest();
@@ -422,6 +578,9 @@ int main() {
     testForeverObserve();
     testForeverTracker();
     testForeverTrackerEdges();
+    testToasts();
+    testBridgeLogic();
+    testStatsLines();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

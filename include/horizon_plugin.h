@@ -29,8 +29,9 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 2 /* 1: create_texture_rgba, release_texture, save_replay
-                               2: panels (register_panel ...), host flags (capture) */
+#define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
+                               2: panels (register_panel ...), host flags (capture)
+                               3: toasts (notify), the TM Horizon bridge (bridge_request, bridge_state) */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -142,6 +143,49 @@ typedef struct HorizonPanelDef {
 /* Host flags (HorizonHostApi.set_host_flag / host_flags) */
 #define HORIZON_HOST_FLAG_CAPTURE 0x01u /* a photo or video is being taken (set by e.g. TMVS): windows with
                                            "Hide in photos and videos" and the Horizon bar are hidden */
+
+/* ------------------------------------------------------------------ toasts (ABI minor 3) ------- */
+/* A toast is a short note in the corner of the screen ("Upload finished", "Map saved"). The host draws
+ * them in the TM Horizon look, stacks them, hides them in photos and videos (HORIZON_HOST_FLAG_CAPTURE
+ * and HorizonHost_SetCaptureActive) and holds them back while the player has "Do not disturb" on. */
+#define HORIZON_TOAST_INFO  0u
+#define HORIZON_TOAST_OK    1u
+#define HORIZON_TOAST_WARN  2u
+#define HORIZON_TOAST_ERROR 3u
+#define HORIZON_TOAST_IMPORTANT 0x01u /* flags: shown even with "Do not disturb" (use sparingly) */
+
+typedef struct HorizonToast {
+    uint32_t size;               /* sizeof(HorizonToast) */
+    uint32_t kind;               /* HORIZON_TOAST_* */
+    const char* title;           /* one short line, required */
+    const char* text;            /* optional second line, "" or NULL for none */
+    uint32_t icon;               /* HZ_ICON_* codepoint, 0 = the kind's icon */
+    uint32_t duration_ms;        /* 0 = 5000; at most 30000 */
+    uint32_t flags;              /* HORIZON_TOAST_IMPORTANT */
+} HorizonToast;
+
+/* ------------------------------------------------------------------ TM Horizon bridge (ABI minor 3) */
+/* The game process never talks to the internet. Plugins that need online data (TMX search, a record
+ * replay) ask the TM Horizon launcher on the same PC through the host's bridge: plain HTTP on
+ * 127.0.0.1, paired once (the player presses Allow in TM Horizon), see docs/client-bridge.md.
+ * The host owns the connection, the key and a rate limit; a plugin only sends requests. */
+#define HORIZON_BRIDGE_OFF        0 /* the player switched the bridge off (host settings) */
+#define HORIZON_BRIDGE_SEARCHING  1 /* TM Horizon is not running (or not found yet) */
+#define HORIZON_BRIDGE_PAIRING    2 /* waiting for Allow in TM Horizon */
+#define HORIZON_BRIDGE_CONNECTED  3
+#define HORIZON_BRIDGE_DENIED     4 /* the player pressed No; asks again after a while */
+
+/* bridge_request answers. status: the launcher's HTTP status (200 ...), or one of these: */
+#define HORIZON_BRIDGE_ERR_NOT_CONNECTED -1 /* not paired / TM Horizon not running */
+#define HORIZON_BRIDGE_ERR_TIMEOUT       -2
+#define HORIZON_BRIDGE_ERR_RATE_LIMIT    -3 /* too many requests from this plugin, try again later */
+#define HORIZON_BRIDGE_ERR_TOO_LARGE     -4 /* answer larger than the host takes (16 MB) */
+#define HORIZON_BRIDGE_ERR_CANCELLED     -5 /* the plugin was switched off before the answer came */
+
+/* Runs on the game thread at the end of a frame. body is valid only during the call. content_type
+ * is the answer's Content-Type ("application/json", "image/jpeg", ...), "" if none. */
+typedef void (HORIZON_CALL* HorizonBridgeCallback)(void* user, int32_t status, const char* content_type, const void* body,
+                                                   uint32_t body_len);
 
 /* Bit for HorizonHostApi.subscribe: HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) | ... */
 #define HORIZON_EVENT_BIT(type) (1u << (type))
@@ -340,6 +384,21 @@ typedef struct HorizonHostApi {
     /* Host flags (HORIZON_HOST_FLAG_*): each plugin sets its own; host_flags() is the OR of all. */
     void (HORIZON_CALL* set_host_flag)(HorizonPluginHandle plugin, uint32_t flag, int32_t on);
     uint32_t (HORIZON_CALL* host_flags)(void);
+
+    /* ---- ABI minor 3 (check host->abi_minor >= 3 before use) ------------------------------------ */
+    /* Shows a toast (copied). Any thread. Toasts of a plugin that is off or gated online are dropped. */
+    void (HORIZON_CALL* notify)(HorizonPluginHandle plugin, const HorizonToast* toast);
+    /* Sends one request to TM Horizon over the bridge. method "GET" or "POST"; path starts with "/v1/"
+     * (docs/client-bridge.md lists them); body/body_len for POST (JSON), else NULL/0. The answer comes
+     * later through callback (game thread), errors too. Returns HORIZON_OK when queued,
+     * HORIZON_ERR_INVALID_ARG, HORIZON_ERR_BUSY (8 requests of this plugin open) or
+     * HORIZON_ERR_NOT_SUPPORTED (bridge switched off), HORIZON_ERR_WRONG_STATE (not on the game
+     * thread). A request over the rate limit is still HORIZON_OK; its callback gets
+     * HORIZON_BRIDGE_ERR_RATE_LIMIT. Game thread. */
+    HorizonResult (HORIZON_CALL* bridge_request)(HorizonPluginHandle plugin, const char* method, const char* path,
+                                                 const void* body, uint32_t body_len, HorizonBridgeCallback callback,
+                                                 void* user);
+    int32_t (HORIZON_CALL* bridge_state)(void); /* HORIZON_BRIDGE_* */
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

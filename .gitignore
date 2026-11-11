@@ -5,3 +5,7 @@ screens/
 *.obj
 *.pdb
 *.ilk
+dist-explorer/
+dist-scripts/
+dist-client/
+build-log.txt

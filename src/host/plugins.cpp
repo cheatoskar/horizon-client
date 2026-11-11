@@ -1,7 +1,9 @@
 // Plugin loading (profile.json -> horizon\plugins\<id>\), the per-plugin HorizonHostApi tables, and
 // every call into a plugin (each one SEH-guarded: a plugin that crashes is switched off, the game goes on).
 #include "host/plugins.h"
+#include "host/bridge.h"
 #include "host/panels.h"
+#include "host/toasts.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -335,6 +337,24 @@ void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t o
 }
 uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll(); }
 
+// ---- ABI minor 3: toasts, the TM Horizon bridge
+void HORIZON_CALL apiNotify(HorizonPluginHandle h, const HorizonToast* t) {
+    Plugin* p = fromHandle(h);
+    if (!p || !t || t->size < offsetof(HorizonToast, flags) + sizeof(uint32_t)) return;
+    if (!p->running || !p->enabled || pluginGated(p)) return;
+    toastsPush(p->name.empty() ? p->id : p->name, *t);
+}
+HorizonResult HORIZON_CALL apiBridgeRequest(HorizonPluginHandle h, const char* method, const char* path, const void* body, uint32_t len,
+                                            HorizonBridgeCallback cb, void* user) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) return HORIZON_ERR_WRONG_STATE;
+    const HorizonResult r = bridgeRequest(p, method, path, body, len, cb, user);
+    if (r == HORIZON_ERR_INVALID_ARG) logLine(HORIZON_LOG_WARN, p->id.c_str(), "bridge_request: invalid (GET/POST, a /v1/ path, a callback)");
+    return r;
+}
+int32_t HORIZON_CALL apiBridgeState() { return bridgeState(); }
+
 void fillApi(Plugin* p) {
     HorizonHostApi& a = p->api;
     a = HorizonHostApi{};
@@ -381,6 +401,9 @@ void fillApi(Plugin* p) {
     a.panel_visible = &apiPanelVisible;
     a.set_host_flag = &apiSetHostFlag;
     a.host_flags = &apiHostFlags;
+    a.notify = &apiNotify;
+    a.bridge_request = &apiBridgeRequest;
+    a.bridge_state = &apiBridgeState;
 }
 
 // ---------------------------------------------------------------- loading
@@ -700,6 +723,7 @@ void pluginsShutdownAll() {
         Plugin* p = up.get();
         if (!p->running) continue;
         p->running = false;
+        bridgeDropPlugin(p);
         if (!sehVoid(p->shutdown)) logLine(HORIZON_LOG_ERROR, p->id.c_str(), "crashed in Shutdown");
         else logLine(HORIZON_LOG_INFO, p->id.c_str(), "shut down");
         panelsRemovePlugin(p);

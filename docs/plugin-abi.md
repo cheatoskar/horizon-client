@@ -160,7 +160,7 @@ The TMX rules for every plugin, online or not:
 Competition Patch is a mod for TMNF/TMUF that makes runs comparable. While it is loaded:
 
 - my plugin never touches timing, physics, input or replay data,
-- reflection writes and scripts are off while CP is loaded and a run is going,
+- reflection writes are off while CP is loaded and a run is going; Horizon Scripts does not load scripts with the `game-control` permission while CP is loaded (read-only scripts keep running, see `docs/scripting.md`),
 - `actions_allowed(plugin)` returns 0 during such a run and `HORIZON_ERR_BLOCKED_ONLINE` comes back from game control calls.
 
 I do not work around this. Read-only plugins (overlays, loggers) are fine.
@@ -184,9 +184,11 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise and Forever. Game thread. |
 | `register_panel`, `unregister_panel`, `panel_visible` (ABI 1.2) | see Panels |
 | `set_host_flag(plugin, flag, on)`, `host_flags()` (ABI 1.2) | `HORIZON_HOST_FLAG_CAPTURE`: a photo or video is being taken; the bar and windows with "Hide in photos and videos" disappear. Each plugin sets its own bits; `host_flags()` is the OR. |
+| `notify(plugin, &toast)` (ABI 1.3) | a toast in the corner of the screen, see Notifications and the TM Horizon bridge |
+| `bridge_request(...)`, `bridge_state()` (ABI 1.3) | ask the TM Horizon launcher on the same PC (TMX search, map files, record replays), see Notifications and the TM Horizon bridge |
 | `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
 
-ABI 1.1 and 1.2 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1 or >= 2) before calling them.
+ABI 1.1, 1.2 and 1.3 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1, >= 2 or >= 3) before calling them.
 
 ## Panels (ABI 1.2)
 
@@ -214,6 +216,102 @@ host->register_panel(host->plugin, &d);
 
 Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 
+## Notifications and the TM Horizon bridge (ABI 1.3)
+
+Two additions at the end of `HorizonHostApi`: `notify` (toasts) and `bridge_request` / `bridge_state` (asking the TM Horizon launcher on the same PC). Check `host->abi_minor >= 3` before using them, see "ABI versioning".
+
+### Toasts: `notify`
+
+A toast is a short note in the corner of the screen ("Map saved"). The host draws it in the TM Horizon look.
+
+```c
+HorizonToast t = {0};
+t.size = sizeof(t);
+t.kind = HORIZON_TOAST_OK;
+t.title = "Map saved";            /* required, one short line */
+t.text = "A01-Race";              /* optional second line, NULL or "" for none */
+host->notify(host->plugin, &t);
+```
+
+| Field | Meaning |
+|---|---|
+| `size` | `sizeof(HorizonToast)`. The host ignores the call if the struct is shorter than the one it knows up to `flags`. |
+| `kind` | `HORIZON_TOAST_INFO` (0), `_OK` (1), `_WARN` (2), `_ERROR` (3). Anything else counts as info. Sets the colour and the default icon. |
+| `title` | Required. An empty or NULL title drops the toast. Cut at 120 characters. |
+| `text` | Optional. Cut at 240 characters. |
+| `icon` | An `HZ_ICON_*` codepoint, `0` = the icon of the kind. |
+| `duration_ms` | `0` = 5000 ms, at most 30000 ms. Fade in and out (250 ms each) come on top. |
+| `flags` | `HORIZON_TOAST_IMPORTANT` (0x01): shown even with "Do not disturb" and while driving. Use it rarely. |
+
+Rules the host applies:
+
+- The call is copied, can come from any thread and returns at once. Toasts of a plugin that is switched off, failed, or gated online are dropped.
+- At most 3 toasts are on screen. Up to 24 wait; when more come, the oldest waiting one is dropped (it goes to the list as missed).
+- "Do not disturb" (General page): no toast is shown except important ones. The others only go to the "Recent notifications" list, marked as missed.
+- "Quiet while driving" (General page, on by default): while a run is going (solo or network race) toasts that are not important wait until the run ends.
+- While a photo or video is being taken (`HORIZON_HOST_FLAG_CAPTURE`, `HorizonHost_SetCaptureActive`) nothing is drawn and the timers stand still.
+- The last 20 toasts (shown or missed) are listed on the General page under "Recent notifications", with the plugin's name.
+- Every toast is also written to the host log (`toast: title - text`).
+- The notifications from TM Horizon (upload finished, mod updates, server events) use the same queue under the name "TM Horizon". See `docs/client-bridge.md`.
+
+### The TM Horizon bridge: `bridge_request` and `bridge_state`
+
+The game process never goes online. A plugin that needs data from the internet (a TMX search, a map file, a record replay) asks TM Horizon through the host. The protocol, the paths and the pairing are in `docs/client-bridge.md`; this section is only the plugin side.
+
+```c
+static void HORIZON_CALL onAnswer(void* user, int32_t status, const char* content_type,
+                                  const void* body, uint32_t body_len) {
+    if (status == 200) {
+        /* body is valid only during this call: copy what you keep */
+    } else if (status == HORIZON_BRIDGE_ERR_NOT_CONNECTED) {
+        /* TM Horizon is not running or not paired */
+    }
+}
+
+if (host->abi_minor >= 3 && host->bridge_state() == HORIZON_BRIDGE_CONNECTED) {
+    HorizonResult r = host->bridge_request(host->plugin, "GET",
+                          "/v1/tmx/search?game=tmnf&name=A01", NULL, 0, onAnswer, NULL);
+    if (r != HORIZON_OK) { /* HORIZON_ERR_BUSY, _NOT_SUPPORTED, _INVALID_ARG */ }
+}
+```
+
+`bridge_request(plugin, method, path, body, body_len, callback, user)`:
+
+- `method` is `"GET"` or `"POST"`. `path` starts with `/v1/`, uses printable ASCII without spaces, at most 1 KB, and must not start with `/v1/client/` (those paths belong to the host: ping, pairing, events). `body` is for POST (JSON, at most 1 MB), else `NULL` and `0`.
+- Return value: `HORIZON_OK` when the request is queued (or answered at once with a rate-limit error through the callback), `HORIZON_ERR_INVALID_ARG` (bad method, path or callback, or a body that is NULL with a length), `HORIZON_ERR_BUSY` (this plugin already has 8 open requests), `HORIZON_ERR_NOT_SUPPORTED` (the bridge is switched off in the host), `HORIZON_ERR_WRONG_STATE` (not called on the game thread).
+- The callback always comes later, on the game thread at the end of a frame, never inside `bridge_request`. Errors come the same way.
+- `status` is the launcher's HTTP status (200, 404, 429 ...), or one of these:
+
+| `status` | Constant | Meaning |
+|---|---|---|
+| -1 | `HORIZON_BRIDGE_ERR_NOT_CONNECTED` | not paired, or TM Horizon is not running |
+| -2 | `HORIZON_BRIDGE_ERR_TIMEOUT` | no answer within 45 s |
+| -3 | `HORIZON_BRIDGE_ERR_RATE_LIMIT` | this plugin sent too many requests, try again later |
+| -4 | `HORIZON_BRIDGE_ERR_TOO_LARGE` | the answer is larger than the host takes (16 MB) |
+| -5 | `HORIZON_BRIDGE_ERR_CANCELLED` | the plugin was switched off (or gated online) before the answer came |
+
+- `content_type` is the answer's `Content-Type` without parameters (`application/json`, `image/jpeg` ...), `""` for the negative codes. `body` and `body_len` are valid only during the call; for the negative codes they are `NULL` and `0`.
+- A 401 from the launcher makes the host forget its key and pair again; the plugin sees the 401.
+- A callback that crashes switches the plugin off (like any plugin callback).
+
+`bridge_state()` returns `HORIZON_BRIDGE_OFF` (0, switched off in the host's General page, "TM Horizon connection"), `_SEARCHING` (1, TM Horizon not found yet), `_PAIRING` (2, waiting for Allow in TM Horizon), `_CONNECTED` (3) or `_DENIED` (4, the player pressed No; the host asks again after a while). It is a cheap read; call it every frame if needed. Requests sent in any other state than connected fail with `HORIZON_BRIDGE_ERR_NOT_CONNECTED`.
+
+Limits:
+
+| Limit | Value |
+|---|---|
+| open requests per plugin | 8 (`HORIZON_ERR_BUSY` above that) |
+| request rate per plugin | 4 per second, burst 8 (above that the callback gets `HORIZON_BRIDGE_ERR_RATE_LIMIT`) |
+| request body | 1 MB |
+| answer | 16 MB |
+| time per request | 45 s |
+
+TM Horizon applies its own limits on top (one TMX request per second at most, caches), see `docs/client-bridge.md`.
+
+Threading: call `bridge_request` on the game thread (`Init`, `OnEvent`, a panel's draw function, `DrawOverlay`). The host sends the request on its own thread and hands the answer back on the game thread, so the callback can touch plugin state without a lock. When a plugin is switched off, its waiting requests are dropped and the ones already answered get `HORIZON_BRIDGE_ERR_CANCELLED`. After `Shutdown` no callback arrives. If the callback's `user` pointer points to something, make sure it is still there when the answer comes (a request id looked up in a table is safer than a raw pointer).
+
+The first plugins that use this: WR Hunter (record replay, `docs/plugins/wr-hunter.md`) and TMX Browser (`docs/plugins/tmx-browser.md`).
+
 ## For mods that are not plugins (TMVS and others)
 
 `host.dll` (TMLoader: `HorizonHost.dll`) exports three plain C functions (`__cdecl`, stable, no ABI
@@ -233,7 +331,7 @@ windows with "Hide in photos and videos".
 
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.
 - Changes are additive only: new fields go at the end, new events get new numbers, nothing is reordered or removed.
-- `HORIZON_ABI_MINOR` counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
+- `HORIZON_ABI_MINOR` is 3 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = toasts (`notify`) and the TM Horizon bridge (`bridge_request`, `bridge_state`). It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing. For the 1.3 functions that is `host->abi_minor >= 3` (the client mods use `ck::abiAtLeast(host, 3)`, which is the same test), and then a NULL check on `host->notify` / `host->bridge_request`. A plugin that cannot work without them (TMX Browser) returns non-zero from `Init` on an older host and shows as failed. A plugin that only wants a toast (WR Hunter) skips the call.
 - `HORIZON_ABI` changes only if something cannot stay compatible. The host refuses a plugin with a different `abi`.
 
 ## Building
