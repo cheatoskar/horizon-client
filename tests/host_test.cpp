@@ -167,6 +167,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
         dev->Present(nullptr, nullptr, nullptr, nullptr);
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        Sleep(15); // the menu fades in over ~0.2 s
     }
     // Reset as the game does on a resolution change: the overlay must survive it
     const HRESULT rr = dev->Reset(&pp);

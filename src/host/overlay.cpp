@@ -88,6 +88,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         pluginsShutdownAll();
         hostConfigSave(true);
     }
+    if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) hotkeysKeyMessage(msg, w, l);
     if (g_backends && g_ctx) {
         ImGui::SetCurrentContext(g_ctx);
         bool take = false;
@@ -199,6 +200,10 @@ ui::Model buildModel() {
         }
         m.log = &g_logLines;
     }
+    for (const auto& o : s.otherMods) m.otherMods.push_back(ui::OtherModView{o.name, o.version, o.file, o.kind, o.keys, o.note});
+    m.barEnabled = g_barEnabled;
+    m.menuHotkey = g_menuHotkey;
+    m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
     m.notes = s.notes;
     m.notes.push_back(std::string("Game: ") + game().status());
     if (s.tmvsLoaded) m.notes.push_back("TM Vibrant Shaders keeps its own Direct3D hook and menu.");
@@ -212,6 +217,9 @@ ui::Actions makeActions() {
         const Plugin* p = findPlugin(id);
         if (p && p->running && p->drawMenu) pluginDrawMenu(id);
         else if (p && p->running) ImGui::TextDisabled("This mod has no settings.");
+        else if (p && p->status == ui::PluginStatus::Off && p->statusText.find("dinput8.chain") != std::string::npos)
+            ImGui::TextWrapped("The old ESWC Autosave loader is active, so this plugin is off (two autosaves would save twice). "
+                               "To switch: turn it on, close the game, delete dinput8.chain.dll in the game folder.");
         else ImGui::TextDisabled("This mod is not running (%s).", p && !p->statusText.empty() ? p->statusText.c_str() : "off");
     };
     a.beginKeyCapture = [](int handle) { keyCaptureBegin(handle); };
@@ -220,6 +228,11 @@ ui::Actions makeActions() {
     a.openLogFolder = &openLogFolder;
     a.openLauncher = &openLauncher;
     a.closeMenu = []() { setMenuOpen(false, "the menu"); };
+    a.setBarEnabled = [](bool on) {
+        g_barEnabled = on;
+        hostSetSettingInt("bar", on ? 1 : 0);
+        HLOG("menu: top-edge bar %s", on ? "on" : "off");
+    };
     return a;
 }
 

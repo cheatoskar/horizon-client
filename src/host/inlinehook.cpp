@@ -44,6 +44,26 @@ void describeAddress(const void* address, char* out, size_t size) {
 
 bool installInlineHook(InlineHook& h, void* detour) {
     BYTE* target = reinterpret_cast<BYTE*>(rebase(h.link));
+    if (target[0] == 0xE9 && memcmp(target, h.prologue, h.length) != 0) {
+        // Another mod hooked this function already (e.g. the eswc-autosave loader in dinput8.chain.dll):
+        // ours goes in front of its jump and continues into its detour, which runs the original.
+        BYTE* theirs = target + 5 + *reinterpret_cast<int32_t*>(target + 1);
+        BYTE* tramp = static_cast<BYTE*>(VirtualAlloc(nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!tramp) return false;
+        tramp[0] = 0xE9;
+        *reinterpret_cast<int32_t*>(tramp + 1) = static_cast<int32_t>(theirs - (tramp + 5));
+        FlushInstructionCache(GetCurrentProcess(), tramp, 16);
+        DWORD old = 0;
+        if (!VirtualProtect(target, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
+        h.trampoline = tramp;
+        *reinterpret_cast<int32_t*>(target + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (target + 5));
+        VirtualProtect(target, 5, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), target, 5);
+        char where[160];
+        describeAddress(theirs, where, sizeof(where));
+        HLOG("hook: %s at %08X chained onto another mod's jump (to %s)", h.name, static_cast<unsigned>(h.link), where);
+        return true;
+    }
     if (memcmp(target, h.prologue, h.length) != 0) {
         char seen[64] = {};
         for (size_t i = 0; i < h.length && i < 12; i++) _snprintf_s(seen + i * 3, sizeof(seen) - i * 3, _TRUNCATE, "%02x ", target[i]);

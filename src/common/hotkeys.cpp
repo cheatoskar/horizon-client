@@ -2,6 +2,8 @@
 
 #include "common/util.h"
 
+#include <windows.h>
+
 #include <cstdio>
 
 namespace horizon {
@@ -35,6 +37,11 @@ bool isModifierVk(unsigned vk) {
 std::string vkName(unsigned vk) {
     if (vk >= 0x70 && vk <= 0x87) return "F" + std::to_string(vk - 0x70 + 1);
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) return std::string(1, static_cast<char>(vk));
+    if ((vk >= 0xBA && vk <= 0xC0) || (vk >= 0xDB && vk <= 0xDF) || vk == 0xE2) {
+        // punctuation keys: the character the current layout types ('#' on a German keyboard)
+        const UINT ch = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) & 0x7fff;
+        if (ch > 0x20 && ch < 0x7f) return std::string(1, static_cast<char>(ch));
+    }
     for (const auto& n : kNames)
         if (n.vk == vk) return n.name;
     if (vk == 0) return std::string();
@@ -43,9 +50,17 @@ std::string vkName(unsigned vk) {
     return buf;
 }
 
+// The key that types this character on the current keyboard layout ('#', '+', ...), 0 if none.
+static unsigned vkFromChar(char c) {
+    const SHORT r = VkKeyScanW(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+    if (r == -1) return 0;
+    return static_cast<unsigned>(r & 0xff);
+}
+
 static unsigned vkFromName(const std::string& raw) {
     const std::string n = lower(trim(raw));
     if (n.empty()) return 0;
+    if (n.size() == 1 && !((n[0] >= 'a' && n[0] <= 'z') || (n[0] >= '0' && n[0] <= '9'))) return vkFromChar(n[0]);
     if (n.size() >= 2 && n[0] == 'f' && n.find_first_not_of("0123456789", 1) == std::string::npos) {
         const int f = atoi(n.c_str() + 1);
         if (f >= 1 && f <= 24) return 0x70u + static_cast<unsigned>(f - 1);
@@ -68,9 +83,19 @@ static unsigned vkFromName(const std::string& raw) {
 
 bool parseKey(const std::string& text, KeyCombo& out) {
     out = KeyCombo{};
-    const std::string t = trim(text);
+    std::string t = trim(text);
     if (t.empty() || lower(t) == "none") return true;
     KeyCombo k;
+    // '+' as the key itself: "+" or "Ctrl++"
+    if (t == "+" || (t.size() >= 2 && t.compare(t.size() - 2, 2, "++") == 0)) {
+        const unsigned vk = vkFromChar('+');
+        if (!vk) return false;
+        const std::string mods = t == "+" ? std::string() : t.substr(0, t.size() - 2);
+        if (!mods.empty() && !parseKey(mods + "+A", k)) return false;
+        k.vk = vk;
+        out = k;
+        return true;
+    }
     size_t start = 0;
     bool haveKey = false;
     while (start <= t.size()) {

@@ -46,6 +46,11 @@ struct GameIdentity {
 GameIdentity identifyGame(bool testMode);
 
 // ------------------------------------------------------------------ state (main.cpp)
+// A mod in the process that is not a Horizon plugin (menu "Other mods").
+struct OtherMod {
+    std::string name, version, file, kind, keys, note;
+};
+
 struct HostState {
     LoaderKind loader = LoaderKind::Legacy;
     bool safeMode = false;
@@ -61,6 +66,7 @@ struct HostState {
     bool tmvsLoaded = false;
     bool chainPresent = false;      // dinput8.chain.dll next to the Legacy Loader
     bool chainIsAutosave = false;   // ... and it is the eswc-autosave loader
+    std::vector<OtherMod> otherMods;
     HorizonGameInfo info = {};
     // backing storage of info's strings
     std::string infoGameFolder, infoUserFolder, infoLanguage;
@@ -140,6 +146,9 @@ struct HotkeyRow {
 };
 std::vector<HotkeyRow> hotkeyRows();
 void hotkeysDetectExternal();
+// Window key messages: a navigation key from the number pad (NumLock off: Num0 = Insert) is not the
+// navigation key itself, so it never fires a hotkey bound to Insert/Home/... (TM's cameras use the pad).
+void hotkeysKeyMessage(UINT msg, WPARAM vk, LPARAM lparam);
 // Key capture for rebinding in the menu.
 void keyCaptureBegin(int handle);
 bool keyCapturePoll(int handle, std::string& out);

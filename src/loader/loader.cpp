@@ -126,11 +126,13 @@ void startHost() {
 extern "C" {
 
 HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version, REFIID riid, LPVOID* out, void* outer) {
-    startHost();
+    // The chained DLL first (an earlier loader starts its own mod in this call, on the game's original
+    // code), then the host, which hooks after it and chains onto its jumps.
     using Fn = HRESULT(WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, void*);
     Fn fn = reinterpret_cast<Fn>(proc(0));
-    if (!fn) return E_FAIL;
-    return fn(inst, version, riid, out, outer);
+    const HRESULT hr = fn ? fn(inst, version, riid, out, outer) : E_FAIL;
+    startHost();
+    return hr;
 }
 
 HRESULT WINAPI Proxy_DllCanUnloadNow() {
