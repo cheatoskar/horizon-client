@@ -18,6 +18,8 @@ if not exist build\imgui.lib (
 call plugins\eswc-autosave\build_plugin.cmd || exit /b 1
 call plugins\sample\build_plugin.cmd || exit /b 1
 call plugins\tmx-upload\build_plugin.cmd || exit /b 1
+if not exist build\imgui_core.lib lib /nologo /OUT:build\imgui_core.lib build\imgui\imgui.obj build\imgui\imgui_draw.obj build\imgui\imgui_tables.obj build\imgui\imgui_widgets.obj || exit /b 1
+call plugins\controller-hotplug\build_plugin.cmd || exit /b 1
 
 %CXX% /Fo"build\test\fake_host.obj" /Fd"build\test\fake_host.pdb" tests\fake_host.cpp || exit /b 1
 link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\fake_host.exe build\test\fake_host.obj build\imgui.lib ws2_32.lib user32.lib kernel32.lib gdi32.lib shell32.lib || exit /b 1
@@ -25,6 +27,7 @@ link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\fake_host.exe build\test\fake_h
 set "AUTOSAVE=dist\legacy\horizon\plugins\eswc-autosave\eswc-autosave.dll"
 set "SAMPLE=build\plugins\sample\sample.dll"
 set "TMXUP=dist\legacy\horizon\plugins\tmx-upload\tmx-upload.dll"
+set "HOTPLUG=dist\legacy\horizon\plugins\controller-hotplug\controller-hotplug.dll"
 set "FH=build\test\fake_host.exe"
 set "FAIL=0"
 echo.
@@ -42,6 +45,12 @@ echo ===== tmx-upload, game eswc (real HTTP on 127.0.0.1)
 %FH% %TMXUP% --game eswc || set "FAIL=1"
 echo ===== tmx-upload, game tmnf
 %FH% %TMXUP% --game tmnf || set "FAIL=1"
+echo ===== controller-hotplug, game eswc (no game here: stays off; test mode: plug, off/on, replug, standalone)
+%FH% %HOTPLUG% --game eswc --standalone-dummy %SAMPLE% || set "FAIL=1"
+echo ===== controller-hotplug, game sunrise with an unknown exe (refuses with 2)
+%FH% %HOTPLUG% --game sunrise --expect-init 2 || set "FAIL=1"
+echo ===== controller-hotplug, game tmnf (refuses with 2)
+%FH% %HOTPLUG% --game tmnf --expect-init 2 || set "FAIL=1"
 echo.
 if "%FAIL%"=="1" (echo fake host tests FAILED & exit /b 1)
 echo fake host tests passed

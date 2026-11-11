@@ -8,6 +8,9 @@ if not exist screens mkdir screens
 echo === unit tests
 build\test\unit_tests.exe || set FAIL=1
 
+echo === controller hot-plug: tracker and game side against a fake input port
+build\test\hp_tests.exe || set FAIL=1
+
 echo === loader + chain + unknown exe
 set "T=build\test\run-loader"
 if exist %T% rmdir /s /q %T%
@@ -69,7 +72,7 @@ rem stats_dir from the profile: the writer starts and stops with the host (no ra
 findstr /c:"stats: play events go to" %T%\horizon\logs\*.log >nul && echo PASS  stats writer started || (echo FAIL  stats writer & set FAIL=1)
 
 echo === plugins against the fake host
-call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autosave + tmx-upload) || (echo FAIL  fake host & set FAIL=1)
+call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autosave + tmx-upload + controller-hotplug) || (echo FAIL  fake host & set FAIL=1)
 
 echo === node explorer: unit tests, fake engine graph, DLL in a fake host
 call plugins\node-explorer\tests\run_tests.cmd >nul 2>&1 && echo PASS  node explorer || (echo FAIL  node explorer & set FAIL=1)

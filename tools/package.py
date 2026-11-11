@@ -5,6 +5,9 @@ packaging\\; writes:
 
   dist\\tmloader\\Horizon Host\\<version>\\        TMLoader product (Forever)
   dist\\release\\Horizon-Host-<version>-<game>.zip  one zip per game (ESWC, Sunrise, Forever)
+  dist\\release\\<Name>-<version>-standalone.zip   one zip per module folder dist\\standalone\\<id>\\ (a module
+                                                  that also runs without Horizon, e.g. controller-hotplug;
+                                                  version from its plugin.json)
   dist\\manifest.json                             version, every file with size + sha256, every zip
 
 Extra plugins (e.g. the Legacy Randomizer, built in its own repo) are picked up from
@@ -25,6 +28,8 @@ DIST = os.path.join(ROOT, "dist")
 LEGACY = os.path.join(DIST, "legacy")
 PACK = os.path.join(ROOT, "packaging")
 EXTRA = os.path.join(ROOT, "extra-plugins")
+STANDALONE = os.path.join(DIST, "standalone")
+STANDALONE_NAMES = {"controller-hotplug": "Controller-Hotplug"}
 
 
 def host_version():
@@ -114,6 +119,24 @@ def zip_dir(src, zip_path):
                 z.write(p, os.path.relpath(p, src))
 
 
+def standalone_packages():
+    """(id, name, version, folder) for every dist\\standalone\\<id>\\. The version is the module's own
+    (dist\\legacy\\horizon\\plugins\\<id>\\plugin.json)."""
+    out = []
+    if not os.path.isdir(STANDALONE):
+        return out
+    for pid in sorted(os.listdir(STANDALONE)):
+        folder = os.path.join(STANDALONE, pid)
+        if not os.path.isdir(folder):
+            continue
+        manifest = os.path.join(LEGACY, "horizon", "plugins", pid, "plugin.json")
+        if not os.path.isfile(manifest):
+            sys.exit("standalone %s: missing %s" % (pid, manifest))
+        meta = json.load(open(manifest, encoding="utf-8-sig"))
+        out.append((pid, STANDALONE_NAMES.get(pid, pid), meta["version"], folder))
+    return out
+
+
 def main():
     version = host_version()
     for need in (os.path.join(LEGACY, "dinput8.dll"), os.path.join(LEGACY, "horizon", "host.dll")):
@@ -147,12 +170,20 @@ def main():
         zip_dir(stage, zip_path)
         manifest["packages"].append({"game": game.lower(), "zip": os.path.relpath(zip_path, DIST).replace("\\", "/"),
                                      "size": os.path.getsize(zip_path), "sha256": sha256(zip_path), "files": files_of(stage)})
+    manifest["standalone"] = []
+    for pid, name, ver, folder in standalone_packages():
+        zip_path = os.path.join(release, "%s-%s-standalone.zip" % (name, ver))
+        zip_dir(folder, zip_path)
+        manifest["standalone"].append({"id": pid, "version": ver, "zip": os.path.relpath(zip_path, DIST).replace("\\", "/"),
+                                       "size": os.path.getsize(zip_path), "sha256": sha256(zip_path), "files": files_of(folder)})
     manifest["tmloader_product"] = {"folder": "tmloader/Horizon Host", "files": files_of(os.path.join(DIST, "tmloader", "Horizon Host"))}
     with open(os.path.join(DIST, "manifest.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, indent=2)
     shutil.rmtree(staging, ignore_errors=True)
     for p in manifest["packages"]:
         print("%-8s %s  %s" % (p["game"], p["sha256"], p["zip"]))
+    for p in manifest["standalone"]:
+        print("%-8s %s  %s" % ("alone", p["sha256"], p["zip"]))
     print("manifest: dist\\manifest.json")
 
 

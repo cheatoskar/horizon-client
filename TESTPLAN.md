@@ -130,6 +130,18 @@ Nur TMNF-test ohne TMVS-d3d9.dll im Ordner: in TM Horizon DXVK an, Benchmark `dx
 
 Zurück: alle Optionen aus (Standard), DXVK aus, Replay-Archiv rückgängig, „Optimieren“ hat für jede Änderung „Rückgängig“.
 
+## Controller nachträglich erkennen (Branch `controller-hotplug`, Modul `controller-hotplug`)
+
+Nur Testkopien (ESWC, einmal Sunrise). Das Modul ist neu und standardmäßig an. Was es tut: `docs/plugins/controller-hotplug.md`. Ein Gamepad bereithalten.
+
+1. Spiel starten **ohne** Pad. Dann das Pad anstecken: Toast „Controller erkannt: <Name>“, im Horizon-Log eine Zeile dazu. In den Eingabe-Einstellungen des Spiels erscheint das Pad. Belegen, Rennen fahren: Es geht. Wurde das Pad mitten im Rennen angesteckt, gilt die Belegung ab dem nächsten Rennstart (Strecke neu laden).
+2. Spiel beenden und neu starten, Pad schon dran: es geht wie früher. Abziehen und wieder anstecken im Rennen und im Menü: Toast, das Pad geht nach kurzer Zeit wieder (spätestens ca. 2 s nach dem Anstecken). Im Log steht, ob das Modul dem Spiel ein neues Gerät geben musste.
+3. Pad in einen anderen USB-Port stecken: kann als neues Gerät zählen (neue Belegung nötig). Bitte sagen, was passiert.
+4. Im Horizon-Menü das Modul **ausschalten**, Spiel neu starten, ohne Pad starten, Pad anstecken: das Spiel sieht es nicht (altes Verhalten). Wieder einschalten.
+5. Eigenständige Version statt des Moduls: `Controller-Hotplug-<Version>-standalone.zip` in einen Testordner entpacken, `Controller-Hotplug-Install.cmd` ausführen (Horizon dort: unser Loader wird `dinput8.chain.dll`). Spiel starten: Toast „Eigenständiges Controller-Hotplug gefunden – Modul pausiert“, derselbe Text auf der Modulseite, `controller_hotplug.log` sagt „ready“, das Anstecken geht trotzdem (jetzt durch die eigenständige Version). Danach `Controller-Hotplug-Uninstall.cmd`: dinput8.dll/dinput8.chain.dll sind wie vorher.
+6. Sunrise einmal: dasselbe wie 1. Im Log stehen die Zeilen des Moduls; geht es nicht, die Log-Datei schicken.
+7. Online: Login und ein Online-Rennen mit dem Modul an wie gewohnt (es ändert keine Eingaben).
+
 ## Entfernen
 
 `Horizon-Uninstall.cmd` im Spielordner (macht aus `dinput8.chain.dll` wieder `dinput8.dll`), danach den Ordner `horizon` löschen. Oder einfach die Testkopie löschen.

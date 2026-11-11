@@ -1,0 +1,14 @@
+{
+  "id": "controller-hotplug",
+  "name": "Controller nachträglich erkennen",
+  "version": "1.0.0",
+  "dll": "controller-hotplug.dll",
+  "games": [
+    "eswc",
+    "sunrise"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Registers game controllers you plug in while the game runs.",
+  "author": "cheatoskar"
+}
