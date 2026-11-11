@@ -64,11 +64,12 @@ void testManifest() {
     CHECK(m.warnings.size() == 1 && contains(m.warnings[0], "future"));
 
     CHECK(parseManifestToml("name = \"x\"\r\n", &m, &err));
-    CHECK(m.games == (HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF)); // default: all
+    CHECK(m.games == (HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF)); // default: all
     CHECK(m.online == OnlineMode::SoloOnly && m.perms == 0 && m.version == "0.0.0");
     CHECK(parseManifestToml("name = \"x\"\ngames = \"all\"\n", &m, &err) && m.games == gameBits("all"));
     CHECK(parseManifestToml("name = \"x\"\ngames = [\"forever\"]\n", &m, &err) && m.games == HORIZON_GAME_FOREVER);
-    CHECK(parseManifestToml("name = \"x\"\ngames = [\"tmnf\", \"original\"]\n", &m, &err) && m.games == HORIZON_GAME_TMNF && m.warnings.size() == 1);
+    CHECK(parseManifestToml("name = \"x\"\ngames = [\"tmnf\", \"original\"]\n", &m, &err) && m.games == (HORIZON_GAME_TMNF | HORIZON_GAME_ORIGINAL) &&
+          m.warnings.empty());
 
     CHECK(!parseManifestToml("author = \"x\"\n", &m, &err) && contains(err, "name is missing"));
     CHECK(!parseManifestToml("name = \"x\"\npermissions = [\"ui\", \"write-memory\"]\n", &m, &err) && contains(err, "line 2") &&

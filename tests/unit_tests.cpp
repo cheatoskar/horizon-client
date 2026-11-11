@@ -13,6 +13,7 @@
 #include "horizon_plugin.h"
 #include "host/game/forever_poll.h"
 #include "host/bridge_logic.h"
+#include "host/exe_known.h"
 #include "host/stats_log.h"
 #include "host/toast_queue.h"
 #include "../tests/abi12/abi12_sizes.h"
@@ -584,6 +585,38 @@ static void testStatsLines() {
     CHECK(!stats::append(L"", "t.jsonl", "x"));
 }
 
+// Exe identification: only the pinned builds run; TM Original only as the Online Patch v2 exe.
+static void testExeIdentification() {
+    const std::string tmo = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
+    ExeMatch m = matchExe(tmo, 0x5d337477, 7883264, "TMORIGINAL.EXE");
+    CHECK(m.exe && m.exe->game == HORIZON_GAME_ORIGINAL && m.why.empty());
+    CHECK(std::string(bridge::siteCode(m.exe->game)) == "tmo");
+    m = matchExe(tmo, 0x5d337477, 7883265, "TMORIGINAL.EXE"); // same hash, other size: refused
+    CHECK(!m.exe && m.why.find("file size") != std::string::npos);
+    m = matchExe(tmo, 0x5d337478, 7883264, "TMORIGINAL.EXE");
+    CHECK(!m.exe && m.why.find("timestamp") != std::string::npos);
+    // another TM Original exe (retail, patch v1, a re-patched copy): named as TM Original, refused
+    m = matchExe(std::string(64, 'a'), 0x5d337477, 7883264, "TMORIGINAL.EXE");
+    CHECK(!m.exe && m.why.find("TrackMania Original, but not the supported exe") == 0);
+    m = matchExe(std::string(64, 'a'), 0x12345678, 1, "tmoriginal.exe");
+    CHECK(!m.exe && m.why.find("TrackMania Original") == 0);
+    m = matchExe(std::string(64, 'a'), 0x12345678, 1, "Other.exe");
+    CHECK(!m.exe && m.why.find("unknown exe") == 0);
+    // the other games still match, with and without a size check
+    m = matchExe("983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068", 0x5ce7272f, 0, "TmNationsESWC.exe");
+    CHECK(m.exe && m.exe->game == HORIZON_GAME_ESWC);
+    m = matchExe("e59dfc7eaa5314e85b2b0df6f40ef7ba01a23bd5a9525f84407f5dff301df4fe", 0x5cc8f0cf, 7904768, "TmSunrise.exe");
+    CHECK(m.exe && m.exe->game == HORIZON_GAME_SUNRISE);
+    m = matchExe("8c5325d04a10d5e6921afb9931770279cca8cdfc7f66425b6365d0a870f5694a", 0x4d431494, 10685290, "TmForever.exe");
+    CHECK(m.exe && m.exe->game == HORIZON_GAME_TMNF);
+    size_t n = 0;
+    const KnownExe* k = knownExes(&n);
+    int originals = 0;
+    for (size_t i = 0; i < n; i++)
+        if (k[i].game == HORIZON_GAME_ORIGINAL) originals++;
+    CHECK(originals == 1 && gameBitFromName("original") == HORIZON_GAME_ORIGINAL && std::string(gameKey(HORIZON_GAME_ORIGINAL)) == "original");
+}
+
 int main() {
     testProfile();
     testManifest();
@@ -597,6 +630,7 @@ int main() {
     testToasts();
     testBridgeLogic();
     testStatsLines();
+    testExeIdentification();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

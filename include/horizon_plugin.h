@@ -52,7 +52,7 @@ extern "C" {
 /* ------------------------------------------------------------------ games (bit mask) ---------- */
 #define HORIZON_GAME_ESWC     0x01u /* TrackMania Nations ESWC (unofficial 1.80 build) */
 #define HORIZON_GAME_SUNRISE  0x02u /* TrackMania Sunrise (Win10 community repack) */
-#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (not supported yet) */
+#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (Online Patch v2 exe) */
 #define HORIZON_GAME_TMNF     0x08u /* TrackMania Nations Forever (also TMLoader's combined exe) */
 #define HORIZON_GAME_TMUF     0x10u /* TrackMania United Forever */
 #define HORIZON_GAME_LEGACY   (HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL)

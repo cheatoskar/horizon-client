@@ -1,4 +1,4 @@
-// input-display.dll in the client test host for ESWC, Sunrise, TMNF and TMUF: the car's steer/gas/brake read
+// input-display.dll in the client test host for ESWC, Sunrise, Original, TMNF and TMUF: the car's steer/gas/brake read
 // from the fake world (by the default offsets, like when reflection has no member), speed/gear/RPM where the
 // game has them, garbage refused, no race, every style drawn. The plugin never writes: the test checks the
 // fake car's memory is unchanged afterwards.
@@ -106,9 +106,10 @@ int main(int argc, char** argv) {
     if (!g_init || !g_shutdown || !g_overlay || !g_menu || !g_hook) return 4;
     std::vector<std::string> games;
     for (int i = 2; i < argc; i++) games.push_back(argv[i]);
-    if (games.empty()) games = {"eswc", "sunrise", "tmnf", "tmuf"};
+    if (games.empty()) games = {"eswc", "sunrise", "original", "tmnf", "tmuf"};
     for (const std::string& g : games)
-        runGame(g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF, g.c_str());
+        runGame(g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "original" ? HORIZON_GAME_ORIGINAL
+                : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF, g.c_str());
     printf("input_display_fakehost: %s (%d failed)\n", g_fail ? "FAILED" : "all passed", g_fail);
     ImGui::DestroyContext();
     return g_fail;

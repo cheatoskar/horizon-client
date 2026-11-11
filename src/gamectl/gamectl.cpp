@@ -50,6 +50,13 @@ const Spec kSpecs[] = {
     {Game::Sunrise, "TrackMania Sunrise (Win10 repack)", 0x5cc8f0cf, 0x00bcce50, 0x00bcd1e8, 0x0085fce0, 3, false,
      0x1b8, 0x0085fe50, 0x00402cc0, 0x00402b90, 0x2a0, 0x104, 0x2e8, 0x318, true, 0x354, 2, 0x258, 1, 0x2a8,
      0x007ed580, L"exe"},
+    // TM Original, Online Patch v2 community exe, sha256 75e129d7...: Sunrise's code with the same menu, app and race
+    // offsets (compared instruction by instruction); MenuPlayChallenge_Solo 0x7ba170, MenuPlayChallenge_OnOk 0x7bad40,
+    // SetChallengeType 0x823370 (reflection method entries and masked byte match from Sunrise; trackmania-internals
+    // games/tm-original). Static, not run yet.
+    {Game::Original, "TrackMania Original (Online Patch v2)", 0x5d337477, 0x00bc8084, 0x00bc841c, 0x0085e0a0, 3, false,
+     0x1b8, 0x0085e210, 0x00402cb0, 0x00402bb0, 0x2a0, 0x104, 0x2e8, 0x318, true, 0x354, 2, 0x258, 1, 0x2a8,
+     0x007ebb00, L"exe"},
     // TMNF (map symbols): CTrackManiaMenus::LaunchManiaCodeAction 0x4fb950 plays a file this way
     // (menus+0x13c = info, SetChallengeType(3), menus+0x704 = 1)
     {Game::Tmnf, "TrackMania Nations Forever", 0x4d431494, 0x00d68c44, 0x00d69120, 0x005cf100, 2, true, 0x148,
@@ -236,7 +243,7 @@ bool pressQuit(void* race) {
     }
 }
 
-// Unknown exe (e.g. TM Original or another version): log what the reflection finds, so one run is enough
+// Unknown exe (another version of a known game): log what the reflection finds, so one run is enough
 // to fill in a Spec. Changes nothing in the game.
 void discover() {
     if (!reflect::ready()) {
@@ -303,7 +310,7 @@ Game init(LogFn log, bool allowExperimentalOriginal) {
          reflection ? "found by pattern" : "missing", allowExperimentalOriginal ? ", running discovery" : "");
     if (allowExperimentalOriginal) {
         discover();
-        // TM Original would be identified here once a run of the discovery has given its Spec values.
+        // An unknown exe with the TrackMania app class (e.g. another TM Original build): reported, never controlled.
         if (reflect::findClass("CTrackMania")) g_game = Game::Original;
     }
     return g_game;

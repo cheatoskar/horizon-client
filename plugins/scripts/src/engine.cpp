@@ -383,6 +383,7 @@ bool Manager::compile(Script& s) {
     // #if ESWC / SUNRISE / TMNF / TMUF / FOREVER / LEGACY for the few lines that differ per game
     if (game == HORIZON_GAME_ESWC) b.DefineWord("ESWC");
     if (game == HORIZON_GAME_SUNRISE) b.DefineWord("SUNRISE");
+    if (game == HORIZON_GAME_ORIGINAL) b.DefineWord("ORIGINAL");
     if (game == HORIZON_GAME_TMNF) b.DefineWord("TMNF");
     if (game == HORIZON_GAME_TMUF) b.DefineWord("TMUF");
     if (game & HORIZON_GAME_FOREVER) b.DefineWord("FOREVER");

@@ -100,6 +100,7 @@ public:
 };
 GameAdapter* makeEswcAdapter();
 GameAdapter* makeSunriseAdapter();
+GameAdapter* makeOriginalAdapter();
 GameAdapter* makeForeverAdapter();
 GameAdapter* makeNullAdapter();
 GameAdapter& game();
@@ -202,7 +203,8 @@ bool readPointer(const void* address, void** out);
 void describeAddress(const void* address, char* out, size_t size);
 bool patchImport(HMODULE module, const char* dll, const char* function, void* replacement, void** originalOut);
 
-// ------------------------------------------------------------------ ESWC online fix (onlinefix.cpp)
-void onlineFixInstall(uintptr_t exeBase);
+// ------------------------------------------------------------------ online fix, ESWC and Original (onlinefix.cpp)
+// iatSlot: link address of the exe's HttpOpenRequestA import slot.
+void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot);
 
 } // namespace horizon

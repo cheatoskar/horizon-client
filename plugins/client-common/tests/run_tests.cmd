@@ -1,6 +1,6 @@
 @echo off
 rem Client mods (WR Hunter, Input Display, TMX Browser): unit tests and each DLL in the client test host
-rem for ESWC, Sunrise, TMNF and TMUF. Run build.cmd first.
+rem for ESWC, Sunrise, Original, TMNF and TMUF. Run build.cmd first.
 setlocal
 cd /d "%~dp0..\..\.."
 set FAIL=0

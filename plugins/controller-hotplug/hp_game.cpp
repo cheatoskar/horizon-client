@@ -9,7 +9,7 @@
 namespace hp {
 
 namespace {
-// CInputPortDx8 (same in ESWC and Sunrise)
+// CInputPortDx8 (same in ESWC, Sunrise and Original)
 constexpr size_t kPortTableCount = 0x14; // binding tables {count, ptr} the port owns
 constexpr size_t kPortTableArray = 0x18;
 constexpr size_t kPortDevCount = 0x2c;
@@ -72,6 +72,31 @@ const PtrSig kTmsPtrs[] = {
 };
 const GameTable kTms = {"TrackMania Sunrise (Win10 repack)", 0x5cc8f0cf, 0x00b8bb88, 0x00a23d18, 0x00a40af8, 0x004ce7c0,
                         0x0060a070, 0x00a6cc9c, kTmsCode, 6, kTmsPtrs, 5};
+
+// ---- Original (TMORIGINAL.EXE Online Patch v2 community exe, sha256 75e129d7..., timestamp 5d337477)
+// Every address matched to Sunrise's (masked byte match, the same instruction in the matched function, or the
+// vtable that holds the matched functions); bytes compared 2026-11-11, static only (trackmania-internals
+// games/tm-original/addresses.md).
+const uint8_t kTmoAddPad[] = {0x64, 0xa1, 0x00, 0x00, 0x00, 0x00, 0x6a, 0xff, 0x68, 0x8b, 0x49, 0x9e, 0x00, 0x50};
+const uint8_t kTmoStorePort[] = {0x89, 0x15, 0xe8, 0x6d, 0xb8, 0x00};
+const uint8_t kTmoTableResize[] = {0x57, 0x8b, 0xce, 0xe8, 0xb6, 0xfa, 0x41, 0x00, 0x3b, 0xdf, 0x89, 0x3e, 0x73, 0x1d, 0x8b, 0x4e};
+const CodeSig kTmoCode[] = {
+    {0x004ce870, sizeof(kTmsEnumCb), kTmsEnumCb}, // same bytes as Sunrise (the call's distance is the same)
+    {0x004cdc10, sizeof(kTmoAddPad), kTmoAddPad},
+    {0x008b64d0, sizeof(kReserve), kReserve},     // the Reserve that table creation calls (0x496a15)
+    {0x0043f355, sizeof(kTmoStorePort), kTmoStorePort},
+    {0x00496a12, sizeof(kTmoTableResize), kTmoTableResize},
+    {0x00a6895c, sizeof(kJoyFormat), kJoyFormat},
+};
+const PtrSig kTmoPtrs[] = {
+    {0x00a1fcd8 + 0xb0, 0x004ce890},
+    {0x00a1fcd8 + 0x90, 0x00496970},
+    {0x00a1fcd8 + 0x94, 0x00496b50},
+    {0x00a3c7f8 + 0x00, 0x0069a920},
+    {0x00a3c7f8 + 0x88, 0x005f98c0},
+};
+const GameTable kTmo = {"TrackMania Original (Online Patch v2)", 0x5d337477, 0x00b86de8, 0x00a1fcd8, 0x00a3c7f8, 0x004ce870,
+                        0x008b64d0, 0x00a6895c, kTmoCode, 6, kTmoPtrs, 5};
 
 using EnumCbFn = BOOL(CALLBACK*)(const DIDEVICEINSTANCEW*, void*);
 using ReserveFn = void(__fastcall*)(void* array, void* edx, uint32_t n); // thiscall, ret 4
@@ -193,9 +218,11 @@ GUID fromGuid(const Guid& g) {
 
 const GameTable& eswcTable() { return kEswc; }
 const GameTable& sunriseTable() { return kTms; }
+const GameTable& originalTable() { return kTmo; }
 const GameTable* tableForTimestamp(uint32_t ts) {
     if (ts == kEswc.timestamp) return &kEswc;
     if (ts == kTms.timestamp) return &kTms;
+    if (ts == kTmo.timestamp) return &kTmo;
     return nullptr;
 }
 

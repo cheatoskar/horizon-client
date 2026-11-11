@@ -1,6 +1,6 @@
 # TMX Browser
 
-Plugin id `tmx-browser`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, on by default. It searches the TrackMania Exchange from inside the game, shows map cards with thumbnails, and downloads or starts a map. It needs **TM Horizon** running on the same PC: the game never goes online, TM Horizon talks to TMX (`docs/client-bridge.md`).
+Plugin id `tmx-browser`. ESWC, Sunrise, Original, TMNF and TMUF, online-ok, live toggle, on by default. It searches the TrackMania Exchange from inside the game, shows map cards with thumbnails, and downloads or starts a map. It needs **TM Horizon** running on the same PC: the game never goes online, TM Horizon talks to TMX (`docs/client-bridge.md`).
 
 It needs a host with ABI 1.3 (panels and the bridge). On an older host `Init` fails and the plugin shows as failed.
 
@@ -18,7 +18,7 @@ The form (name, author, tags, difficulty, length, awards) and the card size are 
 
 ## Play and Save
 
-- **Save** downloads the `.Challenge.Gbx` through TM Horizon and writes it to `<maps folder>\Downloaded\_Horizon\<name> (<id>).Challenge.Gbx`. The maps folder is `Tracks\Challenges` in the user folder on Forever, `GameData\Tracks\Challenges` in the game folder on ESWC and Sunrise. Toast: "Map saved".
+- **Save** downloads the `.Challenge.Gbx` through TM Horizon and writes it to `<maps folder>\Downloaded\_Horizon\<name> (<id>).Challenge.Gbx`. The maps folder is `Tracks\Challenges` in the user folder on Forever, `GameData\Tracks\Challenges` in the game folder on ESWC, Sunrise and Original (site code `tmo`, original.tm-exchange.com). Toast: "Map saved".
 - **Play** does the same and then starts the map with the host's `play_map_file` (game control, `HORIZON_CAP_GAME_CONTROL`). Toasts: "Map started", "Could not start the map".
 - Play is greyed out with a message when it is not allowed: "Playing is off while online", "Playing is off during a run" (the host's `actions_allowed` is 0, which includes a run under the Competition Patch), "Go back to the main menu to play". So it plays only offline and only from the main menu. If the game state changed while the map downloaded, the map is saved and the toast "Map saved" says why it did not start.
 - One map at a time ("Busy, one map at a time").
@@ -45,6 +45,6 @@ Downloaded maps are not in the data folder: they go to the game's `Tracks\Challe
 ## Known limits
 
 - The logic and the panels are tested with a fake host and fake TM Horizon answers (`plugins/tmx-browser/tests`), not against the real TM Horizon.
-- `play_map_file` on Forever (TMNF, TMUF, also on TMLoader's relocated exe) is not confirmed in the game yet; on ESWC and Sunrise it is the host's game control.
+- `play_map_file` on Forever (TMNF, TMUF, also on TMLoader's relocated exe) is not confirmed in the game yet; on ESWC, Sunrise and Original it is the host's game control (main menu only).
 - The thumbnail decoder reads what stb_image reads (JPEG, PNG) and shrinks it to 256 px; a thumbnail that fails shows "No preview".
 - The map file is checked only for the `GBX` header, not for being a valid map of the running game.

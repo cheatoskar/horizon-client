@@ -1,10 +1,10 @@
 # Controller nachträglich erkennen
 
-Plugin id `controller-hotplug`, menu name "Controller nachträglich erkennen", version 1.0.0. ESWC and Sunrise, online-ok, live toggle, on by default. A game controller that you plug in after the game has started shows up in the game's input settings, without a restart.
+Plugin id `controller-hotplug`, menu name "Controller nachträglich erkennen", version 1.0.0. ESWC, Sunrise and Original, online-ok, live toggle, on by default. A game controller that you plug in after the game has started shows up in the game's input settings, without a restart.
 
 ## What it does
 
-ESWC and Sunrise list the DirectInput game controllers only once, when the game starts. A pad plugged in later is never known to the game; you had to restart. This module registers it while the game runs.
+ESWC, Sunrise and Original list the DirectInput game controllers only once, when the game starts. A pad plugged in later is never known to the game; you had to restart. This module registers it while the game runs.
 
 - A background thread waits for Windows device notifications (a HID device arrives or leaves). If the notifications cannot be registered, it falls back to one DirectInput enumeration per second.
 - On a change it lists the game controllers with its own DirectInput object.
@@ -28,7 +28,7 @@ None, except the on/off switch in the Horizon menu (or the Horizon Client card i
 |---|---|
 | ESWC, unofficial 1.80 (0.1.7.9) | code path found and checked statically, tests against a fake input port pass; not tested in game yet |
 | Sunrise, Win10 community repack | same code path found statically in `TmSunrise.exe`, not tested in game yet |
-| TrackMania Original | not supported (the host does not support Original yet) |
+| TM Original (Online Patch v2 exe) | same code path found statically, all addresses matched from Sunrise, not tested in game yet |
 | TMNF, TMUF | not a target. Tomashu's CoreMod in TMLoader does this there. |
 
 Online-ok: the module never changes input values, never injects input and does not block the game (the enumeration runs on its own thread). It is safe online and for TMX.
@@ -40,8 +40,7 @@ No change to input values, no injected input, no blocking of the game (the enume
 ## Known limits
 
 - Bindings of a pad that is new to the game apply from the next race start, not in the race where it was plugged in.
-- Sunrise is untested in game.
-- TrackMania Original is not supported.
+- Sunrise and Original are untested in game.
 - A pad that gets a new instance GUID after being plugged into another USB port counts as a new device and needs new bindings.
 
 ## Standalone build

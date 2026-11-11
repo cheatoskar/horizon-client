@@ -1160,7 +1160,7 @@ const HorizonPluginInfo kInfo = {
     "performance",
     "Horizon Performance",
     "0.1.0",
-    HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF,
+    HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF,
     HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_DEVICE | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
@@ -1178,7 +1178,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     g_host = host;
     const HorizonGameInfo* gi = host->game_info();
     g_game = gi ? gi->game : 0;
-    g_gameKey = g_game == HORIZON_GAME_ESWC ? "eswc" : g_game == HORIZON_GAME_SUNRISE ? "sunrise" : g_game == HORIZON_GAME_TMNF ? "tmnf"
+    g_gameKey = g_game == HORIZON_GAME_ESWC ? "eswc" : g_game == HORIZON_GAME_SUNRISE ? "sunrise" : g_game == HORIZON_GAME_ORIGINAL ? "original" : g_game == HORIZON_GAME_TMNF ? "tmnf"
               : g_game == HORIZON_GAME_TMUF ? "tmuf" : "other";
     g_imgui = horizon_imgui_attach(host);
     if (!g_imgui) logf(HORIZON_LOG_WARN, "Dear ImGui could not attach: no page, measuring still works");

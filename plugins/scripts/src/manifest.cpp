@@ -9,7 +9,7 @@
 namespace hs {
 namespace {
 
-const uint32_t kSupportedGames = HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF;
+const uint32_t kSupportedGames = HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF;
 
 // One manifest value: a string or a list of strings (numbers and booleans are not used by any key).
 struct Value {
@@ -67,11 +67,7 @@ bool apply(const std::string& key, const Value& v, Manifest* m, std::string* err
         for (const std::string& g : items) {
             const uint32_t b = gameBits(lower(g));
             if (!b) {
-                if (lower(g) == "original") {
-                    m->warnings.push_back("TrackMania Original is not supported yet; it is ignored in games");
-                    continue;
-                }
-                *error = "unknown game \"" + g + "\" (eswc, sunrise, tmnf, tmuf or all)";
+                *error = "unknown game \"" + g + "\" (eswc, sunrise, original, tmnf, tmuf or all)";
                 return false;
             }
             bits |= b;
@@ -226,6 +222,7 @@ struct TomlReader {
 uint32_t gameBits(const std::string& name) {
     if (name == "eswc") return HORIZON_GAME_ESWC;
     if (name == "sunrise") return HORIZON_GAME_SUNRISE;
+    if (name == "original") return HORIZON_GAME_ORIGINAL;
     if (name == "tmnf") return HORIZON_GAME_TMNF;
     if (name == "tmuf") return HORIZON_GAME_TMUF;
     if (name == "forever") return HORIZON_GAME_TMNF | HORIZON_GAME_TMUF;
@@ -266,7 +263,7 @@ std::string gamesText(uint32_t games) {
     const struct {
         uint32_t bit;
         const char* name;
-    } names[] = {{HORIZON_GAME_ESWC, "ESWC"}, {HORIZON_GAME_SUNRISE, "Sunrise"}, {HORIZON_GAME_TMNF, "TMNF"}, {HORIZON_GAME_TMUF, "TMUF"}};
+    } names[] = {{HORIZON_GAME_ESWC, "ESWC"}, {HORIZON_GAME_SUNRISE, "Sunrise"}, {HORIZON_GAME_ORIGINAL, "Original"}, {HORIZON_GAME_TMNF, "TMNF"}, {HORIZON_GAME_TMUF, "TMUF"}};
     for (const auto& n : names)
         if (games & n.bit) t += (t.empty() ? "" : ", ") + std::string(n.name);
     return t.empty() ? "none" : t;

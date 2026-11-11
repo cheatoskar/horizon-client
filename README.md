@@ -1,6 +1,6 @@
 # Horizon Host
 
-The in-game mod host of my TM Horizon launcher, for the old TrackMania games: one menu for all Horizon mods, a slim bar at the top screen edge, hotkeys with conflict display, one log per start, and a small C plugin ABI so mods stop fighting over Direct3D and game hooks.
+The in-game mod host of my TM Horizon launcher, for the old TrackMania games (Nations ESWC, Sunrise, Original, Forever): one menu for all Horizon mods, a slim bar at the top screen edge, hotkeys with conflict display, one log per start, and a small C plugin ABI so mods stop fighting over Direct3D and game hooks.
 
 Status: first test build (0.1.0). Design: `tm-hub-mono/docs/design/horizon-host.md`.
 
@@ -18,9 +18,10 @@ Status: first test build (0.1.0). Design: `tm-hub-mono/docs/design/horizon-host.
 |---|---|---|---|
 | TM Nations ESWC, unofficial 1.80 | `983bd127...` | Legacy Loader | menu, bar, plugins, events (map, start, checkpoint, respawn, finish, race end, menu, state), online gate, online login fix |
 | TM Sunrise, Win10 repack | `e59dfc7e...` | Legacy Loader (works through the repack's own d3d9.dll proxy) | menu, bar, plugins, map/state/online events; no finish/checkpoint yet |
+| TM Original, `TMORIGINAL.EXE` of the community "Online Patch v2" (2023) | `75e129d7...` | Legacy Loader (the exe imports DINPUT8; works through the patch's dgVoodoo `d3d9.dll`) | same as Sunrise: menu, bar, plugins, map/state/online events, race start, checkpoint, finish, solo race end; online login fix. Only read from the addresses, not run in game yet |
 | TM Nations/United Forever | `3847cf9f...`, `4b6a7b31...`, TMLoader `8c5325d0...`, `0a885e19...` | TMLoader product, or the Legacy Loader | experimental: menu, bar, plugins; no game hooks, input never touched (Competition Patch) |
 
-Any other exe: the host stays off and writes why into the log. No StarForce versions.
+Any other exe: the host stays off and writes why into the log. For TM Original that is "TrackMania Original, but not the supported exe": only the one `TMORIGINAL.EXE` above (identified by SHA-256, PE timestamp and file size) is accepted. No StarForce versions.
 
 ## Build
 

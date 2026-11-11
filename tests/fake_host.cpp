@@ -1,6 +1,6 @@
 // fake_host: a stand-in for Horizon Host that loads one plugin DLL and exercises it.
 //
-//   fake_host.exe <plugin dll> [--game eswc|sunrise|tmnf|tmuf] [--expect-init <n>]
+//   fake_host.exe <plugin dll> [--game eswc|sunrise|original|tmnf|tmuf] [--expect-init <n>]
 //
 // It fills a HorizonHostApi with stubs (log calls are printed, settings live in a std::map, the data
 // folder is build\test\data\<id>\), creates a headless Dear ImGui context, calls Info and Init, sends a
@@ -368,7 +368,7 @@ static void tmxUploadTests(HMODULE mod, HorizonPlugin_InitFn init, HorizonPlugin
     const int port = atoi(between(status() + ":", ":", ":").c_str());
     printf("  bridge on port %d\n", port);
     check(port >= 27311 && port <= 27315, "port in 27311-27315");
-    const std::string expectSite = !strcmp(gameName, "eswc") ? "tmn" : !strcmp(gameName, "sunrise") ? "tms" : "tmnf";
+    const std::string expectSite = !strcmp(gameName, "eswc") ? "tmn" : !strcmp(gameName, "sunrise") ? "tms" : !strcmp(gameName, "original") ? "tmo" : "tmnf";
 
     HttpResp r = httpCall(port, "GET", "/v1/ping");
     check(r.status == 200 && has(r.body, "\"ok\":true") && has(r.body, "\"mod\""), "ping");
@@ -883,7 +883,7 @@ int main(int argc, char** argv) {
         else dll = argv[i];
     }
     if (!dll) {
-        printf("usage: fake_host <plugin dll> [--game eswc|sunrise|tmnf|tmuf] [--expect-init <n>]\n");
+        printf("usage: fake_host <plugin dll> [--game eswc|sunrise|original|tmnf|tmuf] [--expect-init <n>]\n");
         return 2;
     }
 
@@ -910,6 +910,13 @@ int main(int argc, char** argv) {
         g_gameInfo.game_name = "TrackMania Sunrise";
         g_gameInfo.exe_version = "fake";
         g_gameInfo.exe_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    } else if (!strcmp(gameName, "original")) {
+        // the real TM Original sha: plugins that pin the exe accept it; their code checks then fail against this
+        // test program, so they stay off without touching anything
+        g_gameInfo.game = HORIZON_GAME_ORIGINAL;
+        g_gameInfo.game_name = "TrackMania Original";
+        g_gameInfo.exe_version = "Online Patch v2 (community build)";
+        g_gameInfo.exe_sha256 = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
     } else if (!strcmp(gameName, "tmnf")) {
         g_gameInfo.game = HORIZON_GAME_TMNF;
         g_gameInfo.game_name = "TrackMania Nations Forever";

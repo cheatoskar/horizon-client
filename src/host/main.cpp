@@ -108,6 +108,7 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     switch (s.game.game) {
     case HORIZON_GAME_ESWC: adapter = makeEswcAdapter(); break;
     case HORIZON_GAME_SUNRISE: adapter = makeSunriseAdapter(); break;
+    case HORIZON_GAME_ORIGINAL: adapter = makeOriginalAdapter(); break;
     case HORIZON_GAME_TMNF:
     case HORIZON_GAME_TMUF: adapter = makeForeverAdapter(); break;
     default: adapter = makeNullAdapter(); break;
@@ -115,8 +116,10 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     setGame(adapter);
     adapter->install();
     eventsInit();
-    if (s.game.game == HORIZON_GAME_ESWC) {
-        if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base);
+    if (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) {
+        // HttpOpenRequestA import slot: ESWC 0x00aca340, Original 0x00a162d4 (PE import directory)
+        const uintptr_t slot = s.game.game == HORIZON_GAME_ESWC ? 0x00aca340 : 0x00a162d4;
+        if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base, slot);
         else HLOG("online: OnlineFix=0 in host.json, login left as it is");
     }
     if (adapter->usesDirectInputBlock()) dinputInstall();

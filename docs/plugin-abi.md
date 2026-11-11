@@ -87,16 +87,18 @@ Subscribe with `host->subscribe(plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) 
 
 Which game delivers what, and how (`poll` = read once a frame from the game's objects, nothing hooked; `hook` = inline hook with the prologue checked byte for byte):
 
-| Event | ESWC | Sunrise (first test) | Forever (TMNF/TMUF) |
-|---|---|---|---|
-| `MAP_LOADED` | poll | poll | poll (uid/author/path only for maps gamectl started; times from the challenge) |
-| `RACE_START` | poll (start counter) | hook (`OnStartLine`) | poll (RaceState to 1, also each restart) |
-| `RESPAWN` | poll (respawn counter) | no | no |
-| `CHECKPOINT` | poll (checkpoint counter) | hook (`OnCheckpoint`) | no |
-| `FINISH` | hook (`OnFinishLine`) | hook (`OnFinishLine`) | poll (RaceState 1 to 2, time read once) |
-| `RACE_END` | hook (replay stop, solo race end) | hook (solo race end, no replay pointer) | no (no reliable signal; the end screen is the `END_RACE` game state) |
-| `MENU_ENTERED`, `GAME_STATE`, `ONLINE_CHANGED` | poll | poll | poll |
-| `REPLAY_SAVED` | yes | no | no |
+| Event | ESWC | Sunrise (first test) | Original (first test, same as Sunrise) | Forever (TMNF/TMUF) |
+|---|---|---|---|---|
+| `MAP_LOADED` | poll | poll | poll | poll (uid/author/path only for maps gamectl started; times from the challenge) |
+| `RACE_START` | poll (start counter) | hook (`OnStartLine`) | hook (`OnStartLine`) | poll (RaceState to 1, also each restart) |
+| `RESPAWN` | poll (respawn counter) | no | no | no |
+| `CHECKPOINT` | poll (checkpoint counter) | hook (`OnCheckpoint`) | hook (`OnCheckpoint`) | no |
+| `FINISH` | hook (`OnFinishLine`) | hook (`OnFinishLine`) | hook (`OnFinishLine`) | poll (RaceState 1 to 2, time read once) |
+| `RACE_END` | hook (replay stop, solo race end) | hook (solo race end, no replay pointer) | hook (solo race end, no replay pointer) | no (no reliable signal; the end screen is the `END_RACE` game state) |
+| `MENU_ENTERED`, `GAME_STATE`, `ONLINE_CHANGED` | poll | poll | poll | poll |
+| `REPLAY_SAVED` | yes | no | no | no |
+
+Original uses the Sunrise code path (same engine); its addresses are matched statically and not run in game yet. Only the exe of the community "Online Patch v2" is supported. A replay watched from the menu is reported as "Loading" on Sunrise and Original.
 
 Forever never hooks, writes game memory or touches input, because Competition Patch 2.0 may treat changed code bytes as tampering. Everything above is read through reflection member names with every read SEH-guarded. Game states there: `SOLO_RACE` while driving, `END_RACE` once RaceState is finished, `NET_RACE` (online), `EDITOR`, `REPLAY` (replay editor or another race class), `LOADING` (map set, no race yet), `MAIN_MENU`. Replay and editor give no run events. The editor/replay split and the finish time on the end screen are unverified in game (first test).
 
@@ -181,7 +183,7 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `request_restart_note(plugin, why)` | "applies after restart" note in the menu |
 | `reflect_offset`, `reflect_method` | read-only engine reflection by class and member name |
 | `create_texture_rgba`, `release_texture` (ABI 1.1) | an ImGui texture from RGBA8 pixels (map thumbnails), game thread; release it before Shutdown returns |
-| `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise and Forever. Game thread. |
+| `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise, Original and Forever. Game thread. |
 | `register_panel`, `unregister_panel`, `panel_visible` (ABI 1.2) | see Panels |
 | `set_host_flag(plugin, flag, on)`, `host_flags()` (ABI 1.2) | `HORIZON_HOST_FLAG_CAPTURE`: a photo or video is being taken; the bar and windows with "Hide in photos and videos" disappear. Each plugin sets its own bits; `host_flags()` is the OR. |
 | `open_page(plugin, panel_key)` (ABI 1.3) | opens the Horizon menu on this plugin's page, for an "open my page" hotkey. `panel_key` `NULL` or `""` = Settings tab (or the plain page), else that panel's tab (`HORIZON_ERR_INVALID_ARG` if there is no such panel, the page still opens on Settings). Called while the menu already shows this page it closes the menu (toggle). Game thread only; `HORIZON_ERR_WRONG_STATE` during a capture. |
@@ -404,7 +406,7 @@ copy /y plugins\my-plugin\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 `tests\build_fake_host.cmd` builds both plugins and `build\test\fake_host.exe`, then runs them:
 
 ```
-build\test\fake_host.exe <plugin dll> [--game eswc|sunrise|tmnf] [--expect-init <n>]
+build\test\fake_host.exe <plugin dll> [--game eswc|sunrise|original|tmnf] [--expect-init <n>]
 ```
 
 The fake host stubs the whole `HorizonHostApi`, keeps settings in memory, uses `build\test\data\<id>\` as data folder, runs a headless ImGui frame, sends a short event sequence, presses the hotkeys, toggles `SetEnabled`, calls `Shutdown` and unloads the DLL. `engine_pointer` returns NULL, so a plugin with game addresses must log and skip instead of calling game code.

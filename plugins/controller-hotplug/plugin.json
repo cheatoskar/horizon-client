@@ -5,7 +5,8 @@
   "dll": "controller-hotplug.dll",
   "games": [
     "eswc",
-    "sunrise"
+    "sunrise",
+    "original"
   ],
   "online": "online-ok",
   "abi": 1,
