@@ -1,4 +1,5 @@
-// Controller hot-plug: the game side (TrackMania Nations ESWC 1.80 and TrackMania Sunrise, same input engine).
+// Controller hot-plug: the game side (TrackMania Nations ESWC 1.80, TrackMania Sunrise and TrackMania Original, same
+// input engine).
 //
 // What the game does (tm-modding-knowledge games/tmn-eswc/input.md):
 //   CInputPortDx8::Init creates IDirectInput8W (port+0x94), the mouse and the keyboard, then calls
@@ -51,6 +52,7 @@ struct GameTable {
 
 const GameTable& eswcTable();
 const GameTable& sunriseTable();
+const GameTable& originalTable();
 const GameTable* tableForTimestamp(uint32_t timestamp);
 
 using LogFn = void (*)(void* user, int level, const char* text); // level 0 info, 1 warn, 2 error

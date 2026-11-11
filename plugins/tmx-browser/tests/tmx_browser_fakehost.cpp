@@ -1,7 +1,7 @@
 // TMX Browser against the fake host (plugins\client-common\tests\client_host): loads the real DLL, drives it
 // through its test hook, draws the panels in an ImGui window and checks results, thumbnails, play/save gates,
 // files, favourites across Shutdown/Init and texture release. PASS/FAIL per check, exit code = failures.
-// Usage: tmx_browser_fakehost.exe [game ...]   (eswc sunrise tmnf tmuf; default all four)
+// Usage: tmx_browser_fakehost.exe [game ...]   (eswc sunrise original tmnf tmuf; default all five)
 #include <windows.h>
 
 #include <cstdio>
@@ -97,7 +97,7 @@ static void runGame(uint32_t game, const char* code, const std::string& root) {
 
     // ---- search
     std::string st = hook("search a");
-    check(!chost::bridgeCalls.empty() && chost::bridgeCalls.back().path == std::string("/v1/tmx/search?game=") + (game == HORIZON_GAME_ESWC ? "tmn" : game == HORIZON_GAME_SUNRISE ? "tms" : game == HORIZON_GAME_TMNF ? "tmnf" : "tmuf") + "&name=a&page=1",
+    check(!chost::bridgeCalls.empty() && chost::bridgeCalls.back().path == std::string("/v1/tmx/search?game=") + (game == HORIZON_GAME_ESWC ? "tmn" : game == HORIZON_GAME_SUNRISE ? "tms" : game == HORIZON_GAME_ORIGINAL ? "tmo" : game == HORIZON_GAME_TMNF ? "tmnf" : "tmuf") + "&name=a&page=1",
           "search request path: " + (chost::bridgeCalls.empty() ? std::string("none") : chost::bridgeCalls.back().path));
     check(field(st, "loading") == 1, "loading while the answer is out");
     frame("browse");
@@ -309,7 +309,11 @@ int main(int argc, char** argv) {
     struct G {
         uint32_t game;
         const char* code;
-    } games[] = {{HORIZON_GAME_ESWC, "eswc"}, {HORIZON_GAME_SUNRISE, "sunrise"}, {HORIZON_GAME_TMNF, "tmnf"}, {HORIZON_GAME_TMUF, "tmuf"}};
+    } games[] = {{HORIZON_GAME_ESWC, "eswc"},
+                 {HORIZON_GAME_SUNRISE, "sunrise"},
+                 {HORIZON_GAME_ORIGINAL, "original"},
+                 {HORIZON_GAME_TMNF, "tmnf"},
+                 {HORIZON_GAME_TMUF, "tmuf"}};
     for (const G& g : games) {
         bool wanted = argc < 2;
         for (int i = 1; i < argc; i++)

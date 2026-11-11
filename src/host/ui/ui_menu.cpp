@@ -645,13 +645,13 @@ void drawGeneral(const Model& model, const Actions& actions) {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
 
-        // ESWC online login fix (only on ESWC)
+        // online login fix (ESWC and Original)
         if (model.onlineFix >= 0) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x;
             drawText(dl, f.bodyBold, p, U(t.text), "Login-Fix (Fehler 12157)");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
-                     "Lets the ESWC login reach the server on Windows 10/11. Applies on the next start.");
+                     "Lets the login reach the server on Windows 10/11. Applies on the next start.");
             const ImVec2 swSize(44.0f * s, 24.0f * s);
             const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
             if (inlineSwitch("##onlinefix", swPos, swSize, model.onlineFix == 1, true, nullptr) && actions.setOnlineFix) {

@@ -306,7 +306,7 @@ ui::Model buildModel() {
     m.barEnabled = g_barEnabled;
     m.menuHotkey = g_menuHotkey;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
-    m.onlineFix = s.game.game == HORIZON_GAME_ESWC ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
+    m.onlineFix = (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
     m.dnd = toastsDnd();
     m.holdToasts = toastsHold();
     m.bridgeEnabled = bridgeState() != HORIZON_BRIDGE_OFF || hostSettingInt("bridge.enabled", 1) != 0;

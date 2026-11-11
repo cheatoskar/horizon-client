@@ -1,6 +1,6 @@
 # Horizon Scripts guide
 
-Horizon Scripts is a Horizon Host plugin (`scripts.dll`) that runs AngelScript 2.38.0 scripts inside the old TrackMania games: TM Nations ESWC, TM Sunrise, TMNF and TMUF. One script folder runs unchanged on all four, because a script only sees the API below and the engine's own member names, never a game address. The language is the one Openplanet and TMInterface use, so the syntax looks familiar (`void Main()`, `[Setting]`, `UI::Text`).
+Horizon Scripts is a Horizon Host plugin (`scripts.dll`) that runs AngelScript 2.38.0 scripts inside the old TrackMania games: TM Nations ESWC, TM Sunrise, TM Original, TMNF and TMUF. One script folder runs unchanged on all five, because a script only sees the API below and the engine's own member names, never a game address. The language is the one Openplanet and TMInterface use, so the syntax looks familiar (`void Main()`, `[Setting]`, `UI::Text`).
 
 This page is the author guide and the API reference. The plugin contract itself is in `docs/plugin-abi.md`.
 
@@ -59,7 +59,7 @@ Note that `UI::End()` is outside the `if`. `UI::Begin` and `UI::BeginChild` must
 | `name` | Required, at most 64 characters. Shown in the list. |
 | `author`, `description` | Shown on the script's page. |
 | `version` | Text, default `"0.0.0"`. |
-| `games` | List of `"eswc"`, `"sunrise"`, `"tmnf"`, `"tmuf"`, `"forever"` (TMNF and TMUF) or `"all"`. Default: all four. `"original"` is ignored with a warning (not supported yet). A script on another game is shown as "Other game" and not loaded. |
+| `games` | List of `"eswc"`, `"sunrise"`, `"original"`, `"tmnf"`, `"tmuf"`, `"forever"` (TMNF and TMUF) or `"all"` (includes Original). Default: all five. A script on another game is shown as "Other game" and not loaded. |
 | `online` | `"solo-only"` (default) or `"online-ok"`, see Safety and limits. |
 | `permissions` | List of `"ui"`, `"settings"`, `"read-game"`, `"game-control"`, see Permissions. Default: none. |
 
@@ -69,7 +69,7 @@ name = "Clock"
 author = "cheatoskar"
 version = "1.0.0"
 description = "The real time and how long the game has been running, in a corner."
-games = ["eswc", "sunrise", "tmnf", "tmuf"]
+games = ["eswc", "sunrise", "original", "tmnf", "tmuf"]
 online = "online-ok"
 permissions = ["ui", "settings"]
 ```
@@ -121,7 +121,7 @@ A callback is a global function with exactly this declaration. A function with a
 
 `OnMapLoaded(const Game::Map@)` is accepted too. If a script has both forms, only the one with the map is called.
 
-Which game delivers which event, and how, is the table "Which game delivers what" in `docs/plugin-abi.md`, section Events. Short version: `OnRespawn` only on ESWC; `OnCheckpoint` on ESWC and Sunrise; `OnRaceEnd` on ESWC and Sunrise; `OnFinish`, `OnRaceStart`, `OnMapLoaded`, `OnMenu` and `OnGameState` on all four. A callback that a game never fires is simply never called. Do not depend on one of the rare events for the script's main job if it should run everywhere.
+Which game delivers which event, and how, is the table "Which game delivers what" in `docs/plugin-abi.md`, section Events. Short version: `OnRespawn` only on ESWC; `OnCheckpoint` on ESWC, Sunrise and Original; `OnRaceEnd` on ESWC, Sunrise and Original; `OnFinish`, `OnRaceStart`, `OnMapLoaded`, `OnMenu` and `OnGameState` on all five. A callback that a game never fires is simply never called. Do not depend on one of the rare events for the script's main job if it should run everywhere.
 
 Events and `Render()` are only delivered while the script is Running (not Off, Paused, Suspended, Stopped).
 
@@ -395,7 +395,7 @@ State GetState()                                     // read-game
 bool IsOnline()
 bool InRace()                                        // read-game: SoloRace or NetRace
 Map@ CurrentMap()                                    // read-game: null before the first map and after OnMenu
-string Name()                                        // "eswc", "sunrise", "tmnf", "tmuf"
+string Name()                                        // "eswc", "sunrise", "original", "tmnf", "tmuf"
 string Title()                                       // the game's display name, as the host reports it
 bool IsForever()                                     // TMNF or TMUF
 bool CanControl()                                    // game-control granted and allowed right now
@@ -584,10 +584,11 @@ Overlays are hidden while a photo or video is taken (host flag), unless "Hide sc
 |---|---|
 | `ESWC` | the game is TM Nations ESWC |
 | `SUNRISE` | TM Sunrise |
+| `ORIGINAL` | TM Original |
 | `TMNF` | TM Nations Forever |
 | `TMUF` | TM United Forever |
 | `FOREVER` | TMNF or TMUF |
-| `LEGACY` | ESWC or Sunrise |
+| `LEGACY` | ESWC, Sunrise or Original |
 
 ```angelscript
 #if SUNRISE
@@ -674,6 +675,6 @@ plugins\scripts\tests\run_tests.cmd
 It runs two programs:
 
 - `build\test\scripts\scripts_test.exe`: unit and engine tests (manifest, gate, time budget, settings metadata, file names, the engine with test scripts, Competition Patch rule).
-- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel and the Options panel, and checks that both examples ran unchanged, drew their windows and logged nothing bad.
+- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, Original, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel and the Options panel, and checks that both examples ran unchanged, drew their windows and logged nothing bad.
 
 The exit code is non-zero when a check fails. The fake host has no real engine objects, so `Reflection::` finds nothing there: a script that reads the game has to handle failure (and it should anyway). Real reads are only testable in the game.

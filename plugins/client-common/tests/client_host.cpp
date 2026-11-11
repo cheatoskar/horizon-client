@@ -431,6 +431,7 @@ const char* gameName(uint32_t game) {
     switch (game) {
     case HORIZON_GAME_ESWC: return "TrackMania Nations ESWC";
     case HORIZON_GAME_SUNRISE: return "TrackMania Sunrise";
+    case HORIZON_GAME_ORIGINAL: return "TrackMania Original";
     case HORIZON_GAME_TMNF: return "TrackMania Nations Forever";
     case HORIZON_GAME_TMUF: return "TrackMania United Forever";
     default: return "?";

@@ -1,6 +1,6 @@
 # WR Hunter
 
-Plugin id `wr-hunter`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A LiveSplit-style split display: at every checkpoint it shows your time against your personal best and against a target, with gold sectors, a sum of best sectors and a history per map.
+Plugin id `wr-hunter`. ESWC, Sunrise, Original, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A LiveSplit-style split display: at every checkpoint it shows your time against your personal best and against a target, with gold sectors, a sum of best sectors and a history per map.
 
 ## What it does
 
@@ -35,10 +35,10 @@ Panels (see `plugin-abi.md`, Panels):
 
 | Game | Splits and finish | Map UID |
 |---|---|---|
-| ESWC, Sunrise | the host's `CHECKPOINT`, `FINISH`, `RESPAWN` and `RACE_START` events | the event's UID when the map was started by the host; otherwise read from the engine's name table (see below) |
+| ESWC, Sunrise, Original | the host's `CHECKPOINT`, `FINISH`, `RESPAWN` and `RACE_START` events | the event's UID when the map was started by the host; otherwise read from the engine's name table (see below) |
 | TMNF, TMUF | read once a frame from the local player's checkpoint list (race state, race time, `CurCheckpoint`, the game's own list of checkpoint times); the `FINISH` event ends the run | same read, first guess at offset 0xdc of the challenge |
 
-Members are looked up by class and member name through the host's reflection (`CTrackManiaRace`, `CGamePlayer`, `CTrackManiaPlayerInfo`, and on ESWC/Sunrise `CConstructionRace`, `CConstructionPlayer`). A member that has no reflection name uses a fixed default offset (the checkpoint list on Forever is one of them) and every value is checked for plausibility before it is used. Where the list cannot be read, the splits are taken from the checkpoint counter when it moves.
+Members are looked up by class and member name through the host's reflection (`CTrackManiaRace`, `CGamePlayer`, `CTrackManiaPlayerInfo`, and on ESWC/Sunrise/Original `CConstructionRace`, `CConstructionPlayer`). A member that has no reflection name uses a fixed default offset (the checkpoint list on Forever is one of them) and every value is checked for plausibility before it is used. Where the list cannot be read, the splits are taken from the checkpoint counter when it moves.
 
 The map UID is found without calling game code: the plugin finds `CMwId::GetString` in the exe by its byte pattern, takes the address of the engine's id name table from its instructions and reads the three ids (UID, environment, author) of the challenge by plain reads. If that fails, the map is kept under a local key (a hash of name and author time) and the settings page says "kept by name (UID unknown)". Without a UID there is no TMX record and replay files cannot be matched.
 
@@ -64,6 +64,6 @@ Settings are in `horizon\settings\wr-hunter.json`. The replay picker reads your 
 ## Known limits
 
 - The reading of the local player's checkpoint list on TMNF/TMUF is written from the reflection tables and tested against fake game memory only. I have not confirmed it in the real game yet.
-- The ESWC and Sunrise map UID offset (the three ids in the challenge) was found by scanning, not from a reflection member, and is not confirmed in the game yet. If it is wrong, maps are kept by name.
+- The ESWC, Sunrise and Original map UID offset (the three ids in the challenge) was found by scanning, not from a reflection member, and is not confirmed in the game yet. If it is wrong, maps are kept by name.
 - "Ghost in the race" reads the ghost list of the race with fixed offsets on TMNF/TMUF; also not confirmed in the game.
 - A finish without a start the plugin saw (switched on during a run) is counted as a run but not as a reset.

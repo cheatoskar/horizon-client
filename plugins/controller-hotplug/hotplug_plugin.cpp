@@ -1,5 +1,5 @@
 // Controller nachträglich erkennen (controller-hotplug) - a Horizon Host module for TrackMania Nations ESWC 1.80
-// and TrackMania Sunrise (Win10 repack).
+// TrackMania Sunrise (Win10 repack) and TrackMania Original (Online Patch v2 exe).
 //
 // The games enumerate DirectInput game controllers once, at start. This module watches for controllers that
 // are plugged in later and registers them through the game's own enumeration callback, so they show up in the
@@ -28,6 +28,7 @@ constexpr char kId[] = "controller-hotplug";
 constexpr char kName[] = "Controller nachtr\xC3\xA4glich erkennen";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
 constexpr char kSunriseSha[] = "e59dfc7eaa5314e85b2b0df6f40ef7ba01a23bd5a9525f84407f5dff301df4fe";
+constexpr char kOriginalSha[] = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
 constexpr char kStandaloneNote[] = "Eigenst\xC3\xA4ndiges Controller-Hotplug gefunden \xE2\x80\x93 Modul pausiert";
 
 const HorizonHostApi* g_host = nullptr;
@@ -91,7 +92,7 @@ static const HorizonPluginInfo kInfo = {
     kId,
     kName,
     kVersion,
-    HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE,
+    HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL,
     HORIZON_CAP_MENU,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
@@ -108,8 +109,9 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     const hp::GameTable* table = nullptr;
     if (gi && gi->exe_sha256 && gi->game == HORIZON_GAME_ESWC && _stricmp(gi->exe_sha256, kEswcSha) == 0) table = &hp::eswcTable();
     if (gi && gi->exe_sha256 && gi->game == HORIZON_GAME_SUNRISE && _stricmp(gi->exe_sha256, kSunriseSha) == 0) table = &hp::sunriseTable();
+    if (gi && gi->exe_sha256 && gi->game == HORIZON_GAME_ORIGINAL && _stricmp(gi->exe_sha256, kOriginalSha) == 0) table = &hp::originalTable();
     if (!table) {
-        host->log(host->plugin, HORIZON_LOG_WARN, "refusing to load: not TmNationsESWC 1.80 or TmSunrise (Win10 repack) (sha256 %s)",
+        host->log(host->plugin, HORIZON_LOG_WARN, "refusing to load: not TmNationsESWC 1.80, TmSunrise (Win10 repack) or TMORIGINAL.EXE (Online Patch v2) (sha256 %s)",
                   gi && gi->exe_sha256 ? gi->exe_sha256 : "?");
         return 2;
     }

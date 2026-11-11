@@ -3,9 +3,9 @@ Horizon Client - in-game mod host of TM Horizon (test build)
 
 DEUTSCH
 
-Installieren (ESWC, Sunrise, Forever ohne TMLoader)
+Installieren (ESWC, Sunrise, Original, Forever ohne TMLoader)
   1. Den Inhalt des Zips in den Spielordner entpacken (neben TmNationsESWC.exe,
-     TmSunrise.exe bzw. TmForever.exe).
+     TmSunrise.exe, TMORIGINAL.EXE bzw. TmForever.exe).
   2. Horizon-Install.cmd doppelklicken. Eine vorhandene dinput8.dll einer anderen
      Mod wird zu dinput8.chain.dll und laeuft weiter.
   3. Spiel starten. Menue: Einfg (Insert). Maus an den oberen Bildschirmrand: die
@@ -22,9 +22,9 @@ Forever mit TMLoader
 
 ENGLISH
 
-Install (ESWC, Sunrise, Forever without TMLoader)
-  1. Unzip into the game folder (next to TmNationsESWC.exe, TmSunrise.exe or
-     TmForever.exe).
+Install (ESWC, Sunrise, Original, Forever without TMLoader)
+  1. Unzip into the game folder (next to TmNationsESWC.exe, TmSunrise.exe,
+     TMORIGINAL.EXE or TmForever.exe).
   2. Double-click Horizon-Install.cmd. An existing dinput8.dll of another mod
      becomes dinput8.chain.dll and keeps working.
   3. Start the game. Menu: Insert. Move the mouse to the top screen edge for the
@@ -42,6 +42,8 @@ Forever with TMLoader
 Supported exes (anything else: the host stays off and logs why)
   TrackMania Nations ESWC, unofficial 1.80 (TmNationsESWC.exe 0.1.7.9)
   TrackMania Sunrise, Win10 community repack
+  TrackMania Original, TMORIGINAL.EXE of the community Online Patch v2 (2023)
+  (works on top of its dgVoodoo d3d9.dll; any other TM Original exe is refused)
   TrackMania Nations/United Forever 2.11.26, TMLoader 2.12.0 / 2.12.0-compat
   No StarForce versions.
 

@@ -35,6 +35,8 @@ echo ===== sample, game eswc
 %FH% %SAMPLE% --game eswc || set "FAIL=1"
 echo ===== sample, game sunrise
 %FH% %SAMPLE% --game sunrise || set "FAIL=1"
+echo ===== sample, game original
+%FH% %SAMPLE% --game original || set "FAIL=1"
 echo ===== sample, game tmnf
 %FH% %SAMPLE% --game tmnf || set "FAIL=1"
 echo ===== sample, game tmuf
@@ -45,12 +47,18 @@ echo ===== eswc-autosave, game sunrise (refuses with 2)
 %FH% %AUTOSAVE% --game sunrise --expect-init 2 || set "FAIL=1"
 echo ===== tmx-upload, game eswc (real HTTP on 127.0.0.1)
 %FH% %TMXUP% --game eswc || set "FAIL=1"
+echo ===== eswc-autosave, game original (refuses with 2)
+%FH% %AUTOSAVE% --game original --expect-init 2 || set "FAIL=1"
+echo ===== tmx-upload, game original (site tmo)
+%FH% %TMXUP% --game original || set "FAIL=1"
 echo ===== tmx-upload, game tmnf
 %FH% %TMXUP% --game tmnf || set "FAIL=1"
 echo ===== controller-hotplug, game eswc (no game here: stays off; test mode: plug, off/on, replug, standalone)
 %FH% %HOTPLUG% --game eswc --standalone-dummy %SAMPLE% || set "FAIL=1"
 echo ===== controller-hotplug, game sunrise with an unknown exe (refuses with 2)
 %FH% %HOTPLUG% --game sunrise --expect-init 2 || set "FAIL=1"
+echo ===== controller-hotplug, game original (the real exe's sha, no game code here: inits, stays off)
+%FH% %HOTPLUG% --game original || set "FAIL=1"
 echo ===== controller-hotplug, game tmnf (refuses with 2)
 %FH% %HOTPLUG% --game tmnf --expect-init 2 || set "FAIL=1"
 echo.

@@ -1,8 +1,8 @@
-// wr-hunter.dll in the client test host, for ESWC, Sunrise, TMNF and TMUF: map load (UID found through the
+// wr-hunter.dll in the client test host, for ESWC, Sunrise, Original, TMNF and TMUF: map load (UID found through the
 // id table, nothing from the host), a reset, two finished runs, checkpoint times from the fake game's
 // list (Forever) or from CHECKPOINT events (ESWC/Sunrise), the TMX record through the fake bridge, both
 // layouts drawn, settings and history surviving Shutdown/Init.
-//   wr_hunter_fakehost.exe <wr-hunter.dll> [eswc|sunrise|tmnf|tmuf ...]
+//   wr_hunter_fakehost.exe <wr-hunter.dll> [eswc|sunrise|original|tmnf|tmuf ...]
 #include <windows.h>
 
 #include <cstdio>
@@ -211,9 +211,10 @@ int main(int argc, char** argv) {
     }
     std::vector<std::string> games;
     for (int i = 2; i < argc; i++) games.push_back(argv[i]);
-    if (games.empty()) games = {"eswc", "sunrise", "tmnf", "tmuf"};
+    if (games.empty()) games = {"eswc", "sunrise", "original", "tmnf", "tmuf"};
     for (const std::string& g : games) {
-        const uint32_t bit = g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF;
+        const uint32_t bit = g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "original" ? HORIZON_GAME_ORIGINAL
+                             : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF;
         runGame(mod, p, bit, g.c_str());
     }
     printf("wr_hunter_fakehost: %s (%d failed)\n", g_fail ? "FAILED" : "all passed", g_fail);

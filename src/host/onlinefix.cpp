@@ -1,5 +1,10 @@
-// ESWC online fix (host setting OnlineFix, default on). Moved here unchanged from my eswc-autosave
-// (src/online.cpp, MIT): the game's login must keep working when this host replaces that loader.
+// Online fix for ESWC and TM Original (host setting OnlineFix, default on). Moved here unchanged from my
+// eswc-autosave (src/online.cpp, MIT): the game's login must keep working when this host replaces that loader.
+//
+// TM Original (Online Patch v2 exe): the patch's readme asks for the same two things system-wide (Internet
+// Options: "Use TLS 1.0" on, "Check for server certificate revocation" off). The same in-process change is used
+// there, at the exe's own HttpOpenRequestA import slot (0x00a162d4); nothing in the game's login code is touched.
+// Not tested against the server yet.
 //
 // Finding: the game logs in at https://game.trackmanianations.com/online_game/... (host and path
 // set in FUN_00401150, ports 443 at DAT_00c07368/6c). FUN_004e8710 opens every request with
@@ -30,7 +35,6 @@ namespace horizon {
 namespace {
 
 constexpr uintptr_t kPreferredBase = 0x00400000;
-constexpr uintptr_t kIatHttpOpenRequestA = 0x00aca340;
 constexpr DWORD kTls10Client = 0x80; // SP_PROT_TLS1_0_CLIENT as used by "SecureProtocols"
 
 using FnRegQuery = LSTATUS(WINAPI*)(HKEY, LPCWSTR, LPDWORD, LPDWORD, LPBYTE, LPDWORD);
@@ -104,8 +108,8 @@ bool hookRegQuery() {
     return true;
 }
 
-bool hookOpenRequest(uintptr_t exeBase) {
-    void** slot = reinterpret_cast<void**>(exeBase - kPreferredBase + kIatHttpOpenRequestA);
+bool hookOpenRequest(uintptr_t exeBase, uintptr_t iatSlot) {
+    void** slot = reinterpret_cast<void**>(exeBase - kPreferredBase + iatSlot);
     HMODULE wi = GetModuleHandleW(L"wininet.dll");
     void* real = wi ? reinterpret_cast<void*>(GetProcAddress(wi, "HttpOpenRequestA")) : nullptr;
     if (!real || *slot != real) {
@@ -122,9 +126,9 @@ bool hookOpenRequest(uintptr_t exeBase) {
 
 } // namespace
 
-void onlineFixInstall(uintptr_t exeBase) {
+void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot) {
     const bool a = hookRegQuery();
-    const bool b = a && hookOpenRequest(exeBase);
+    const bool b = a && hookOpenRequest(exeBase, iatSlot);
     if (a && b) HLOG("online: fix active (TLS 1.0 for WinINet in this process, no revocation check on HTTPS)");
     else HLOG("online: fix NOT active");
 }

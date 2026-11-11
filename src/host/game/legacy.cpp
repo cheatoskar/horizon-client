@@ -1,4 +1,6 @@
-// Game adapter for TrackMania Nations ESWC (unofficial 1.80) and TrackMania Sunrise (Win10 repack).
+// Game adapter for TrackMania Nations ESWC (unofficial 1.80), TrackMania Sunrise (Win10 repack) and TrackMania
+// Original (Online Patch v2 community exe; same engine as Sunrise, same reflection member offsets for the classes
+// read here, race virtuals at the same vtable slots: trackmania-internals games/tm-original).
 //
 // What the game runs is read once a frame (game thread, end of frame) from the game's objects, by
 // reflection member NAMES (CConstructionGame.CurrentRace, .Challenge, CTrackMania.Editor, ...; ids and
@@ -8,8 +10,8 @@
 //
 // ESWC only, inline hooks with the prologue checked byte for byte (the same three hooks eswc-autosave
 // has run in game since 1.0): CTrackManiaRace::OnFinishLine (FINISH), RaceNet::StopReplayRecordAndKeepCopy
-// and the solo race end (RACE_END with the run's replay). Sunrise's matching functions are not verified
-// yet: Sunrise gets the polled events only.
+// and the solo race end (RACE_END with the run's replay). Sunrise and Original: OnStartLine, OnFinishLine,
+// OnCheckpoint and the solo race end, static addresses, each hooked only when its prologue matches byte for byte.
 #include "host/host.h"
 #include "host/game/eswc_save.h"
 
@@ -29,10 +31,20 @@ namespace {
 struct Exe {
     uint32_t game;
     uintptr_t appGlobal;  // CTrackMania* (stored by CConstructionGame's constructor)
+    uintptr_t localPlayerInfo; // CTrackManiaRace::GetLocalPlayerInfo()
+    // Sunrise/Original race hooks (0 = none): CTrackManiaRace::OnStartLine, OnFinishLine, OnCheckpoint (vtable slots
+    // 86, 87, 89) and CTrackManiaRace1P's solo race end (slot 88)
+    uintptr_t onStart, onFinish, onCheckpoint, soloEnd;
 };
-// app globals: ESWC 0x00caee50 (TMVS engine.cpp, verified in game), Sunrise 0x00bcce50 (legacy-randomizer spike, static).
-const Exe kEswc = {HORIZON_GAME_ESWC, 0x00caee50};
-const Exe kSunrise = {HORIZON_GAME_SUNRISE, 0x00bcce50};
+// app globals: ESWC 0x00caee50 (TMVS engine.cpp, verified in game), Sunrise 0x00bcce50 (legacy-randomizer spike, static),
+// Original 0x00bc8084 (written by CConstructionGame's constructor 0x813b00, matched to Sunrise's 0x815640; static).
+const Exe kEswc = {HORIZON_GAME_ESWC, 0x00caee50, 0x0071c730, 0, 0, 0, 0};
+// Sunrise (repack, PE 5cc8f0cf): tm-modding-knowledge games/tm-sunrise/race-events.md (static, matched from
+// the ESWC race vtables; hooked only behind the byte-exact prologue check). Player info members by reflection.
+const Exe kSunrise = {HORIZON_GAME_SUNRISE, 0x00bcce50, 0x0082aeb0, 0x007ec550, 0x007ec7a0, 0x007ec5b0, 0x007dd7b0};
+// Original (Online Patch v2, PE 5d337477): race vtable 0xa484f8, Race1P vtable 0xa48138, same slots and prologues as
+// Sunrise (trackmania-internals games/tm-original/addresses.md; static, not run yet).
+const Exe kOriginal = {HORIZON_GAME_ORIGINAL, 0x00bc8084, 0x00829200, 0x007eab20, 0x007ead30, 0x007eab80, 0x007dc250};
 
 constexpr uint32_t kClassTrackMania = 0x24001000;
 
@@ -50,10 +62,6 @@ constexpr size_t kEswcAppPrevReplay = 0x25c, kEswcAppCurReplay = 0x144;
 // by its key).
 constexpr size_t kEswcAppClipViewer = 0x128;
 constexpr uint32_t kEswcClassClipViewer = 0x2408a000;
-constexpr uintptr_t kEswcLocalPlayerInfo = 0x0071c730; // CTrackManiaRace::GetLocalPlayerInfo()
-// Sunrise (repack, PE 5cc8f0cf): tm-modding-knowledge games/tm-sunrise/race-events.md (static, matched from
-// the ESWC race vtables; hooked only behind the byte-exact prologue check). Player info members by reflection.
-constexpr uintptr_t kSunLocalPlayerInfo = 0x0082aeb0;
 
 enum RaceKind { kNone = 0, kSolo = 1, kNet = 2, kOther = 3 };
 
@@ -161,7 +169,9 @@ LegacyAdapter* g_self = nullptr;
 class LegacyAdapter final : public GameAdapter {
 public:
     explicit LegacyAdapter(const Exe& exe) : exe_(exe) { g_self = this; }
-    const char* name() const override { return exe_.game == HORIZON_GAME_ESWC ? "ESWC" : "Sunrise"; }
+    const char* name() const override {
+        return exe_.game == HORIZON_GAME_ESWC ? "ESWC" : exe_.game == HORIZON_GAME_ORIGINAL ? "Original" : "Sunrise";
+    }
     bool eswc() const { return exe_.game == HORIZON_GAME_ESWC; }
 
     void install() override {
@@ -467,7 +477,7 @@ void* LegacyAdapter::localInfo(void* race) {
     using FnLocal = void*(__fastcall*)(void*, void*);
     void* local = nullptr;
     __try {
-        local = reinterpret_cast<FnLocal>(rebase(eswc() ? kEswcLocalPlayerInfo : kSunLocalPlayerInfo))(race, nullptr);
+        local = reinterpret_cast<FnLocal>(rebase(exe_.localPlayerInfo))(race, nullptr);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         local = nullptr;
     }
@@ -597,8 +607,9 @@ void __fastcall soloEndDetour(void* race, void* edx) {
     g_self->onRaceEnd(race, replay, true);
 }
 
-// ---------------------------------------------------------------- Sunrise inline hooks
-// Static addresses (race-events.md); each one only when its prologue matches byte for byte.
+// ---------------------------------------------------------------- Sunrise / Original inline hooks
+// Static addresses (link addresses set per exe from Exe before install); each one only when its prologue matches
+// byte for byte. The prologues are the same in Sunrise and Original.
 InlineHook g_sunStartHook = {0x007ec550, {0x8b, 0x44, 0x24, 0x04, 0x56}, 5, "Sunrise CTrackManiaRace::OnStartLine", nullptr};
 InlineHook g_sunFinishHook = {0x007ec7a0, {0x8b, 0x44, 0x24, 0x04, 0x53, 0x55, 0x56, 0x33, 0xdb, 0x3b, 0xc3}, 11,
                               "Sunrise CTrackManiaRace::OnFinishLine", nullptr};
@@ -637,14 +648,22 @@ void __fastcall sunSoloEndDetour(void* race, void* edx) {
 }
 
 void LegacyAdapter::installSunriseHooks() {
+    g_sunStartHook.link = exe_.onStart;
+    g_sunFinishHook.link = exe_.onFinish;
+    g_sunCheckpointHook.link = exe_.onCheckpoint;
+    g_sunSoloEndHook.link = exe_.soloEnd;
+    g_sunStartHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnStartLine" : g_sunStartHook.name;
+    g_sunFinishHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnFinishLine" : g_sunFinishHook.name;
+    g_sunCheckpointHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnCheckpoint" : g_sunCheckpointHook.name;
+    g_sunSoloEndHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace1P race end" : g_sunSoloEndHook.name;
     const bool haveInfo = stateOff >= 0 && timeOff >= 0;
     const bool a = installInlineHook(g_sunStartHook, reinterpret_cast<void*>(&sunStartDetour));
     const bool b = haveInfo && installInlineHook(g_sunFinishHook, reinterpret_cast<void*>(&sunFinishDetour));
     const bool c = installInlineHook(g_sunCheckpointHook, reinterpret_cast<void*>(&sunCheckpointDetour));
     const bool d = installInlineHook(g_sunSoloEndHook, reinterpret_cast<void*>(&sunSoloEndDetour));
-    HLOG("game: Sunrise events (static addresses, first test): start %s, finish %s, checkpoint %s, solo race end %s; "
+    HLOG("game: %s events (static addresses, first test): start %s, finish %s, checkpoint %s, solo race end %s; "
          "respawn not available, network race end not available",
-         a ? "on" : "OFF", b ? "on" : (haveInfo ? "OFF" : "OFF (player info members not found)"), c ? "on" : "OFF", d ? "on" : "OFF");
+         name(), a ? "on" : "OFF", b ? "on" : (haveInfo ? "OFF" : "OFF (player info members not found)"), c ? "on" : "OFF", d ? "on" : "OFF");
 }
 
 void LegacyAdapter::installEswcHooks() {
@@ -659,13 +678,14 @@ void LegacyAdapter::installEswcHooks() {
 
 GameAdapter* makeEswcAdapter() { return new LegacyAdapter(kEswc); }
 GameAdapter* makeSunriseAdapter() { return new LegacyAdapter(kSunrise); }
+GameAdapter* makeOriginalAdapter() { return new LegacyAdapter(kOriginal); }
 
-// save_replay (ESWC only): the solo end-race screen saves the current run (as "Save replay" there);
+// save_replay (ESWC only; Sunrise and Original: not supported): the solo end-race screen saves the current run (as "Save replay" there);
 // elsewhere (menus, LAN/online after a race) the previous race's copy (as "Save previous replay").
 // A solo race still running has no finished replay yet.
 HorizonResult LegacyAdapter::saveReplay(const std::wstring& stem, std::string* pathOut, std::string* why) {
     if (!eswc()) {
-        *why = "not supported on Sunrise yet";
+        *why = "not supported on Sunrise and Original yet";
         return HORIZON_ERR_NOT_SUPPORTED;
     }
     Snapshot s;

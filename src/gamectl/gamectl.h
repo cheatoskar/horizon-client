@@ -21,7 +21,7 @@ enum class State : uint32_t {
 
 enum class Result : int32_t {
     Ok = 0,
-    NotSupported = -1,   // unknown exe, or Original without the experimental switch
+    NotSupported = -1,   // unknown exe (TM Original: only the Online Patch v2 exe is known)
     WrongState = -2,     // e.g. PlayMapFile outside the main menu
     FileError = -3,      // map file missing or copy into the game's Tracks folder failed
     NotFound = -4,       // the game did not list the map after rescanning its folders
@@ -39,8 +39,8 @@ struct MapInfo {
 
 using LogFn = void (*)(const char* line);
 
-// Detects the game from the running exe (PE timestamp), sets up reflect. allowExperimentalOriginal enables the
-// guessed TM Original path. Call once on the game's main thread after the exe started (e.g. from the loader).
+// Detects the game from the running exe (PE timestamp), sets up reflect. allowExperimentalOriginal runs a
+// discovery log for unknown exes (nothing is controlled there). Call once on the game's main thread after the exe started (e.g. from the loader).
 Game init(LogFn log, bool allowExperimentalOriginal);
 Game game();
 const char* gameName();

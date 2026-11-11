@@ -142,6 +142,19 @@ Nur Testkopien (ESWC, einmal Sunrise). Das Modul ist neu und standardmäßig an.
 6. Sunrise einmal: dasselbe wie 1. Im Log stehen die Zeilen des Moduls; geht es nicht, die Log-Datei schicken.
 7. Online: Login und ein Online-Rennen mit dem Modul an wie gewohnt (es ändert keine Eingaben).
 
+## TM Original (Branch `tmo`)
+
+Nur eine Testkopie des Spiels mit der `TMORIGINAL.EXE` aus dem Online Patch v2 von GreffMASTER (SHA-256 beginnt mit `75e129d7`, 7.883.264 Bytes). Jede andere TM-Original-Exe lehnt der Host ab; im Log steht dann `TrackMania Original, but not the supported exe`. Alles ist bisher nur aus den Adressen gelesen, noch nie im Spiel gelaufen. Das Paket ist `Horizon-Host-<Version>-Original.zip`, Einrichtung wie bei Sunrise (`Horizon-Install.cmd`).
+
+1. Spiel starten (die mitgelieferte dgVoodoo-`d3d9.dll` bleibt im Ordner). Im Log (`horizon\logs\`, neueste Datei) prüfen: Exe erkannt als TM Original, `d3d: device ... hooked`, `overlay: ready ... menu key Insert`, danach die Zeile mit den Original-Ereignissen (Start, Ziel, Checkpoint, Ende des Solo-Rennens: an oder aus).
+2. Im Hauptmenü Einfg: Menü und Leiste am oberen Rand erscheinen. Jedes aktive Modul einmal öffnen: Input Display, WR Hunter, TMX Browser, Horizon Performance, Horizon Scripts, Controller nachträglich erkennen. Autosave & Login-Fix ist auf Original nicht dabei.
+3. Ein Solo-Rennen fahren: im Log `event: map loaded`, `event: race start`, bei jedem Checkpoint `event: checkpoint` (Zeit gegen die Anzeige im Spiel prüfen), im Ziel `event: finish`, danach `race end`. Respawn wird nicht gemeldet. Input Display und WR Hunter zeigen ihre Werte.
+4. TMX Browser im Hauptmenü: suchen (Seite original.tm-exchange.com), eine Strecke mit „Play“ starten. Sie lädt über die Spielsteuerung des Hosts und geht nur aus dem Hauptmenü.
+5. Controller-Modul: Spiel ohne Pad starten, dann das Pad anstecken: Toast, das Pad erscheint in den Eingabe-Einstellungen. Geht es nicht, die Log-Datei schicken.
+6. Online-Login: Login-Fix steht auf General an. Anmelden und sagen, ob es ohne die Windows-Internetoptionen (TLS 1.0, Sperrprüfung) klappt; im Log steht, ob der Fix aktiv ist. Das ist noch nicht gegen den Server getestet.
+7. Start mit Shift gehalten: keine Plugins (Safe-Modus). Start mit Strg+Shift: Horizon wird gar nicht geladen. Beides im Log nachsehen.
+8. Wenn etwas hängt oder abstürzt: die neueste Log-Datei schicken.
+
 ## Entfernen
 
 `Horizon-Uninstall.cmd` im Spielordner (macht aus `dinput8.chain.dll` wieder `dinput8.dll`), danach den Ordner `horizon` löschen. Oder einfach die Testkopie löschen.

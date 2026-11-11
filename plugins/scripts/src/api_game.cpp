@@ -45,6 +45,7 @@ std::string gameName() {
     switch (m ? m->game : 0) {
     case HORIZON_GAME_ESWC: return "eswc";
     case HORIZON_GAME_SUNRISE: return "sunrise";
+    case HORIZON_GAME_ORIGINAL: return "original";
     case HORIZON_GAME_TMNF: return "tmnf";
     case HORIZON_GAME_TMUF: return "tmuf";
     default: return "";

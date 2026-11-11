@@ -1,4 +1,4 @@
-// scripts.dll in a stub host, once per game (ESWC, Sunrise, TMNF, TMUF): the two example scripts are
+// scripts.dll in a stub host, once per game (ESWC, Sunrise, Original, TMNF, TMUF): the two example scripts are
 // copied into <game>\horizon\scripts\, the plugin loads them, the host fires a race's events and draws
 // frames (overlay + the Scripts and Options panels). Both scripts must run unchanged everywhere, draw
 // their windows and log nothing bad.
@@ -213,7 +213,11 @@ int main(int argc, char** argv) {
     const struct {
         uint32_t game;
         const char* label;
-    } games[] = {{HORIZON_GAME_ESWC, "eswc"}, {HORIZON_GAME_SUNRISE, "sunrise"}, {HORIZON_GAME_TMNF, "tmnf"}, {HORIZON_GAME_TMUF, "tmuf"}};
+    } games[] = {{HORIZON_GAME_ESWC, "eswc"},
+                 {HORIZON_GAME_SUNRISE, "sunrise"},
+                 {HORIZON_GAME_ORIGINAL, "original"},
+                 {HORIZON_GAME_TMNF, "tmnf"},
+                 {HORIZON_GAME_TMUF, "tmuf"}};
     for (const auto& g : games) runGame(dll.c_str(), examples, root + "\\", g.game, g.label);
     ImGui::DestroyContext();
     printf(g_fail ? "fake host: %d FAILED\n" : "fake host: all passed\n", g_fail);

@@ -1,6 +1,6 @@
 # Input Display
 
-Plugin id `input-display`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A HUD window that shows steering, gas and brake as the car sees them, and where the game allows it the speed, gear and RPM.
+Plugin id `input-display`. ESWC, Sunrise, Original, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A HUD window that shows steering, gas and brake as the car sees them, and where the game allows it the speed, gear and RPM.
 
 ## What it does
 
@@ -34,7 +34,7 @@ Below the settings, "Now" lists the live values (Steer, Gas, Brake, Speed, Gear,
 
 | Game | Steer, gas, brake | Speed | Gear, RPM |
 |---|---|---|---|
-| ESWC, Sunrise | `CSceneToyVehicle` members `InputSteer`, `InputGas`, `InputBrake` by reflection name (defaults 0xc0, 0xb8, 0xbc if the name is missing) | not read: the engine has only a getter (`LocalCarSpeed`), no field. The panel shows "-". | not read: `CurGear` and `CurRPM` are getters only. Gear and RPM stay off. |
+| ESWC, Sunrise, Original | `CSceneToyVehicle` members `InputSteer`, `InputGas`, `InputBrake` by reflection name (defaults 0xc0, 0xb8, 0xbc if the name is missing) | not read: the engine has only a getter (`LocalCarSpeed`), no field. The panel shows "-". | not read: `CurGear` and `CurRPM` are getters only. Gear and RPM stay off. |
 | TMNF, TMUF | the car's `InputSteer`, `InputGas`, `InputBrake` by name if the engine has them; else fixed offsets 0x58 (steer), 0x50 (gas), 0x54 (brake) from TMInterface's `SceneVehicleCar` layout | `CTrackManiaRace.CarSpeedDisplay` (km/h) by name, else offset 0x26c | fixed offsets: gear (int) 0x5c8, RPM (float) 0x5b8, taken from TMInterface's engine block |
 
 Every value is checked before it is shown: steer within -1 to 1, gas and brake within 0 to 1, no NaN; gear 0 to 7; RPM 0 to 20000; speed below 2000. A value that fails the check is treated as not available. The player's car is found through the race object (`HORIZON_ENGINE_RACE`) and the local player's mobil.
@@ -50,5 +50,5 @@ Only the settings above, in `horizon\settings\input-display.json`. No data folde
 ## Known limits
 
 - The Forever car offsets (steer, gas, brake, gear, RPM, and the fallback speed offset) come from TMInterface's layout and are only checked for plausibility in my tests against fake game memory. I have not confirmed them in the real game yet. If they are wrong the panel says it cannot read the car (the plausibility check rejects most garbage, but not all of it).
-- ESWC and Sunrise have no speed, gear or RPM here, only steer, gas and brake. The values exist in the engine only as getters, and the plugin does not call game code.
+- ESWC, Sunrise and Original have no speed, gear or RPM here, only steer, gas and brake. The values exist in the engine only as getters, and the plugin does not call game code.
 - The RPM arc is scaled to a fixed 11000 RPM.

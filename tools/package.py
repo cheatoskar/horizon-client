@@ -4,7 +4,7 @@ Run after build.cmd (build.cmd package does both). Reads only dist\\legacy (the 
 packaging\\; writes:
 
   dist\\tmloader\\Horizon Host\\<version>\\        TMLoader product (Forever)
-  dist\\release\\Horizon-Host-<version>-<game>.zip  one zip per game (ESWC, Sunrise, Forever)
+  dist\\release\\Horizon-Host-<version>-<game>.zip  one zip per game (ESWC, Sunrise, Original, Forever)
   dist\\release\\<Name>-<version>-standalone.zip   one zip per module folder dist\\standalone\\<id>\\ (a module
                                                   that also runs without Horizon, e.g. controller-hotplug;
                                                   version from its plugin.json)
@@ -149,8 +149,8 @@ def main():
         os.makedirs(d)
 
     packages = []
-    # ESWC and Sunrise: Legacy Loader
-    for game, keys in (("ESWC", ["eswc"]), ("Sunrise", ["sunrise"])):
+    # ESWC, Sunrise and Original: Legacy Loader
+    for game, keys in (("ESWC", ["eswc"]), ("Sunrise", ["sunrise"]), ("Original", ["original"])):
         stage = os.path.join(staging, game)
         stage_legacy(stage, keys)
         packages.append((game, stage))
