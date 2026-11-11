@@ -90,7 +90,8 @@ def stage_legacy(stage, game_keys):
 
 def stage_tmloader(stage, version):
     prod = os.path.join(stage, "Horizon Host")
-    ver = os.path.join(prod, version)
+    # TMLoader's version folder has no pre-release part: 0.3.0-rc.1 -> 0.3.0
+    ver = os.path.join(prod, version.split("-")[0])
     os.makedirs(ver, exist_ok=True)
     shutil.copy2(os.path.join(PACK, "tmloader", "description.yaml"), os.path.join(prod, "description.yaml"))
     text = open(os.path.join(PACK, "tmloader", "version.yaml"), encoding="utf-8").read().replace("@VERSION@", version)

@@ -232,7 +232,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         auto version = reinterpret_cast<U32Fn>(GetProcAddress(host, "HorizonHost_Version"));
         check(uiState && setCapture && version, "handshake exports present");
         if (uiState && setCapture && version) {
-            check(version() == 0x000200u, "HorizonHost_Version = 0.2.0");
+            check(version() == 0x000300u, "HorizonHost_Version = 0.3.0");
             check((uiState() & 1u) != 0, "UI state: menu open");
             if (expectPlugin == 1) check((uiState() & 4u) != 0, "UI state: the sample's Clock window is on screen");
             setCapture(1);

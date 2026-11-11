@@ -176,6 +176,11 @@ void HORIZON_CALL f_unregister_panel(HorizonPluginHandle, const char* key) {
 int32_t HORIZON_CALL f_panel_visible(HorizonPluginHandle, const char*) { return 1; }
 void HORIZON_CALL f_set_host_flag(HorizonPluginHandle, uint32_t flag, int32_t on) { g_hostFlags = on ? (g_hostFlags | flag) : (g_hostFlags & ~flag); }
 uint32_t HORIZON_CALL f_host_flags(void) { return g_hostFlags; }
+// ABI 1.4: fixed metrics of a 1080p screen with the menu at 80 %
+const HorizonUiMetrics* HORIZON_CALL f_ui_metrics(void) {
+    static const HorizonUiMetrics m = {sizeof(HorizonUiMetrics), 1.0f, 1.0f, 1920.0f, 1080.0f, 1536.0f, 864.0f, 1100.0f, 700.0f};
+    return &m;
+}
 int g_openPageCalls = 0;
 HorizonResult HORIZON_CALL f_open_page(HorizonPluginHandle, const char* panel_key) {
     g_openPageCalls++;
@@ -1025,6 +1030,7 @@ int main(int argc, char** argv) {
     host.host_flags = f_host_flags;
     host.open_page = f_open_page;
     host.notify = f_notify;
+    host.ui_metrics = f_ui_metrics;
 
     const int32_t r = init(&host);
     printf("  Init returned %d (expected %d)\n", r, expectInit);

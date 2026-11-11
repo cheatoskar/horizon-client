@@ -2,7 +2,7 @@
 rem Horizon Performance tests without a game (run build.cmd and tests\build_fake_host.cmd first):
 rem   unit tests; the real host with the plugin on a mixed-VP D3D9 device (counting on), the same with the
 rem   state filter (the scene must be pixel-identical), the 60 fps limiter, the hang log on a 2.5 s stall,
-rem   and the fake host on all four games. Screens go to screens\ (not committed).
+rem   and the fake host on all five games. Screens go to screens\ (not committed).
 setlocal
 set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsamd64_x86.bat"
 if not exist "%VCVARS%" (echo MSVC vcvarsamd64_x86.bat not found & exit /b 1)
@@ -51,8 +51,8 @@ build\test\perf_test.exe host "%CD%\%P%\series" "%CD%\%P%\series.txt" series || 
 echo === bench_report.py (synthetic series)
 where python >nul 2>nul && (python tools\test_bench_report.py >nul 2>&1 && echo PASS  bench_report || (echo FAIL  bench_report & set FAIL=1)) || echo SKIP  python not found
 
-echo === fake host, four games
-for %%g in (eswc sunrise tmnf tmuf) do (
+echo === fake host, five games
+for %%g in (eswc sunrise original tmnf tmuf) do (
   build\test\fake_host.exe dist\legacy\horizon\plugins\performance\performance.dll --game %%g >nul 2>&1 && echo PASS  fake host %%g || (echo FAIL  fake host %%g & set FAIL=1)
 )
 if %FAIL%==0 (echo ALL PERF TESTS PASSED) else (echo SOME PERF TESTS FAILED)

@@ -9,3 +9,6 @@ dist-explorer/
 dist-scripts/
 dist-client/
 build-log.txt
+__pycache__/
+test-log.txt
+perf-log.txt
