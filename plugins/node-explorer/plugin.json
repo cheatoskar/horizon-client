@@ -1,0 +1,17 @@
+{
+  "id": "node-explorer",
+  "name": "Node Explorer",
+  "version": "0.1.0",
+  "dll": "node-explorer.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Browse the engine's classes and live objects. Read-only.",
+  "author": "cheatoskar",
+  "icon": "icon.png"
+}
