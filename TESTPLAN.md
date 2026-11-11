@@ -41,6 +41,21 @@ Kurz von mir automatisch getestet (ohne Online-Login, Prozess danach beendet): G
 1. Einfg: Menü erscheint (keine Plugins installiert, also leere MODS-Liste mit Hinweis), Leiste am oberen Rand.
 2. Ein Rennen starten: Log zeigt `event: map loaded "<Name>"` und `event: game state Solo race`. Ziel/Checkpoints gibt es auf Sunrise noch nicht (steht so im Log).
 
+## 3b. Sunrise mit Ziel-Ereignissen (Entwicklerstand)
+
+Ordner: `C:\Users\osaro\Games\TMSunrise-horizon-next` (Kopie von TMSunrise-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (Commit 46759cc), Legacy Randomizer 0.2.0 aus legacy-randomizer 3348e97 (nutzt echte Rennereignisse, wenn der Host sie liefert), TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0.
+
+Neu in Sunrise: Start, Checkpoint, Ziel und Ende des Solo-Rennens kommen aus dem Spiel selbst (statische Adressen, beim Start nur gesetzt, wenn die Bytes genau passen). Respawn und das Ende eines Netzwerk-Rennens gibt es auf Sunrise noch nicht.
+
+1. `TmSunrise.exe` im Ordner starten. Im Log (`horizon\logs\`, neueste Datei) steht: `Sunrise events (...): start on, finish on, checkpoint on, solo race end on`.
+2. Eine Solo-Strecke fahren. Im Log je Lauf: `event: race start`, bei jedem Checkpoint `event: checkpoint` (Zeit prüfen: passt sie zur Anzeige im Spiel? Sie ist noch nicht im Spiel bestätigt), im Ziel `event: finish` mit der Zeit, danach `race end`. Insert drücken: der Status zeigt auf dem Endbildschirm "End of race".
+3. Neustart mit Entf / Respawn: Start kommt neu, Respawn wird (noch) nicht gemeldet.
+4. Legacy Randomizer im Menü öffnen und eine Runde starten: er sollte die Zielankunft jetzt selbst erkennen, ohne dass du etwas drücken musst.
+5. Menü (Insert): General, Hotkeys, Log und About haben jetzt Symbole, Knöpfe sind heller als die Karten. TMX Upload steht unter Mods und ist aus.
+6. Wenn etwas hängt oder abstürzt: die neueste Log-Datei schicken. Zurück auf den getesteten Stand: einfach wieder TMSunrise-horizon-test benutzen.
+
+Automatischer Kurztest (ohne Anmeldung, 30 s, nur Hauptmenü): alle vier Stellen gesetzt, Randomizer geladen, kein Fehler.
+
 ## 4. Forever über TMLoader (experimentell, nur wenn Zeit ist)
 
 Nicht installiert (dein TMLoader-Ordner bleibt unberührt). Zum Testen: `C:\Users\osaro\Downloads\horizon-host\dist\tmloader\Horizon Host` nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren, im TMLoader „Horizon Host“ anhaken, starten. Erwartet: Menü und Leiste, keine Spiel-Hooks, Eingabe wird nie blockiert (Competition Patch). Log: `...\products\Horizon Host\logs\`. Danach wieder abhaken. Mit TMVS + CenterSpeed zusammen: sag mir, ob beide Overlays laufen.
