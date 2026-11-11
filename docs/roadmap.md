@@ -5,7 +5,7 @@ State of 0.1.0 (2026-11-11). Additive ABI changes only (`HORIZON_ABI_MINOR`), se
 ## Next ABI minors (planned, not built)
 
 - **Panels** (`register_panel(plugin, const HorizonPanelDef*)`): `HorizonPanelDef { key (stable, for saving), title, icon, flags (MENU_PAGE | HUD_PANEL), draw(void* user), user, default rect }`. The host owns the tab list, pop-out into detached windows (TMVS's detach-windows model, `tm shaders` branch detach-windows, commit 34dc1f7), minimize, close back to the menu, "keep open when the menu closes", opacity, edit/locked layout, click-through, hidden during photo/video, persistence per plugin + key, layout presets. The Legacy Randomizer does its own panels until then.
-- **Shared icon font** in the host's atlas (Lucide, ISC licence) with the codepoints in `horizon_imgui.h`: plugins can't add fonts to the shared atlas themselves.
+- ~~**Shared icon font**~~ done: 53 Lucide icons (ISC licence) merged into every host font, codepoints in `horizon_imgui.h` (`HZ_ICON_*`, ABI), used in the sidebar and the bar. Plugins can't add fonts to the shared atlas themselves, so new icons go through `tools/make_icon_font.py`.
 - `save_replay` (ABI 1.1 entry exists, returns NOT_SUPPORTED): wire to the ESWC save path (the Autosave plugin's code moves into the host's ESWC adapter).
 - `unsubscribe`/hotkey query: not needed so far.
 

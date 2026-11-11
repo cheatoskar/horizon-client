@@ -281,6 +281,7 @@ int main() {
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     const float scale = 1.0f;
+    setIconFontFile("assets/lucide-subset.ttf");
     loadFonts(scale);
     applyStyle(scale);
     ImGui_ImplWin32_Init(hwnd);

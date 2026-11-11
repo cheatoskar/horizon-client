@@ -1,6 +1,8 @@
 // Tokens, fonts and the ImGui style of the Horizon menu.
 #include "ui.h"
 
+#include "ui_icons.h"
+
 #include "imgui.h"
 
 #include <windows.h>
@@ -46,6 +48,8 @@ namespace {
 
 Fonts g_fonts;
 float g_scale = 1.0f;
+std::string g_iconFile;  // fallback for the standalone UI preview (no host.dll, so no resource)
+std::string g_iconBytes; // owns the file's bytes: the atlas does not copy them
 
 // Latin text plus the general punctuation block (dashes, quotes, ellipsis).
 const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2013, 0x203A, 0};
@@ -60,6 +64,8 @@ bool fileExists(const std::string& path) {
     return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
+void mergeIcons(float px);
+
 // Adds a TTF at the given pixel size; nullptr when the file is missing.
 ImFont* addFile(const char* file, float px) {
     const std::string path = fontsDir() + file;
@@ -67,7 +73,57 @@ ImFont* addFile(const char* file, float px) {
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     cfg.OversampleV = 2;
-    return ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), px, &cfg, kRanges);
+    ImFont* f = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), px, &cfg, kRanges);
+    if (f) mergeIcons(px);
+    return f;
+}
+
+// The Lucide subset (RCDATA 120 in host.dll, else the file set by setIconFontFile); empty when neither exists.
+bool iconFontData(const void** data, int* size) {
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&iconFontData), &self);
+    HRSRC r = self ? FindResourceW(self, MAKEINTRESOURCEW(120), MAKEINTRESOURCEW(10)) : nullptr; // RT_RCDATA
+    HGLOBAL g = r ? LoadResource(self, r) : nullptr;
+    const void* p = g ? LockResource(g) : nullptr;
+    if (p && SizeofResource(self, r) > 0) {
+        *data = p;
+        *size = static_cast<int>(SizeofResource(self, r));
+        return true;
+    }
+    if (g_iconBytes.empty() && !g_iconFile.empty()) {
+        HANDLE h = CreateFileA(g_iconFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            const DWORD n = GetFileSize(h, nullptr);
+            if (n != INVALID_FILE_SIZE && n > 0 && n < (4u << 20)) {
+                g_iconBytes.resize(n);
+                DWORD got = 0;
+                if (!ReadFile(h, &g_iconBytes[0], n, &got, nullptr) || got != n) g_iconBytes.clear();
+            }
+            CloseHandle(h);
+        }
+    }
+    if (g_iconBytes.empty()) return false;
+    *data = g_iconBytes.data();
+    *size = static_cast<int>(g_iconBytes.size());
+    return true;
+}
+
+// Merges the icons into the font added last, at its pixel size (no-op without the icon font).
+void mergeIcons(float px) {
+    const void* data = nullptr;
+    int size = 0;
+    if (!iconFontData(&data, &size)) return;
+    ImFontConfig cfg;
+    cfg.MergeMode = true;
+    cfg.FontDataOwnedByAtlas = false;
+    cfg.PixelSnapH = true;
+    cfg.GlyphMinAdvanceX = px;
+    cfg.GlyphOffset.y = static_cast<float>(static_cast<int>(px * 0.28f + 0.5f)); // lowers the icons onto the text's centre line (tuned in the UI preview)
+    cfg.OversampleH = 2;
+    cfg.OversampleV = 2;
+    ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<void*>(data), size, px, &cfg,
+                                               reinterpret_cast<const ImWchar*>(kIconRanges));
 }
 
 ImVec4 col(const Rgba& c, float alpha = -1.0f) {
@@ -89,6 +145,10 @@ float scale() {
     return g_scale;
 }
 
+void setIconFontFile(const std::string& path) {
+    g_iconFile = path;
+}
+
 void loadFonts(float scale) {
     g_scale = scale < 0.5f ? 0.5f : scale;
     ImGuiIO& io = ImGui::GetIO();
@@ -99,6 +159,7 @@ void loadFonts(float scale) {
         ImFontConfig cfg;
         cfg.SizePixels = 16.0f * s;
         body = io.Fonts->AddFontDefault(&cfg);
+        mergeIcons(cfg.SizePixels);
     }
     ImFont* bold = addFile("seguisb.ttf", 16.0f * s);
     ImFont* title = addFile("bahnschrift.ttf", 28.0f * s);

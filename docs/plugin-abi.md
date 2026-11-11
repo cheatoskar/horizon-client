@@ -123,6 +123,10 @@ The allocator matters: memory ImGui allocates inside my DLL is freed by the host
 
 Draw in `DrawMenu` with normal widgets. For an overlay I use `ImGui::GetForegroundDrawList()` or my own borderless window.
 
+### Icons
+
+The host merges a subset of the Lucide icons (ISC licence) into all its fonts, so a plugin can draw them with any font, including the default one. `horizon_imgui.h` has `HZ_ICON_<NAME>` (codepoint) and `HZ_ICON_<NAME>_U8` (UTF-8 string) for each icon, for example `ImGui::Text(HZ_ICON_SETTINGS_U8 " Settings");`. The codepoints are Lucide's own and ABI: they never change, new icons are only added. A plugin cannot add icons or fonts to the shared atlas itself. If the host has no icon font (resource missing), the icons show as `?`.
+
 ## Online gate
 
 `online` in `plugin.json` and the flag in `Info` say what the plugin may do online:
