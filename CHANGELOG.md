@@ -3,6 +3,7 @@
 ## 0.2.0 (in progress, branch next)
 
 - Handshake for mods that are not plugins (TMVS): `HorizonHost_GetUiState`, `HorizonHost_SetCaptureActive` (heartbeat, 10 s), `HorizonHost_Version`. While a capture is active Horizon draws nothing and takes no input.
+- Plugin ABI 1.3: `open_page(plugin, panel_key)` opens the Horizon menu on the plugin's page (optionally on a panel tab) for an "open my page" hotkey; toggles when it already shows that page. TMVS uses it for F8.
 - Plugin ABI 1.2: panels (`register_panel`: tabs on the plugin's page, pop out into windows with keep open, lock layout, click-through, hide in photos and videos, opacity; saved per plugin + key), host flags (`HORIZON_HOST_FLAG_CAPTURE`). The sample plugin has an Events tab and a Clock HUD window.
 - `save_replay` works on ESWC (the game's save without dialogs; current run on the end-race screen, else the previous race).
 - Sunrise: start, checkpoint, finish and solo race end from the game (static addresses, hooked only when the bytes match; first test).

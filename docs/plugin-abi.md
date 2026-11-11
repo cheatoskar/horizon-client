@@ -184,9 +184,10 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise and Forever. Game thread. |
 | `register_panel`, `unregister_panel`, `panel_visible` (ABI 1.2) | see Panels |
 | `set_host_flag(plugin, flag, on)`, `host_flags()` (ABI 1.2) | `HORIZON_HOST_FLAG_CAPTURE`: a photo or video is being taken; the bar and windows with "Hide in photos and videos" disappear. Each plugin sets its own bits; `host_flags()` is the OR. |
+| `open_page(plugin, panel_key)` (ABI 1.3) | opens the Horizon menu on this plugin's page, for an "open my page" hotkey. `panel_key` `NULL` or `""` = Settings tab (or the plain page), else that panel's tab (`HORIZON_ERR_INVALID_ARG` if there is no such panel, the page still opens on Settings). Called while the menu already shows this page it closes the menu (toggle). Game thread only; `HORIZON_ERR_WRONG_STATE` during a capture. |
 | `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
 
-ABI 1.1 and 1.2 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1 or >= 2) before calling them.
+ABI 1.1, 1.2 and 1.3 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1, >= 2 or >= 3) before calling them.
 
 ## Panels (ABI 1.2)
 
@@ -234,6 +235,7 @@ windows with "Hide in photos and videos".
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.
 - Changes are additive only: new fields go at the end, new events get new numbers, nothing is reordered or removed.
 - `HORIZON_ABI_MINOR` counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
+- Minor 3 added `open_page` (open the menu on the plugin's page, optionally on a panel tab); see `docs/spec-open-page.md`.
 - `HORIZON_ABI` changes only if something cannot stay compatible. The host refuses a plugin with a different `abi`.
 
 ## Building

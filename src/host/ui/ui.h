@@ -158,6 +158,11 @@ unsigned long long logoMark();
 void drawMenu(const Model& model, const Actions& actions, bool* open);
 // Opens the menu on a plugin's page next time (bar: right-click / "Settings").
 void showPluginPage(const std::string& id);
+// True while the menu's current page is this plugin's page.
+bool pluginPageShown(const std::string& id);
+// The next draw of the plugin's page selects this panel tab once ("" = Settings), so a hotkey can
+// land on a tab although the tab bar remembers the one the user left open.
+void selectPanelTab(const std::string& pluginId, const std::string& key);
 // Pages: "general", "hotkeys", "log", "about" (the Horizon section), "plugin:<id>", "other:<file>".
 // "mods" opens the first plugin (or general when there is none).
 void showPage(const char* page);

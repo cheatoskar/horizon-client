@@ -29,8 +29,9 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 2 /* 1: create_texture_rgba, release_texture, save_replay
-                               2: panels (register_panel ...), host flags (capture) */
+#define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
+                               2: panels (register_panel ...), host flags (capture)
+                               3: open_page */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -340,6 +341,14 @@ typedef struct HorizonHostApi {
     /* Host flags (HORIZON_HOST_FLAG_*): each plugin sets its own; host_flags() is the OR of all. */
     void (HORIZON_CALL* set_host_flag)(HorizonPluginHandle plugin, uint32_t flag, int32_t on);
     uint32_t (HORIZON_CALL* host_flags)(void);
+
+    /* ---- ABI minor 3 (check host->abi_minor >= 3 before use) ------------------------------------ */
+    /* Opens the Horizon menu on this plugin's page (for a "open my page" hotkey). panel_key NULL or ""
+     * = the plugin's Settings tab (or the plain page), else that panel's tab; a key the plugin has no
+     * panel for returns HORIZON_ERR_INVALID_ARG, the page still opens on Settings. If the menu is
+     * already open on this page it closes (toggle, like the menu key). Game thread only.
+     * HORIZON_ERR_WRONG_STATE while a capture (HorizonHost_SetCaptureActive) is active. */
+    HorizonResult (HORIZON_CALL* open_page)(HorizonPluginHandle plugin, const char* panel_key);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

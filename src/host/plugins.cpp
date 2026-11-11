@@ -326,6 +326,16 @@ int32_t HORIZON_CALL apiPanelVisible(HorizonPluginHandle h, const char* key) {
     Plugin* p = fromHandle(h);
     return p ? panelVisible(p, key) : 0;
 }
+// ---- ABI minor 3: open_page
+HorizonResult HORIZON_CALL apiOpenPage(HorizonPluginHandle h, const char* panelKey) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "open_page: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    return menuOpenPluginPage(p->id, panelKey ? panelKey : "");
+}
 void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t on) {
     Plugin* p = fromHandle(h);
     if (!p) return;
@@ -381,6 +391,7 @@ void fillApi(Plugin* p) {
     a.panel_visible = &apiPanelVisible;
     a.set_host_flag = &apiSetHostFlag;
     a.host_flags = &apiHostFlags;
+    a.open_page = &apiOpenPage;
 }
 
 // ---------------------------------------------------------------- loading

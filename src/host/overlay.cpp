@@ -347,6 +347,29 @@ void setMenuOpen(bool open, const char* why) {
     }
 }
 
+HorizonResult menuOpenPluginPage(const std::string& pluginId, const std::string& panelKey) {
+    // a capture hides everything: opening the menu now would show it in the photo
+    if (captureActive()) return HORIZON_ERR_WRONG_STATE;
+    HorizonResult r = HORIZON_OK;
+    std::string tab = panelKey;
+    if (!tab.empty()) {
+        bool found = false;
+        for (const ui::PanelView& v : panelViews(pluginId)) found = found || v.key == tab;
+        if (!found) {
+            r = HORIZON_ERR_INVALID_ARG; // open on Settings anyway, the caller gets told
+            tab.clear();
+        }
+    }
+    if (g_menu && ui::pluginPageShown(pluginId)) {
+        setMenuOpen(false, "open_page");
+        return r;
+    }
+    ui::showPluginPage(pluginId);
+    ui::selectPanelTab(pluginId, tab);
+    setMenuOpen(true, "open_page");
+    return r;
+}
+
 // Called at host start (before plugins load): the context exists from then on, fonts come with the device.
 void overlayCreateContext() {
     IMGUI_CHECKVERSION();
