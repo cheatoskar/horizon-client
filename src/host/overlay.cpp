@@ -355,7 +355,13 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
         g_hwnd = window;
         RECT rc = {};
         GetClientRect(window, &rc);
-        const float scale = std::clamp(static_cast<float>(rc.bottom - rc.top) / 1080.0f, 1.0f, 2.0f);
+        // UI scale from the monitor the game is on: the device is often made at 640x480 first and reset
+        // to the real size later (Sunrise), and the font atlas is built once.
+        MONITORINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        long height = rc.bottom - rc.top;
+        if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mi)) height = std::max(height, mi.rcMonitor.bottom - mi.rcMonitor.top);
+        const float scale = std::clamp(static_cast<float>(height) / 1080.0f, 1.0f, 2.0f);
         ui::loadFonts(scale);
         ui::applyStyle(scale);
         fillStyle();

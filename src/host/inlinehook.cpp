@@ -99,8 +99,21 @@ bool patchImport(HMODULE module, const char* dll, const char* function, void* re
     if (!dir.VirtualAddress) return false;
     for (auto* imp = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); imp->Name; imp++) {
         if (_stricmp(reinterpret_cast<const char*>(base + imp->Name), dll) != 0) continue;
-        auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
         auto* slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + imp->FirstThunk);
+        if (!imp->OriginalFirstThunk) {
+            // No name table (the Sunrise repack's exe): after loading, the slots hold addresses only.
+            // Find the slot by the address the loader put there.
+            HMODULE m = GetModuleHandleA(dll);
+            void* real = m ? reinterpret_cast<void*>(GetProcAddress(m, function)) : nullptr;
+            if (!real) return false;
+            for (; slots->u1.Function; slots++) {
+                if (reinterpret_cast<void*>(slots->u1.Function) != real) continue;
+                *originalOut = real;
+                return writePointer(reinterpret_cast<void**>(&slots->u1.Function), replacement);
+            }
+            return false;
+        }
+        auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + imp->OriginalFirstThunk);
         for (; names->u1.AddressOfData; names++, slots++) {
             if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
             auto* named = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData);

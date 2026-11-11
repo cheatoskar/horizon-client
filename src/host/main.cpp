@@ -130,6 +130,17 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
 
 namespace horizon {
 int start(LoaderKind loader, bool safeMode, const char* safeWhy);
+
+// An exception during start must not reach the game (its own handlers would carry on in a broken state).
+int startGuarded(LoaderKind loader, bool safeMode, const char* safeWhy) {
+    __try {
+        return start(loader, safeMode, safeWhy);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        logLine(HORIZON_LOG_ERROR, "host", "exception 0x%08lx during start: the host stops here (nothing more is installed)",
+                GetExceptionCode());
+        return 0;
+    }
+}
 }
 
 // Must match LoaderInfo in src/loader/loader.cpp.
@@ -147,13 +158,13 @@ extern "C" __declspec(dllexport) int __cdecl HorizonHostInit(const HorizonLoader
     }
     const bool safe = (info->flags & 1u) != 0;
     const bool test = (info->flags & 2u) != 0;
-    return horizon::start(test ? horizon::LoaderKind::Test : horizon::LoaderKind::Legacy, safe, safe ? "Shift held at start" : "");
+    return horizon::startGuarded(test ? horizon::LoaderKind::Test : horizon::LoaderKind::Legacy, safe, safe ? "Shift held at start" : "");
 }
 
 namespace {
 DWORD WINAPI tmloaderBoot(LPVOID) {
     const bool safe = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    horizon::start(horizon::LoaderKind::TMLoader, safe, safe ? "Shift held at start" : "");
+    horizon::startGuarded(horizon::LoaderKind::TMLoader, safe, safe ? "Shift held at start" : "");
     return 0;
 }
 } // namespace

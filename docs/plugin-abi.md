@@ -39,6 +39,7 @@ horizon\plugins\<id>\
 | `games` | Any of `"eswc"`, `"sunrise"`, `"original"`, `"tmnf"`, `"tmuf"`. |
 | `online` | `"solo-only"` or `"online-ok"`, see Online gate. |
 | `abi` | `HORIZON_ABI` the plugin was built against (1 today). |
+| `enabled_by_default` | `false`: off until switched on in the menu when there is no profile.json (default `true`). |
 
 The same facts are repeated inside the DLL (`HorizonPlugin_Info`). The JSON lets the launcher show the plugin without loading it. If they disagree, the DLL wins.
 
@@ -159,6 +160,13 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `get_game_state`, `is_online`, `menu_open` | current state |
 | `request_restart_note(plugin, why)` | "applies after restart" note in the menu |
 | `reflect_offset`, `reflect_method` | read-only engine reflection by class and member name |
+| `create_texture_rgba`, `release_texture` (ABI 1.1) | an ImGui texture from RGBA8 pixels (map thumbnails), game thread; release it before Shutdown returns |
+| `save_replay` (ABI 1.1) | reserved: returns `HORIZON_ERR_NOT_SUPPORTED` in host 0.1.0 |
+| `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
+
+ABI 1.1 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against 1.1 checks `host->abi_minor >= 1` before calling them.
+
+Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 
 ## ABI versioning
 
