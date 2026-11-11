@@ -154,8 +154,8 @@ inline const char* siteCode(uint32_t game) {
 constexpr const char* kCaps = "play_map";
 constexpr long long kPlayMapMaxAgeMs = 120000; // older requests (e.g. after a reconnect) are dropped
 
-// Games whose host advertises and runs play_map: ESWC and Sunrise (gamectl). Forever is never driven from here.
-inline bool playMapGame(uint32_t game) { return game == 0x01u || game == 0x02u; }
+// Games whose host advertises and runs play_map: ESWC, Sunrise and Original (gamectl). Forever is never driven from here.
+inline bool playMapGame(uint32_t game) { return game == 0x01u || game == 0x02u || game == 0x04u; }
 
 // The long-poll path: the first call (no cursor) and the cursor calls, with the capability flag when set.
 inline std::string eventsPath(bool haveCursor, long long last, bool playMap) {

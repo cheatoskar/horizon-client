@@ -522,8 +522,8 @@ static void testBridgeLogic() {
     up.kind = "upload";
     up.game = "tmn";
     CHECK(!bridge::playMapFor(up, "tmn"));
-    CHECK(bridge::playMapGame(HORIZON_GAME_ESWC) && bridge::playMapGame(HORIZON_GAME_SUNRISE));
-    CHECK(!bridge::playMapGame(HORIZON_GAME_TMNF) && !bridge::playMapGame(HORIZON_GAME_TMUF) && !bridge::playMapGame(HORIZON_GAME_ORIGINAL));
+    CHECK(bridge::playMapGame(HORIZON_GAME_ESWC) && bridge::playMapGame(HORIZON_GAME_SUNRISE) && bridge::playMapGame(HORIZON_GAME_ORIGINAL));
+    CHECK(!bridge::playMapGame(HORIZON_GAME_TMNF) && !bridge::playMapGame(HORIZON_GAME_TMUF));
     CHECK(bridge::playMapFresh(0, 5000000) && bridge::playMapFresh(4000000, 4100000) && !bridge::playMapFresh(1000000, 1000000 + 120001));
     CHECK(bridge::eventsPath(false, -1, true) == "/v1/client/events?caps=play_map");
     CHECK(bridge::eventsPath(true, 12, true) == "/v1/client/events?since=12&wait=20&caps=play_map");
