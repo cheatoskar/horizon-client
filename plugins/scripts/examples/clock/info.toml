@@ -1,0 +1,8 @@
+# Clock: real time and session time in a corner of the screen.
+name = "Clock"
+author = "cheatoskar"
+version = "1.0.0"
+description = "The real time and how long the game has been running, in a corner."
+games = ["eswc", "sunrise", "tmnf", "tmuf"]
+online = "online-ok"
+permissions = ["ui", "settings"]

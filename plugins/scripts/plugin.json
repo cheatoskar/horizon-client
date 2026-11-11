@@ -1,0 +1,17 @@
+{
+  "id": "scripts",
+  "name": "Horizon Scripts",
+  "version": "0.1.0",
+  "dll": "scripts.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Runs AngelScript scripts from horizon\scripts on every supported game.",
+  "author": "cheatoskar",
+  "icon": "icon.png"
+}

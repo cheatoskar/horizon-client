@@ -6,3 +6,4 @@ screens/
 *.pdb
 *.ilk
 dist-explorer/
+dist-scripts/

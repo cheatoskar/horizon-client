@@ -55,5 +55,8 @@ call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autos
 echo === node explorer: unit tests, fake engine graph, DLL in a fake host
 call plugins\node-explorer\tests\run_tests.cmd >nul 2>&1 && echo PASS  node explorer || (echo FAIL  node explorer & set FAIL=1)
 
+echo === horizon scripts: unit and engine tests, both example scripts in a fake host (ESWC, Sunrise, TMNF, TMUF)
+call plugins\scripts\tests\run_tests.cmd >nul 2>&1 && echo PASS  horizon scripts || (echo FAIL  horizon scripts & set FAIL=1)
+
 if %FAIL%==0 (echo ALL TESTS PASSED) else (echo SOME TESTS FAILED)
 exit /b %FAIL%
