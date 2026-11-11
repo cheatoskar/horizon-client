@@ -225,7 +225,7 @@ void hotkeysDetectExternal() {
     };
     if (state().chainPresent) {
         const std::wstring chain = state().game.exeFolder + L"dinput8.chain.dll";
-        if (state().chainIsAutosave) other("ESWC Autosave (old loader)", chain, "dinput8 chain", "F9 (save now)", "Saves replays itself: the Autosave plugin stays off.");
+        if (state().chainIsAutosave) other("ESWC Autosave (old loader)", chain, "dinput8 chain", "F9 (save now)", "Saves replays itself: the Autosave module is paused.");
         else other("dinput8.chain.dll", chain, "dinput8 chain", nullptr, "An earlier dinput8.dll, loaded before the system one.");
     }
     const std::string gameDir = lower(utf8(state().game.exeFolder));

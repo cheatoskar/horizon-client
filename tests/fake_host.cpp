@@ -48,6 +48,9 @@ HorizonStyle g_style;
 std::string g_exeDir;
 uint32_t g_subscribed = 0;
 int g_failures = 0;
+std::vector<std::string> g_logLines;   // everything the plugin logged (scenario checks)
+std::vector<std::string> g_toasts;     // titles passed to notify
+std::string g_standaloneDummy;         // --standalone-dummy <dll>: stands in for eswc_autosave.dll
 
 void check(bool ok, const char* what) {
     printf("  [%s] %s\n", ok ? "ok" : "FAIL", what);
@@ -63,6 +66,11 @@ void HORIZON_CALL f_log(HorizonPluginHandle, int32_t level, const char* fmt, ...
     _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
     va_end(ap);
     printf("  log[%s] %s: %s\n", (level >= 0 && level <= 3) ? names[level] : "?", g_pluginId.c_str(), buf);
+    g_logLines.push_back(buf);
+}
+void HORIZON_CALL f_notify(HorizonPluginHandle, const HorizonToast* t) {
+    printf("  toast[%u] %s\n", t ? t->kind : 0u, t && t->title ? t->title : "");
+    if (t && t->title) g_toasts.push_back(t->title);
 }
 int32_t HORIZON_CALL f_get_string(HorizonPluginHandle, const char* key, const char* fallback, char* out, uint32_t size) {
     auto it = g_settings.find(key);
@@ -516,7 +524,154 @@ static void tmxUploadTests(HMODULE mod, HorizonPlugin_InitFn init, HorizonPlugin
     WSACleanup();
 }
 
+bool logHas(const char* part) {
+    for (const auto& l : g_logLines)
+        if (l.find(part) != std::string::npos) return true;
+    return false;
+}
+
+// Autosave & Login-Fix: default on, off = no reaction, standalone ESWC Autosave present = passive.
+// Each scenario loads the plugin DLL fresh (own globals) against the shared fake host.
+struct ScenarioRun {
+    HMODULE mod = nullptr;
+    int32_t init = -1;
+    HorizonPlugin_OnEventFn onEvent = nullptr;
+    HorizonPlugin_SetEnabledFn setEnabled = nullptr;
+    HorizonPlugin_ShutdownFn shutdown = nullptr;
+};
+
+ScenarioRun scenarioStart(const char* dll, HorizonHostApi* host, bool clearSettings) {
+    ScenarioRun r;
+    if (clearSettings) g_settings.clear();
+    g_logLines.clear();
+    g_toasts.clear();
+    g_hotkeys.clear();
+    g_subscribed = 0;
+    r.mod = LoadLibraryA(dll);
+    if (!r.mod) return r;
+    auto init = proc<HorizonPlugin_InitFn>(r.mod, HORIZON_EXPORT_INIT);
+    r.onEvent = proc<HorizonPlugin_OnEventFn>(r.mod, HORIZON_EXPORT_ON_EVENT);
+    r.setEnabled = proc<HorizonPlugin_SetEnabledFn>(r.mod, HORIZON_EXPORT_SET_ENABLED);
+    r.shutdown = proc<HorizonPlugin_ShutdownFn>(r.mod, HORIZON_EXPORT_SHUTDOWN);
+    r.init = init ? init(host) : -1;
+    flushQueue();
+    return r;
+}
+
+void scenarioStop(ScenarioRun& r) {
+    if (r.shutdown) r.shutdown();
+    flushQueue();
+    if (r.mod) FreeLibrary(r.mod);
+}
+
+void fireFinishAndEnd(HorizonPlugin_OnEventFn onEvent) {
+    HorizonEvent e = makeEvent(HORIZON_EVENT_FINISH);
+    e.time_ms = 26500;
+    e.is_local_player = 1;
+    e.is_pb = 1;
+    onEvent(&e);
+    e = makeEvent(HORIZON_EVENT_RACE_END);
+    e.end_screen = 1;
+    e.engine_replay = nullptr;
+    onEvent(&e);
+    flushQueue();
+}
+
+void autosaveScenarios(const char* dll, HorizonHostApi* host) {
+    printf("scenario 1: default settings, nothing else installed\n");
+    {
+        ScenarioRun r = scenarioStart(dll, host, true);
+        check(r.init == 0, "Init ok");
+        check(g_subscribed != 0 && g_hotkeys.size() == 1, "default on: events subscribed, save hotkey registered");
+        check(g_toasts.empty() && !logHas("paused"), "no standalone note");
+        if (r.onEvent) {
+            fireFinishAndEnd(r.onEvent);
+            check(logHas("finish: local player") && logHas("race end after the finish"), "default on: a finish leads to a save attempt");
+        }
+        scenarioStop(r);
+    }
+
+    printf("scenario 2: switched off live (SetEnabled 0)\n");
+    {
+        ScenarioRun r = scenarioStart(dll, host, true);
+        check(r.init == 0 && r.setEnabled && r.onEvent, "Init ok, exports present");
+        if (r.init == 0 && r.setEnabled && r.onEvent) {
+            r.setEnabled(0);
+            g_logLines.clear();
+            fireFinishAndEnd(r.onEvent);
+            check(!logHas("finish: local player") && !logHas("race end after the finish") && !logHas("SAVED"),
+                  "off: finish and race end do nothing");
+            r.setEnabled(1);
+            fireFinishAndEnd(r.onEvent);
+            check(logHas("race end after the finish"), "on again: works again");
+        }
+        scenarioStop(r);
+    }
+
+    printf("scenario 3: standalone eswc_autosave.dll loaded in the process\n");
+    if (g_standaloneDummy.empty()) {
+        check(false, "--standalone-dummy <dll> missing");
+    } else {
+        const std::string dir = g_exeDir + "standalone\\";
+        makeDirs(dir);
+        const std::string copy = dir + "eswc_autosave.dll";
+        check(CopyFileA(g_standaloneDummy.c_str(), copy.c_str(), FALSE) != 0, "dummy eswc_autosave.dll copied");
+        HMODULE dummy = LoadLibraryA(copy.c_str());
+        check(dummy != nullptr, "dummy loaded as eswc_autosave.dll");
+        ScenarioRun r = scenarioStart(dll, host, true);
+        check(r.init == 0, "Init ok (module stays loaded, passive)");
+        check(g_subscribed == 0 && g_hotkeys.empty(), "passive: no events subscribed, no hotkey");
+        check(logHas("module paused"), "log says: module paused");
+        check(g_toasts.size() == 1 && g_toasts[0].find("Modul pausiert") != std::string::npos &&
+                  g_toasts[0].find("Eigenst") != std::string::npos,
+              "toast: Eigenstaendiges ESWC Autosave gefunden - Modul pausiert");
+        if (r.onEvent) {
+            g_logLines.clear();
+            fireFinishAndEnd(r.onEvent);
+            check(!logHas("finish: local player") && !logHas("SAVED"), "passive: events do nothing");
+        }
+        // the page shows the note
+        for (int frame = 0; frame < 3; frame++) {
+            ImGui::NewFrame();
+            ImGui::Begin("autosave page");
+            auto draw = proc<HorizonPlugin_DrawMenuFn>(r.mod, HORIZON_EXPORT_DRAW_MENU);
+            if (draw) draw();
+            ImGui::End();
+            ImGui::Render();
+        }
+        check(GetFileAttributesA(copy.c_str()) != INVALID_FILE_ATTRIBUTES, "standalone file untouched");
+        scenarioStop(r);
+        if (dummy) FreeLibrary(dummy);
+        DeleteFileA(copy.c_str());
+    }
+
+    printf("scenario 4: standalone files in the game folder (not loaded)\n");
+    {
+        const std::string dir = g_exeDir + "gamefolder\\";
+        makeDirs(dir);
+        const std::string dll1 = dir + "eswc_autosave.dll", chain = dir + "dinput8.chain.dll";
+        HANDLE h = CreateFileA(dll1.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        g_gameInfo.game_folder = dir.c_str();
+        ScenarioRun r = scenarioStart(dll, host, true);
+        check(r.init == 0 && g_subscribed != 0, "only eswc_autosave.dll left over (not chained): module active");
+        scenarioStop(r);
+        h = CreateFileA(chain.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        r = scenarioStart(dll, host, true);
+        check(r.init == 0 && g_subscribed == 0 && logHas("module paused"), "eswc_autosave.dll + dinput8.chain.dll: module paused");
+        check(GetFileAttributesA(dll1.c_str()) != INVALID_FILE_ATTRIBUTES && GetFileAttributesA(chain.c_str()) != INVALID_FILE_ATTRIBUTES,
+              "standalone files untouched");
+        scenarioStop(r);
+        DeleteFileA(dll1.c_str());
+        DeleteFileA(chain.c_str());
+        RemoveDirectoryA(dir.c_str());
+        g_gameInfo.game_folder = "C:\\fake\\";
+    }
+}
+
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0); // keep the output when a plugin crashes the process
     // before the plugin loads: its C runtime copies the environment at load time
     SetEnvironmentVariableA("HORIZON_TEST_SAVE_REPLAY", "1"); // the sample calls save_replay once in Init
     const char* dll = nullptr;
@@ -525,6 +680,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--game") && i + 1 < argc) gameName = argv[++i];
         else if (!strcmp(argv[i], "--expect-init") && i + 1 < argc) expectInit = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--standalone-dummy") && i + 1 < argc) g_standaloneDummy = argv[++i];
         else dll = argv[i];
     }
     if (!dll) {
@@ -662,6 +818,7 @@ int main(int argc, char** argv) {
     host.set_host_flag = f_set_host_flag;
     host.host_flags = f_host_flags;
     host.open_page = f_open_page;
+    host.notify = f_notify;
 
     const int32_t r = init(&host);
     printf("  Init returned %d (expected %d)\n", r, expectInit);
@@ -761,7 +918,12 @@ int main(int argc, char** argv) {
     printf("Shutdown\n");
     shutdown();
     flushQueue();
+    const std::string pluginName = pi->name; // pi points into the DLL
     check(FreeLibrary(mod) != 0, "FreeLibrary");
+    if (g_pluginId == "eswc-autosave" && g_gameInfo.game == HORIZON_GAME_ESWC) {
+        check(pluginName == "Autosave & Login-Fix", "display name: Autosave & Login-Fix");
+        autosaveScenarios(dll, &host);
+    }
     ImGui::DestroyContext();
     printf("fake host: %s\n", g_failures ? "FAILED" : "passed");
     return g_failures ? 1 : 0;

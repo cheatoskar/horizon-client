@@ -89,7 +89,8 @@ Every folder in `horizon\plugins\` with a valid id is a plugin candidate and loa
 
 - its `plugin.json` says `"enabled_by_default": false` (then it is off until switched on in the menu), or
 - it was switched off in the menu (stored in `settings\host.json`), or
-- it is `eswc-autosave` and the old ESWC Autosave loader is chained as `dinput8.chain.dll` (two autosaves would save every replay twice; the menu says how to switch).
+
+`eswc-autosave` ("Autosave & Login-Fix") is on by default and checks for the standalone ESWC Autosave itself (`eswc_autosave.dll` loaded, or `eswc_autosave.dll` and `dinput8.chain.dll` in the game folder). If it is there, the module loads but stays passive (no hook, no event, no hotkey) and shows "Eigenständiges ESWC Autosave gefunden – Modul pausiert" as a toast and on its page; the standalone files are never touched. The ESWC login fix (error 12157) is part of the host, not of the plugin: switch `OnlineFix` in settings\host.json (menu: General, "Login-Fix (Fehler 12157)", default on).
 
 The switches in the menu persist in `settings\host.json` and work the same with or without a profile.
 

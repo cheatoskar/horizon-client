@@ -35,7 +35,7 @@ echo ===== sample, game sunrise
 echo ===== sample, game tmnf
 %FH% %SAMPLE% --game tmnf || set "FAIL=1"
 echo ===== eswc-autosave, game eswc (inits, no game pointer)
-%FH% %AUTOSAVE% --game eswc || set "FAIL=1"
+%FH% %AUTOSAVE% --game eswc --standalone-dummy %SAMPLE% || set "FAIL=1"
 echo ===== eswc-autosave, game sunrise (refuses with 2)
 %FH% %AUTOSAVE% --game sunrise --expect-init 2 || set "FAIL=1"
 echo ===== tmx-upload, game eswc (real HTTP on 127.0.0.1)

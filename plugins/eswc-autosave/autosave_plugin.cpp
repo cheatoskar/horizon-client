@@ -106,6 +106,7 @@ template <typename T> T field(const void* obj, size_t off) {
 const HorizonHostApi* g_host = nullptr;
 bool g_imgui = false;
 bool g_enabled = true;
+bool g_passive = false; // the standalone ESWC Autosave is active in this process: this module does nothing
 
 #define LOGI(...) g_host->log(g_host->plugin, HORIZON_LOG_INFO, __VA_ARGS__)
 #define LOGW(...) g_host->log(g_host->plugin, HORIZON_LOG_WARN, __VA_ARGS__)
@@ -135,6 +136,44 @@ void setLast(const char* fmt, ...) {
 
 void toUtf8(const wchar_t* w, char* out, int size) {
     if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, out, size, nullptr, nullptr)) out[0] = 0;
+}
+
+// ---------------------------------------------------------------- standalone Autosave ------
+// The standalone eswc-autosave (dinput8.dll + eswc_autosave.dll next to the exe, or chained by the Legacy Loader
+// as dinput8.chain.dll) hooks the game itself. Two of them would save every replay twice, so this module
+// stays passive when the standalone one is there. Its files are only looked at, never changed.
+constexpr char kStandaloneNote[] = "Eigenst\xC3\xA4ndiges ESWC Autosave gefunden \xE2\x80\x93 Modul pausiert";
+
+bool standaloneFound(const HorizonGameInfo* gi) {
+    if (GetModuleHandleW(L"eswc_autosave.dll")) return true; // its loader already started it
+    wchar_t dir[MAX_PATH] = L"";
+    if (gi && gi->game_folder && *gi->game_folder) {
+        MultiByteToWideChar(CP_UTF8, 0, gi->game_folder, -1, dir, MAX_PATH);
+    } else {
+        DWORD n = GetModuleFileNameW(nullptr, dir, MAX_PATH);
+        wchar_t* slash = (n && n < MAX_PATH) ? wcsrchr(dir, L'\\') : nullptr;
+        if (slash) slash[1] = 0;
+        else dir[0] = 0;
+    }
+    const size_t len = wcslen(dir);
+    if (!len) return false;
+    const wchar_t* sep = (dir[len - 1] == L'\\' || dir[len - 1] == L'/') ? L"" : L"\\";
+    wchar_t path[MAX_PATH + 32];
+    swprintf_s(path, L"%s%seswc_autosave.dll", dir, sep);
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return false;
+    swprintf_s(path, L"%s%sdinput8.chain.dll", dir, sep); // standalone files there and chained = it runs
+    return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+void HORIZON_CALL standaloneToast(void*) {
+    if (!g_host || g_host->abi_minor < 3 || !g_host->notify) return;
+    HorizonToast t = {};
+    t.size = sizeof(t);
+    t.kind = HORIZON_TOAST_WARN;
+    t.title = kStandaloneNote;
+    t.text = "";
+    t.duration_ms = 8000;
+    g_host->notify(g_host->plugin, &t);
 }
 
 // ---------------------------------------------------------------- config --------------------
@@ -480,7 +519,7 @@ void saveNowManual() {
 }
 
 void HORIZON_CALL onHotkey(void*) {
-    if (g_enabled) saveNowManual();
+    if (g_enabled && !g_passive) saveNowManual();
 }
 
 }  // namespace
@@ -491,13 +530,13 @@ extern "C" {
 static const HorizonPluginInfo kInfo = {
     HORIZON_ABI,
     kId,
-    "ESWC Autosave",
+    "Autosave & Login-Fix",
     kVersion,
     HORIZON_GAME_ESWC,
     HORIZON_CAP_MENU | HORIZON_CAP_GAME_EVENTS,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Saves your replay after each finish, without the dialogs.",
+    "Saves your replay after each finish. The ESWC login fix (error 12157) is part of Horizon.",
     HORIZON_ABI_MINOR,
 };
 
@@ -513,6 +552,13 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     }
     g_base = gi->exe_base ? gi->exe_base : kPreferredBase;
     LOGI("---- eswc-autosave %s start, TmNationsESWC 1.80 recognised, base %08X ----", kVersion, (unsigned)g_base);
+    g_passive = standaloneFound(gi);
+    if (g_passive) {
+        LOGW("standalone ESWC Autosave found (eswc_autosave.dll): module paused, nothing hooked or subscribed");
+        g_imgui = horizon_imgui_attach(host);
+        host->run_on_game_thread(host->plugin, standaloneToast, nullptr);
+        return 0;
+    }
     g_imgui = horizon_imgui_attach(host);
     if (!g_imgui) LOGW("ImGui attach failed, working without the menu page");
     importIni();
@@ -538,7 +584,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
 }
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
-    if (!e || !g_enabled) return;
+    if (!e || !g_enabled || g_passive) return;
     switch (e->type) {
     case HORIZON_EVENT_MAP_LOADED:
     case HORIZON_EVENT_RACE_START:
@@ -572,6 +618,11 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (!g_imgui || !g_host) return;
+    if (g_passive) {
+        ImGui::TextWrapped("%s", kStandaloneNote);
+        ImGui::TextDisabled("Remove dinput8.chain.dll to use this module instead.");
+        return;
+    }
     bool changed = false;
     ImGui::TextUnformatted("Save");
     int mode = g_cfg.bestOnly ? 0 : 1;

@@ -591,15 +591,10 @@ void pluginsLoadAll() {
         Plugin* p = up.get();
         const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
         // default when the menu never switched it: on, unless plugin.json says enabled_by_default false (only
-        // without profile.json) or the old ESWC Autosave loader is chained (two autosaves = double saves)
-        bool localDefault = g_profile.present || p->manifest.enabledByDefault;
+        // without profile.json). The Autosave plugin checks for the standalone ESWC Autosave itself and pauses.
+        const bool localDefault = g_profile.present || p->manifest.enabledByDefault;
         std::string offWhy = "switched off in the menu";
-        if (p->id == "eswc-autosave" && s.chainIsAutosave) {
-            localDefault = false;
-            offWhy = "the old ESWC Autosave loader (dinput8.chain.dll) is active";
-        } else if (!g_profile.present && !p->manifest.enabledByDefault) {
-            offWhy = "off by default: switch it on to try it";
-        }
+        if (!g_profile.present && !p->manifest.enabledByDefault) offWhy = "off by default: switch it on to try it";
         const bool local = hostSettingInt("plugin." + p->id + ".enabled", localDefault ? 1 : 0) != 0;
         p->enabled = inProfile && local;
         if (p->status == ui::PluginStatus::Failed) {

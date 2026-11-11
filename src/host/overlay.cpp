@@ -249,9 +249,6 @@ ui::Actions makeActions() {
         const Plugin* p = findPlugin(id);
         if (p && p->running && p->drawMenu) pluginDrawMenu(id);
         else if (p && p->running) ImGui::TextDisabled("This mod has no settings.");
-        else if (p && p->status == ui::PluginStatus::Off && p->statusText.find("dinput8.chain") != std::string::npos)
-            ImGui::TextWrapped("The old ESWC Autosave loader is active, so this plugin is off (two autosaves would save twice). "
-                               "To switch: turn it on, close the game, delete dinput8.chain.dll in the game folder.");
         else ImGui::TextDisabled("This mod is not running (%s).", p && !p->statusText.empty() ? p->statusText.c_str() : "off");
     };
     a.beginKeyCapture = [](int handle) { keyCaptureBegin(handle); };

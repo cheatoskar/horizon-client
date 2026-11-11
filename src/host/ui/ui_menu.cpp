@@ -540,7 +540,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
         if (model.onlineFix >= 0) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x;
-            drawText(dl, f.bodyBold, p, U(t.text), "Online login fix");
+            drawText(dl, f.bodyBold, p, U(t.text), "Login-Fix (Fehler 12157)");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
                      "Lets the ESWC login reach the server on Windows 10/11. Applies on the next start.");
             const ImVec2 swSize(44.0f * s, 24.0f * s);

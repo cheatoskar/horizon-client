@@ -1,6 +1,6 @@
 {
   "id": "eswc-autosave",
-  "name": "ESWC Autosave",
+  "name": "Autosave & Login-Fix",
   "version": "2.0.0",
   "dll": "eswc-autosave.dll",
   "games": [
@@ -8,7 +8,7 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Saves your replay after each finish, without the dialogs.",
+  "description": "Saves your replay after each finish. The ESWC login fix (error 12157) is part of Horizon.",
   "author": "cheatoskar",
   "icon": "icon.png"
 }

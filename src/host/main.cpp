@@ -75,10 +75,10 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
             const std::string needle(reinterpret_cast<const char*>(mark), wcslen(mark) * sizeof(wchar_t));
             s.chainIsAutosave = bytes.find(needle) != std::string::npos;
             HLOG("chain: dinput8.chain.dll is loaded before the system dinput8 (%s)",
-                 s.chainIsAutosave ? "it is the ESWC Autosave loader: the Autosave plugin stays off unless switched on" : "another mod");
+                 s.chainIsAutosave ? "it is the standalone ESWC Autosave: the Autosave plugin pauses itself" : "another mod");
             if (s.chainIsAutosave)
-                s.notes.push_back("The old ESWC Autosave loader (dinput8.chain.dll) is active, so the Autosave plugin is off. "
-                                  "To use the plugin: switch it on here, close the game, delete dinput8.chain.dll.");
+                s.notes.push_back("The standalone ESWC Autosave (dinput8.chain.dll) is active, so the Autosave module is paused. "
+                                  "To use the module instead: close the game, delete dinput8.chain.dll.");
         }
     }
 
