@@ -29,8 +29,9 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 2 /* 1: create_texture_rgba, release_texture, save_replay
-                               2: panels (register_panel ...), host flags (capture) */
+#define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
+                               2: panels (register_panel ...), host flags (capture)
+                               3: HorizonDeviceCallbacks.post_present */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -229,6 +230,10 @@ typedef struct HorizonDeviceCallbacks {
     void (HORIZON_CALL* before_reset)(void* user, void* device);
     void (HORIZON_CALL* after_reset)(void* user, void* device, int32_t hresult);
     void (HORIZON_CALL* pre_present)(void* user, void* device);
+    /* ABI minor 3 (host->abi_minor >= 3; an older host never calls it): right after the game's Present
+     * returned, with its HRESULT. For frame timing and frame pacing (a limiter that waits here lets the
+     * game read input right after the wait). Keep it short; never call Present from here. */
+    void (HORIZON_CALL* post_present)(void* user, void* device, int32_t hresult);
 } HorizonDeviceCallbacks;
 
 /* ------------------------------------------------------------------ host API -------------------- */

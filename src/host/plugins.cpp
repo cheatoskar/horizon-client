@@ -743,5 +743,13 @@ void pluginsPrePresent(void* device) {
             crashed(p, "pre_present");
     }
 }
+void pluginsPostPresent(void* device, long hr) {
+    for (auto& up : g_plugins) {
+        Plugin* p = up.get();
+        if (p->running && p->enabled && p->hasDev && p->dev.post_present &&
+            !sehDevHr(p->dev.post_present, p->dev.user, device, static_cast<int32_t>(hr)))
+            crashed(p, "post_present");
+    }
+}
 
 } // namespace horizon

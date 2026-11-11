@@ -92,6 +92,7 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* dev, const RECT* src, const REC
         }
     }
     const HRESULT hr = t->nextPresent(dev, src, dst, wnd, dirty);
+    if (dev == g_game) pluginsPostPresent(dev, hr);
     t_inPresent--;
     return hr;
 }

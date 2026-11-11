@@ -1,0 +1,18 @@
+{
+  "id": "performance",
+  "name": "Horizon Performance",
+  "version": "0.1.0",
+  "dll": "performance.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "enabled_by_default": false,
+  "description": "Frame times, Direct3D call counts, benchmark, frame limiter and a hang log.",
+  "author": "cheatoskar",
+  "icon": "icon.png"
+}
