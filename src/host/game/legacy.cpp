@@ -43,6 +43,13 @@ constexpr size_t kEswcInfoState = 0x25c, kEswcInfoTime = 0x1f4, kEswcInfoBest = 
 constexpr size_t kEswcInfoCheckpoints = 0x244, kEswcInfoPassed = 0x284;
 constexpr size_t kEswcPlayerInfo = 0x34;
 constexpr size_t kEswcAppPrevReplay = 0x25c, kEswcAppCurReplay = 0x144;
+// A replay watched from the menu (or shot as a video) runs in the app's clip viewer, not in CurrentRace and not in
+// the Editor slot: CConstructionGame +0x128, class CCtnMediaClipViewer 0x2408a000 (no reflection member; made at
+// 0x006ea968 / 0x006e74fc, cleared when the replay ends; TMVS wt-150 engine.cpp kEswcGameClipViewer, in game since
+// TMVS 1.5). Sunrise's slot is not known: Sunrise reports a watched replay as "Loading" (the benchmark then starts
+// by its key).
+constexpr size_t kEswcAppClipViewer = 0x128;
+constexpr uint32_t kEswcClassClipViewer = 0x2408a000;
 constexpr uintptr_t kEswcLocalPlayerInfo = 0x0071c730; // CTrackManiaRace::GetLocalPlayerInfo()
 // Sunrise (repack, PE 5cc8f0cf): tm-modding-knowledge games/tm-sunrise/race-events.md (static, matched from
 // the ESWC race vtables; hooked only behind the byte-exact prologue check). Player info members by reflection.
@@ -70,6 +77,7 @@ struct Snapshot {
     void* editor = nullptr;
     int raceKind = kNone;
     bool editorIsReplay = false;
+    bool clipViewer = false; // ESWC: a replay plays in the app's clip viewer
     void* info = nullptr; // local player info (ESWC: polled; Sunrise: from the race hooks)
     uint32_t starts = 0, respawns = 0, passed = 0;
     int infoState = 0;
@@ -233,7 +241,7 @@ private:
         if (snap_.editor && !snap_.editorIsReplay) return HORIZON_MODE_EDITOR_TEST;
         if (snap_.raceKind == kNet) return HORIZON_MODE_NET;
         if (snap_.raceKind == kSolo) return HORIZON_MODE_SOLO;
-        if (snap_.editorIsReplay) return HORIZON_MODE_REPLAY;
+        if (snap_.editorIsReplay || (snap_.clipViewer && !snap_.race)) return HORIZON_MODE_REPLAY;
         return HORIZON_MODE_UNKNOWN;
     }
     void installEswcHooks();
@@ -304,6 +312,11 @@ bool LegacyAdapter::read(Snapshot& s) {
     }
     if (o_.race >= 0) rd(app, static_cast<size_t>(o_.race), &s.race);
     s.raceKind = raceKind(s.race);
+    if (eswc()) {
+        void* viewer = nullptr;
+        uint32_t vid = 0;
+        s.clipViewer = rd(app, kEswcAppClipViewer, &viewer) && viewer && classIdOf(viewer, &vid) && vid == kEswcClassClipViewer;
+    }
     if (eswc() && s.race && s.raceKind != kOther) {
         rd(s.race, kEswcRaceStarts, &s.starts);
         rd(s.race, kEswcRaceRespawns, &s.respawns);
@@ -394,8 +407,11 @@ void LegacyAdapter::frame() {
     else if (s.race && s.raceKind == kSolo) st = s.infoState == 2 ? HORIZON_STATE_END_RACE : HORIZON_STATE_SOLO_RACE;
     else if (s.race) st = HORIZON_STATE_REPLAY; // a race of another class: replay viewer, video
     else if (!s.challenge) st = HORIZON_STATE_MAIN_MENU;
+    else if (s.clipViewer) st = HORIZON_STATE_REPLAY; // ESWC: a replay watched from the menu
     else st = HORIZON_STATE_LOADING;
     state_ = st;
+    if (ok && s.clipViewer != prev.clipViewer && hadSnap)
+        HLOG("game: %s", s.clipViewer ? "a replay plays (the app's clip viewer)" : "the replay's clip viewer is gone");
     char line[160];
     snprintf(line, sizeof(line), "%s; reflection %s", gameStateText(st), reflect::ready() ? "ready" : "off");
     status_ = line;

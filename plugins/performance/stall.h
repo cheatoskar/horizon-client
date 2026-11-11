@@ -20,6 +20,11 @@ void frame(void* window);
 // Game state names for the log ("main menu", "loading"...), and whether sampling is allowed now
 // (never while a race runs).
 void setState(const char* name, bool raceRunning);
+// True from the device's Reset until it is done: no stall is started or sampled meanwhile (Alt+Tab back into the
+// game resets the device; suspending the game thread inside the driver only makes that slower).
+void setBusy(bool busy);
+// Tests: the window counts as in front even when another program has the focus.
+void setAssumeFront(bool on);
 // Writes one line (game thread or watcher) with the seconds since the process started.
 void note(const char* fmt, ...);
 // Last finished stall, for the menu: seconds, and where the thread spent most samples.

@@ -43,8 +43,23 @@ double slowestMean(const std::vector<double>& sorted, double share) {
 }
 } // namespace
 
-Summary summarize(const std::vector<FrameSample>& frames) {
+bool isStutter(double frameMs, double medianMs) {
+    return frameMs > 2.0 * medianMs && frameMs > medianMs + kStutterMinExtraMs;
+}
+
+Summary summarize(const std::vector<FrameSample>& all, uint8_t skipMask) {
     Summary s;
+    std::vector<FrameSample> kept;
+    const std::vector<FrameSample>* src = &all;
+    for (const auto& f : all)
+        if (f.skip & skipMask) s.skipped++;
+    if (s.skipped) {
+        kept.reserve(all.size() - s.skipped);
+        for (const auto& f : all)
+            if (!(f.skip & skipMask)) kept.push_back(f);
+        src = &kept;
+    }
+    const std::vector<FrameSample>& frames = *src;
     s.frames = frames.size();
     if (frames.empty()) return s;
     std::vector<double> ms;
@@ -75,7 +90,7 @@ Summary summarize(const std::vector<FrameSample>& frames) {
     s.low1Fps = w1 > 0 ? 1000.0 / w1 : 0;
     s.low01Fps = w01 > 0 ? 1000.0 / w01 : 0;
     for (double v : ms)
-        if (v > 2.0 * s.medianMs) s.stutters++;
+        if (isStutter(v, s.medianMs)) s.stutters++;
     s.presentMsAvg = present / n;
     s.cpuMsAvg = cpu / n;
     s.sleepMsAvg = sleep / n;

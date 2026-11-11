@@ -29,6 +29,8 @@ HWND g_window = nullptr;
 double g_thresholdMs = 1500;
 char g_state[48] = "starting";
 volatile LONG g_race = 0;
+volatile LONG g_busy = 0;
+bool g_assumeFront = false;
 HANDLE g_thread = nullptr;
 volatile LONG g_stop = 0;
 Last g_last;
@@ -246,6 +248,17 @@ std::vector<uintptr_t> frames() {
 
 double secs() { return sys::secondsSinceProcessStart(); }
 
+// The game window is minimised or another program is in front: no frames then is normal (ESWC and Sunrise stop
+// drawing in the background), not a hang. Any thread may ask.
+bool windowAway() {
+    HWND w = g_window;
+    if (!w) return false;
+    if (IsIconic(w)) return true;
+    if (g_assumeFront) return false;
+    HWND f = GetForegroundWindow();
+    return !f || (f != w && GetAncestor(f, GA_ROOTOWNER) != GetAncestor(w, GA_ROOTOWNER));
+}
+
 DWORD WINAPI watcher(LPVOID) {
     bool inStall = false;
     double stallStart = 0, nextSample = 0;
@@ -258,7 +271,7 @@ DWORD WINAPI watcher(LPVOID) {
         const double now = sys::nowMs();
         const double last = static_cast<double>(g_lastFrameUs) / 1000.0;
         const double gap = now - last;
-        const bool hidden = g_window && IsIconic(g_window);
+        const bool hidden = windowAway() || g_busy;
         if (!inStall) {
             if (gap < g_thresholdMs || g_race || hidden || last <= 0) continue;
             inStall = true;
@@ -299,6 +312,7 @@ DWORD WINAPI watcher(LPVOID) {
             LeaveCriticalSection(&g_cs);
             continue;
         }
+        if (hidden) continue; // went to the background (or into a Reset) during the stall: wait, do not sample
         if (now < nextSample || !g_target) continue;
         nextSample = now + (samples < 40 ? 500 : 5000);
         if (!sampleRaw()) continue;
@@ -357,6 +371,8 @@ void stop() {
 }
 
 void setEnabled(bool on) { InterlockedExchange(&g_enabled, on ? 1 : 0); }
+void setBusy(bool busy) { InterlockedExchange(&g_busy, busy ? 1 : 0); }
+void setAssumeFront(bool on) { g_assumeFront = on; }
 void setThresholdMs(double ms) { g_thresholdMs = ms < 300 ? 300 : ms; }
 
 void frame(void* window) {

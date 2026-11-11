@@ -412,8 +412,78 @@ static void testSeries() {
     }
 }
 
+// Stutters at high frame rates, frames that are not gameplay, and the start condition of a launcher request.
+static void testSkipAndStart() {
+    using namespace perf;
+    // 400 fps menu: 5-6 ms frames are not stutters any more (2x the median alone counted them), 12 ms ones are
+    std::vector<FrameSample> f(1000);
+    for (auto& x : f) x.frameMs = 2.5;
+    for (int i = 0; i < 100; i++) f[i * 10].frameMs = 6.0;
+    for (int i = 0; i < 5; i++) f[i * 10 + 5].frameMs = 12.0;
+    Summary s = summarize(f);
+    CHECK(s.stutters == 5);
+    CHECK(isStutter(40, 16.7) && !isStutter(30, 16.7) && !isStutter(8, 2.5) && isStutter(9, 2.5));
+    // background, device lost, settle and loading frames are left out of the statistics
+    f.assign(100, FrameSample{});
+    for (auto& x : f) x.frameMs = 10;
+    f[0].frameMs = 900;
+    f[0].skip = kSkipUnfocused;
+    f[1].frameMs = 400;
+    f[1].skip = kSkipSettle;
+    f[2].frameMs = 300;
+    f[2].skip = kSkipLoading;
+    f[3].frameMs = 1;
+    f[3].skip = kSkipLost;
+    s = summarize(f);
+    CHECK(s.frames == 96 && s.skipped == 4 && s.stutters == 0 && approx(s.maxMs, 10, 1e-9));
+    // a series window ignores loading (the scene check covers it), the statistics do not
+    s = summarize(f, kSkipSeries);
+    CHECK(s.frames == 97 && s.skipped == 3 && approx(s.maxMs, 300, 1e-9));
+
+    // start condition
+    CHECK(benchStartBy("replay", HORIZON_STATE_REPLAY, false) == StartBy::Scene);
+    CHECK(benchStartBy("replay", HORIZON_STATE_LOADING, false) == StartBy::None); // ESWC before the clip viewer fix, Sunrise
+    CHECK(benchStartBy("replay", HORIZON_STATE_LOADING, true) == StartBy::Key);   // ... the key starts it anyway
+    CHECK(benchStartBy("replay", HORIZON_STATE_MAIN_MENU, false) == StartBy::None);
+    CHECK(benchStartBy("now", HORIZON_STATE_REPLAY, false) == StartBy::None && benchStartBy("now", HORIZON_STATE_MAIN_MENU, true) == StartBy::Key);
+    CHECK(benchStartBy("map", HORIZON_STATE_SOLO_RACE, false) == StartBy::Scene && benchStartBy("map", HORIZON_STATE_LOADING, false) == StartBy::None);
+    CHECK(benchSceneOk("replay", StartBy::Scene, HORIZON_STATE_REPLAY) && !benchSceneOk("replay", StartBy::Scene, HORIZON_STATE_LOADING));
+    CHECK(benchSceneOk("replay", StartBy::Key, HORIZON_STATE_LOADING)); // started by key: the scene is not checked
+    CHECK(benchSceneOk("map", StartBy::Scene, HORIZON_STATE_END_RACE) && !benchSceneOk("map", StartBy::Scene, HORIZON_STATE_MAIN_MENU));
+    CHECK(benchSceneOk("now", StartBy::Scene, HORIZON_STATE_MAIN_MENU));
+    BenchRequest r;
+    std::string why;
+    CHECK(parseBenchRequest(R"({"version":1,"series":{"mode":"now","startAfter":1.5}})", r, why) && r.series && r.series->startAfter == 1.5);
+    CHECK(parseBenchRequest(R"({"version":1,"series":{"mode":"now"}})", r, why) && r.series->startAfter < 0);
+
+    // a window is `seconds` of scene frames: background / scene-less frames neither count nor end it
+    SeriesPlan plan;
+    plan.where = "replay";
+    plan.seconds = 1;
+    plan.settle = 0.2;
+    plan.runs = 1;
+    plan.warmup = 0;
+    plan.sets = {mkSet("baseline", 0, 0, 0)};
+    FakeIO io;
+    Series ser;
+    CHECK(ser.start(plan, SeriesCaps{}, SeriesOptions{}, 0, io, why));
+    double t = 0;
+    int ticks = 0;
+    while (ser.active() && ticks < 10000) {
+        FrameSample x;
+        x.frameMs = 10;
+        if (ticks >= 50 && ticks < 250) x.skip = (ticks < 150) ? kSkipUnfocused : kSkipScene; // 2 s away mid-window
+        t += 10;
+        ser.tick(t, &x, io);
+        ticks++;
+    }
+    CHECK(io.completed && io.frameCounts.size() == 1 && io.frameCounts[0] == 100);
+    CHECK(ticks == 20 + 200 + 100); // settle 0.2 s + 2 s skipped + 1 s window
+}
+
 static int unit() {
     testStats();
+    testSkipAndStart();
     testRing();
     testPacer();
     testStateCache();
@@ -578,6 +648,8 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
     };
     SetEnvironmentVariableW(L"HORIZON_TEST_MENU", shot.empty() ? L"0" : L"1");
     SetEnvironmentVariableW(L"HORIZON_TEST_PAGE", L"plugin:performance");
+    // the test window is rarely the foreground window (run from a console or in the background): count it as in front
+    SetEnvironmentVariableW(L"HORIZON_TEST_FOREGROUND", L"1");
     HMODULE hostDll = LoadLibraryW((dir + L"\\horizon\\host.dll").c_str());
     CHECK(hostDll != nullptr);
     if (!hostDll) return 1;

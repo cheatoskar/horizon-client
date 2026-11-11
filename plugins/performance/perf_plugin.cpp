@@ -112,6 +112,16 @@ perf::SeriesMeta g_seriesMeta;
 bool g_seriesHooks = false;   // the series needs the Direct3D hooks in every window (filter / count sets)
 bool g_forceOverlay = false;  // the progress line lives in the frame-time window: show it during a series
 std::string g_seriesReplay;   // replay path chosen for the series ("" none)
+perf::StartBy g_startBy = perf::StartBy::None; // how the launcher request started (Key: the scene is not checked)
+bool g_keyEdge = false;       // the benchmark key was pressed while a request waits (read by benchTick)
+double g_sceneLostAt = 0;     // series: when the scene went away (0 = it is there)
+std::string g_doneText;       // the banner after the end ("Benchmark fertig: ...")
+double g_doneAt = 0;
+// frames that are not gameplay (FrameSample::skip)
+double g_settleUntil = 0;     // frames before this time are "settle" (after a Reset, a focus or state change)
+bool g_fgPrev = true;         // the game window was in front at the last frame
+bool g_presentFailed = false; // the last Present returned an error (device lost)
+bool g_assumeFront = false;   // tests (HORIZON_TEST_FOREGROUND=1): the test window counts as in front
 
 std::string isoNow() {
     SYSTEMTIME st;
@@ -176,7 +186,7 @@ std::string narrow(const std::wstring& w) {
 }
 
 void writeResult(const std::vector<perf::FrameSample>& frames, const std::string& label, int run, const char* request) {
-    const perf::Summary s = perf::summarize(frames);
+    const perf::Summary s = perf::summarize(frames, perf::kSkipUnfocused | perf::kSkipLost | perf::kSkipSettle);
     perf::ResultMeta m;
     m.game = g_gameKey;
     m.label = perf::safeLabel(label);
@@ -224,6 +234,7 @@ const char* stateName(int s) {
 
 void registerOverlay();
 void applyProcessOptions();
+bool bannerLines(std::string& l1, std::string& l2);
 
 // ---- benchmark series
 perf::SeriesOptions currentOptions() {
@@ -386,6 +397,8 @@ void benchSeriesFinished(bool completed, const std::string& why) {
     writeSeriesFile(completed, why);
     const bool map = g_req.series && g_req.series->where == "map";
     g_benchStatus = completed ? "series done: " + std::to_string(g_series.runs().size()) + " windows" : "series stopped: " + why;
+    g_doneText = completed ? "Benchmark fertig: " + g_seriesMeta.stamp + "_series.json im Ordner bench" : "Benchmark abgebrochen: " + why;
+    g_doneAt = perf::sys::nowMs();
     g_bench = Bench::Idle;
     g_seriesHooks = false;
     g_forceOverlay = false;
@@ -427,23 +440,42 @@ void startSeries(double now) {
     g_benchStatus = g_series.progress();
 }
 
+// The scene a series measures went away / came back. Short losses (a replay restarting, a loading hitch) only
+// skip frames; after 5 s the window starts over (replay) or the series stops (map: the race ended).
+bool seriesScene(double now, int st) {
+    const std::string& where = g_req.series->where;
+    if (perf::benchSceneOk(where, g_startBy, st)) {
+        if (g_sceneLostAt > 0) {
+            g_sceneLostAt = 0;
+            const double settle = g_req.series->settle * 1000.0;
+            if (now + settle > g_settleUntil) g_settleUntil = now + settle; // a replay restart counts as settle
+            if (g_series.waiting()) g_series.resume(now);
+        }
+        return true;
+    }
+    if (g_sceneLostAt <= 0) g_sceneLostAt = now;
+    if (now - g_sceneLostAt > 5000) {
+        if (where == "map") {
+            g_series.abort("the race ended during the series", g_seriesIO);
+            return false;
+        }
+        g_series.pause(); // the window starts over when the replay is back
+    }
+    return false;
+}
+
 void benchTick(double now, const perf::FrameSample* frame) {
     const int st = g_host->get_game_state();
+    const bool key = g_keyEdge;
+    g_keyEdge = false;
     switch (g_bench) {
     case Bench::Idle: return;
     case Bench::WaitMenu:
-        if (g_req.series && g_req.series->where == "now") {
+        if ((g_req.series && g_req.series->where != "map") || (!g_req.series && g_req.mode == "replay")) {
             g_bench = Bench::WaitRace;
             g_benchT = now;
-            g_benchStatus = "Benchmark: starting";
-            return;
-        }
-        if (g_req.mode == "replay") {
-            g_bench = Bench::WaitRace;
-            g_benchT = now;
-            g_benchStatus = g_req.series ? "Benchmark: open " + (g_seriesReplay.empty() ? std::string("a replay") : "the replay " + fileNameOf(g_seriesReplay)) +
-                                               ", the series starts by itself"
-                                         : "open a replay now; recording starts by itself";
+            g_benchStatus = g_req.series ? "Benchmark wartet" : "open a replay now; recording starts by itself";
+            g_keyEdge = key; // a key press in this frame still counts
             return;
         }
         if (st != HORIZON_STATE_MAIN_MENU) {
@@ -465,40 +497,67 @@ void benchTick(double now, const perf::FrameSample* frame) {
         g_benchStatus = "loading the map";
         return;
     case Bench::WaitRace: {
-        const bool anyScene = g_req.series && g_req.series->where == "now";
-        const bool ready = anyScene ? now - g_benchT > 1500 : g_req.mode == "replay" ? st == HORIZON_STATE_REPLAY : st == HORIZON_STATE_SOLO_RACE;
-        if (ready) {
+        const std::string where = g_req.series ? g_req.series->where : g_req.mode;
+        perf::StartBy by = perf::benchStartBy(where, st, key);
+        if (by == perf::StartBy::None && where == "now" && g_req.series && g_req.series->startAfter >= 0 &&
+            now - g_benchT >= g_req.series->startAfter * 1000.0)
+            by = perf::StartBy::Key; // unattended "now" (tests): whatever is on screen
+        if (by != perf::StartBy::None) {
+            g_startBy = by;
             g_bench = Bench::Warmup;
             g_benchT = now;
             g_benchStatus = "warm-up";
+            logf(HORIZON_LOG_INFO, "benchmark: starting (%s, game state %s)", by == perf::StartBy::Key ? "by its key" : "the scene is on screen",
+                 stateName(st));
         } else if (g_req.mode == "map" && now - g_benchT > 120000) {
             benchAbort("the race did not start within 2 minutes");
         }
         return;
     }
-    case Bench::Warmup:
+    case Bench::Warmup: {
+        if (key) {
+            benchAbort("stopped by hand");
+            return;
+        }
+        const std::string where = g_req.series ? g_req.series->where : g_req.mode;
+        if (g_startBy == perf::StartBy::Scene && !perf::benchSceneOk(where, g_startBy, st)) {
+            g_bench = Bench::WaitRace; // the replay was closed again before the start
+            g_benchT = now;
+            return;
+        }
         if (now - g_benchT < g_req.warmup * 1000.0) return;
         if (g_req.series) startSeries(now);
         else benchStartRecording(now);
         return;
+    }
     case Bench::Series: {
-        const std::string& where = g_req.series->where;
-        const bool sceneOk = where == "now" || (where == "replay" ? st == HORIZON_STATE_REPLAY : (st == HORIZON_STATE_SOLO_RACE || st == HORIZON_STATE_END_RACE));
-        if (!sceneOk) {
-            if (where == "replay") { // the replay was closed: wait for it, the window starts over
-                g_series.pause();
-                g_benchStatus = "Benchmark paused: open the replay again";
-                return;
-            }
-            g_series.abort("the race ended during the series", g_seriesIO);
+        if (key) {
+            g_series.abort("stopped by hand", g_seriesIO);
             return;
         }
-        if (g_series.waiting()) g_series.resume(now);
-        g_series.tick(now, frame, g_seriesIO);
+        perf::FrameSample f;
+        const perf::FrameSample* fp = nullptr;
+        if (frame) {
+            f = *frame;
+            fp = &f;
+        }
+        if (!seriesScene(now, st)) {
+            if (!g_series.active()) return;
+            f.skip |= perf::kSkipScene;
+        }
+        if (g_series.waiting()) {
+            g_benchStatus = "Benchmark pausiert: Replay wieder öffnen";
+            return;
+        }
+        g_series.tick(now, fp, g_seriesIO);
         if (g_series.active()) g_benchStatus = g_series.progress();
         return;
     }
     case Bench::Recording: {
+        if (key) {
+            benchAbort("stopped by hand");
+            return;
+        }
         const bool stillThere = !g_reqFromLauncher || (g_req.mode == "replay" ? st == HORIZON_STATE_REPLAY
                                                                               : (st == HORIZON_STATE_SOLO_RACE || st == HORIZON_STATE_END_RACE));
         if (frame) g_recorded.push_back(*frame);
@@ -541,7 +600,19 @@ void startManualBench() {
     g_run = 1;
     benchStartRecording(perf::sys::nowMs());
 }
-void HORIZON_CALL onBenchHotkey(void*) { startManualBench(); }
+const char* benchKeyText() {
+    const char* k = g_benchHotkey && g_host ? g_host->hotkey_text(g_host->plugin, g_benchHotkey) : "";
+    return k ? k : "";
+}
+bool requestWaiting() { return g_reqFromLauncher && (g_bench == Bench::WaitMenu || g_bench == Bench::WaitRace); }
+// The benchmark key: starts a waiting launcher request, stops a running one, else a manual recording.
+void HORIZON_CALL onBenchHotkey(void*) {
+    if (requestWaiting() || (g_reqFromLauncher && g_bench != Bench::Idle)) {
+        g_keyEdge = true; // benchTick: start while waiting, stop while running
+        return;
+    }
+    startManualBench();
+}
 
 void readLauncherRequest() {
     const std::wstring path = g_data + L"bench-request.json";
@@ -563,7 +634,8 @@ void readLauncherRequest() {
         g_req.warmup = g_req.series->where == "now" ? 0 : 3;
         if (g_req.series->where == "replay") g_seriesReplay = resolveReplay(g_req.series->replay);
         g_forceOverlay = true;
-        g_benchStatus = "Benchmark: waiting";
+        g_benchStatus = "Benchmark wartet";
+        g_startBy = perf::StartBy::None;
         logf(HORIZON_LOG_INFO, "benchmark series from the launcher: %u sets, %d runs of %.0f s, %s%s%s", static_cast<unsigned>(g_req.series->sets.size()),
              g_req.runs, g_req.seconds, g_req.series->where.c_str(), g_seriesReplay.empty() ? "" : ", replay ", g_seriesReplay.c_str());
     }
@@ -618,10 +690,29 @@ void HORIZON_CALL cbAdjustParams(void*, void* params) {
     auto* pp = static_cast<D3DPRESENT_PARAMETERS*>(params);
     pp->PresentationInterval = S.vsync == 1 ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
 }
-void HORIZON_CALL cbBeforeReset(void*, void*) { perf::d3d::onReset(); }
+void settleFor(double ms) {
+    const double until = perf::sys::nowMs() + ms;
+    if (until > g_settleUntil) g_settleUntil = until;
+}
+void HORIZON_CALL cbBeforeReset(void*, void*) {
+    perf::stall::setBusy(true); // a Reset can take seconds (Alt+Tab back): not a hang, never sample it
+    perf::d3d::onReset();
+    settleFor(1000);
+}
 void HORIZON_CALL cbAfterReset(void*, void*, int32_t) {
     perf::d3d::onReset();
     g_pacer.reset();
+    settleFor(1000);
+    perf::stall::setBusy(false);
+}
+
+// The game window is in front and not minimised (no window known yet: yes).
+bool windowInFront() {
+    if (!g_window) return true;
+    if (IsIconic(g_window)) return false;
+    if (g_assumeFront) return true;
+    HWND f = GetForegroundWindow();
+    return f && (f == g_window || GetAncestor(f, GA_ROOTOWNER) == GetAncestor(g_window, GA_ROOTOWNER));
 }
 
 void finishFrame(double tPre) {
@@ -635,6 +726,15 @@ void finishFrame(double tPre) {
     f.sleepMs = g_sleepMs;
     f.cpuMs = f.frameMs - f.presentMs - f.sleepMs;
     if (f.cpuMs < 0) f.cpuMs = 0;
+    // not gameplay: background, device lost, just after a Reset / focus / state change, loading
+    const bool fg = windowInFront();
+    if (fg && !g_fgPrev) settleFor(1000); // back in front: the first second is the game catching up
+    if (!fg || !g_fgPrev) f.skip |= perf::kSkipUnfocused;
+    g_fgPrev = fg;
+    if (g_presentFailed) f.skip |= perf::kSkipLost;
+    if (tPre < g_settleUntil || g_tPrevPre < g_settleUntil) f.skip |= perf::kSkipSettle;
+    const int gs = g_host->get_game_state();
+    if (gs == HORIZON_STATE_LOADING || gs == HORIZON_STATE_UNKNOWN) f.skip |= perf::kSkipLoading;
     if (perf::d3d::attached()) {
         perf::d3d::endFrame(f.calls);
         f.hasCalls = S.count && callsAllowed();
@@ -666,16 +766,19 @@ void finishFrame(double tPre) {
             sum.drawsSoftwareVP += x.calls.drawsSoftwareVP;
         }
         const perf::Summary s = perf::summarize(g_ring.last(n));
+        char left[96] = "";
+        if (s.skipped)
+            snprintf(left, sizeof(left), "; %u frames left out (background, loading, after a Reset)", static_cast<unsigned>(s.skipped));
         if (withCalls) {
             const double k = 1.0 / static_cast<double>(withCalls);
             logf(HORIZON_LOG_INFO,
                  "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms; per frame: %.0f draws (%.0f software VP), "
-                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f",
+                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f%s",
                  s.avgFps, s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, sum.draws * k, sum.drawsSoftwareVP * k,
-                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k);
+                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k, left);
         } else {
-            logf(HORIZON_LOG_INFO, "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms, limiter %.2f ms", s.avgFps,
-                 s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, s.sleepMsAvg);
+            logf(HORIZON_LOG_INFO, "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms, limiter %.2f ms%s", s.avgFps,
+                 s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, s.sleepMsAvg, left);
         }
     }
 }
@@ -704,8 +807,9 @@ void HORIZON_CALL cbPrePresent(void*, void* device) {
     }
 }
 
-void HORIZON_CALL cbPostPresent(void*, void*, int32_t) {
+void HORIZON_CALL cbPostPresent(void*, void*, int32_t hr) {
     const double t = perf::sys::nowMs();
+    g_presentFailed = hr < 0;
     g_tPost = t;
     g_presentMs = t - g_tPre;
     if (perf::d3d::attached()) perf::d3d::setOverlay(false);
@@ -803,8 +907,89 @@ void HORIZON_CALL drawOverlayPanel(void*) {
         ImGui::TextDisabled("locks %u (%.2f ms)  readback %u  GPU wait %.2f ms  filtered %u", c.locks, c.lockMs, c.readbacks, c.queryWaitMs,
                             c.filtered);
     }
-    if (g_bench == Bench::Series) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", g_benchStatus.c_str());
-    else if (g_bench != Bench::Idle) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Benchmark: %s", g_benchStatus.c_str());
+    std::string l1, l2;
+    if (g_reqFromLauncher && bannerLines(l1, l2)) {
+        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", l1.c_str());
+        if (!l2.empty()) ImGui::TextDisabled("%s", l2.c_str());
+    } else if (g_bench != Bench::Idle) {
+        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Benchmark: %s", g_benchStatus.c_str());
+    }
+}
+
+// The benchmark's line at the top of the screen: always visible while a launcher request waits or runs (the
+// frame-time window may be off or docked in the menu), and 20 s after the end.
+bool bannerLines(std::string& l1, std::string& l2) {
+    const double now = perf::sys::nowMs();
+    const std::string key = benchKeyText();
+    char b[300];
+    if (g_bench == Bench::Idle || !g_reqFromLauncher) {
+        if (g_bench == Bench::Idle && !g_doneText.empty() && now - g_doneAt < 20000) {
+            l1 = g_doneText;
+            return true;
+        }
+        return false;
+    }
+    const std::string where = g_req.series ? g_req.series->where : g_req.mode;
+    const std::string stopKey = key.empty() ? "" : key + " bricht ab";
+    switch (g_bench) {
+    case Bench::WaitMenu:
+    case Bench::WaitRace:
+        if (where == "replay") {
+            const int minS = static_cast<int>(2 * g_req.seconds + 0.5);
+            if (g_seriesReplay.empty()) snprintf(b, sizeof(b), "Warte auf Replay: \xC3\xB6" "ffne ein Replay (mind. %d s)", minS);
+            else snprintf(b, sizeof(b), "Warte auf Replay: \xC3\xB6" "ffne %s (mind. %d s)", fileNameOf(g_seriesReplay).c_str(), minS);
+            l1 = b;
+            l2 = key.empty() ? "Startet von selbst. Sonst im Horizon-Men\xC3\xBC: Performance > Start series"
+                             : "Startet von selbst. Sonst " + key + " dr\xC3\xBC" "cken, sobald das Replay l\xC3\xA4" "uft";
+        } else if (where == "now") {
+            l1 = key.empty() ? "Benchmark bereit: Szene \xC3\xB6" "ffnen, dann im Horizon-Men\xC3\xBC Performance > Start series"
+                             : "Benchmark bereit: Szene \xC3\xB6" "ffnen, dann " + key + " dr\xC3\xBC" "cken";
+        } else {
+            l1 = g_bench == Bench::WaitMenu ? "Benchmark: warte auf das Hauptmen\xC3\xBC" : "Benchmark: Strecke l\xC3\xA4" "dt";
+        }
+        return true;
+    case Bench::Warmup:
+        snprintf(b, sizeof(b), "Benchmark startet in %.0f s", g_req.warmup - (now - g_benchT) / 1000.0 > 0 ? g_req.warmup - (now - g_benchT) / 1000.0 : 0);
+        l1 = b;
+        l2 = stopKey;
+        return true;
+    case Bench::Series: {
+        const int left = g_series.windowsLeft();
+        const double perWindow = g_req.series->seconds + g_req.series->settle;
+        snprintf(b, sizeof(b), "%s  (noch etwa %.0f min)", g_series.waiting() ? g_benchStatus.c_str() : g_series.progress().c_str(),
+                 left * perWindow / 60.0 + 0.49);
+        l1 = b;
+        if (g_series.waiting()) l2 = "";
+        else if (g_sceneLostAt > 0) l2 = where == "map" ? "Rennen ist weg" : "Pausiert: Replay wieder \xC3\xB6" "ffnen";
+        else if (!g_fgPrev) l2 = "Pausiert: Spielfenster ist im Hintergrund";
+        else l2 = stopKey;
+        return true;
+    }
+    case Bench::Recording:
+        snprintf(b, sizeof(b), "Benchmark l\xC3\xA4" "uft: %s, Lauf %d/%d", g_req.label.c_str(), g_run, g_req.runs);
+        l1 = b;
+        l2 = stopKey;
+        return true;
+    default: return false;
+    }
+}
+
+void drawBanner() {
+    std::string l1, l2;
+    if (!g_imgui || !bannerLines(l1, l2)) return;
+    const HorizonStyle* st = g_host->style();
+    const float sc = st && st->scale > 0 ? st->scale : 1.0f;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    const ImVec2 s1 = ImGui::CalcTextSize(l1.c_str());
+    const ImVec2 s2 = l2.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(l2.c_str());
+    const float pad = 8 * sc, gap = l2.empty() ? 0 : 2 * sc;
+    const float w = (s1.x > s2.x ? s1.x : s2.x) + 2 * pad, h = s1.y + gap + s2.y + 2 * pad;
+    const ImVec2 p0((screen.x - w) * 0.5f, 40 * sc);
+    dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), IM_COL32(16, 18, 24, 225), st ? st->radius : 6 * sc);
+    dl->AddRect(p0, ImVec2(p0.x + w, p0.y + h), IM_COL32(255, 204, 77, 200), st ? st->radius : 6 * sc, 0, 1.5f * sc);
+    dl->AddText(ImVec2(p0.x + (w - s1.x) * 0.5f, p0.y + pad), IM_COL32(255, 214, 102, 255), l1.c_str());
+    if (!l2.empty()) dl->AddText(ImVec2(p0.x + (w - s2.x) * 0.5f, p0.y + pad + s1.y + gap), IM_COL32(220, 224, 232, 255), l2.c_str());
 }
 
 void registerOverlay() {
@@ -886,7 +1071,15 @@ void drawMenu() {
     if (ImGui::SliderInt("Seconds", &S.benchSeconds, 10, 120)) saveInt("bench_seconds", S.benchSeconds);
     ImGui::SetNextItemWidth(160);
     if (ImGui::InputText("Label", S.benchLabel, sizeof(S.benchLabel))) g_host->set_string(g_host->plugin, "bench_label", S.benchLabel);
-    if (ImGui::Button(g_bench == Bench::Idle ? "Start" : "Stop")) startManualBench();
+    if (requestWaiting()) {
+        if (ImGui::Button("Start series")) g_keyEdge = true;
+        ImGui::SameLine();
+        ImGui::TextDisabled("a request from bench-request.json waits: open the scene first");
+    } else if (g_reqFromLauncher && g_bench != Bench::Idle) {
+        if (ImGui::Button("Stop")) g_keyEdge = true;
+    } else if (ImGui::Button(g_bench == Bench::Idle ? "Start" : "Stop")) {
+        startManualBench();
+    }
     ImGui::SameLine();
     const char* hk = g_benchHotkey ? g_host->hotkey_text(g_host->plugin, g_benchHotkey) : "";
     ImGui::TextDisabled("records from now on%s%s", hk && *hk ? ", hotkey " : "", hk ? hk : "");
@@ -968,7 +1161,7 @@ const HorizonPluginInfo kInfo = {
     "Horizon Performance",
     "0.1.0",
     HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF,
-    HORIZON_CAP_MENU | HORIZON_CAP_DEVICE | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL,
+    HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_DEVICE | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
     "Frame times, Direct3D call counts, benchmark, frame limiter and a hang log.",
@@ -992,6 +1185,11 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     g_data = host->data_folder_w(host->plugin);
     g_competitionPatch = GetModuleHandleW(L"TMCompPatch.dll") != nullptr;
     g_hasPostPresent = host->abi_minor >= 3;
+    {
+        wchar_t v[4] = {};
+        g_assumeFront = GetEnvironmentVariableW(L"HORIZON_TEST_FOREGROUND", v, 4) && v[0] == L'1';
+        perf::stall::setAssumeFront(g_assumeFront);
+    }
     loadSettings();
     perf::sys::captureOriginals();
 
@@ -1017,7 +1215,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     host->set_device_callbacks(host->plugin, &cb);
     host->subscribe(host->plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_GAME_STATE) | HORIZON_EVENT_BIT(HORIZON_EVENT_MAP_LOADED) |
                                       HORIZON_EVENT_BIT(HORIZON_EVENT_MENU_ENTERED) | HORIZON_EVENT_BIT(HORIZON_EVENT_ONLINE_CHANGED));
-    g_benchHotkey = host->register_hotkey(host->plugin, "bench", "Benchmark start/stop", "Ctrl+F10", &onBenchHotkey, nullptr);
+    g_benchHotkey = host->register_hotkey(host->plugin, "bench", "Benchmark start/stop", "Ctrl+Shift+B", &onBenchHotkey, nullptr);
     readLauncherRequest();
     registerOverlay();
     logf(HORIZON_LOG_INFO, "started: post_present %s, timer %.2f ms, %s", g_hasPostPresent ? "yes" : "no (older host: limiter before Present)",
@@ -1038,6 +1236,10 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (g_imgui) drawMenu();
 }
 
+HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawOverlay(void) {
+    if (g_enabled) drawBanner();
+}
+
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
     if (!e || e->size < offsetof(HorizonEvent, game_state) + sizeof(uint32_t)) return;
     const double t = perf::sys::secondsSinceProcessStart();
@@ -1046,11 +1248,13 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
         const int s = static_cast<int>(e->game_state);
         perf::stall::setState(stateName(s), s == HORIZON_STATE_SOLO_RACE || s == HORIZON_STATE_NET_RACE);
         perf::stall::note("state: %s", stateName(s));
+        settleFor(1000);
         logf(HORIZON_LOG_INFO, "timeline: %s at %.1f s after the game started", stateName(s), t);
         break;
     }
     case HORIZON_EVENT_MAP_LOADED:
         perf::stall::note("map loaded: %s", e->map && e->map->name ? e->map->name : "?");
+        settleFor(1000);
         break;
     case HORIZON_EVENT_ONLINE_CHANGED:
         perf::stall::note("online: %s", e->is_online ? "yes" : "no");

@@ -11,12 +11,17 @@
 #include <vector>
 
 #include "perf_core.h"
+#include "horizon_plugin.h"
 
 namespace horizon {
 struct Json;
 }
 
 namespace perf {
+
+// Frames a series window leaves out (FrameSample::skip). Loading is not in it: the scene check covers that, and a
+// series started by its key on a game without replay detection would otherwise see "loading" all the time.
+constexpr uint8_t kSkipSeries = kSkipUnfocused | kSkipLost | kSkipSettle | kSkipScene;
 
 // The options a set can switch. All 0 = everything off / "as the game sets it". Names as in the result files.
 struct SeriesOptions {
@@ -39,6 +44,7 @@ struct SeriesPlan {
     std::string where;  // "replay" (a replay is open), "map" (the plugin starts `map`), "now" (whatever is on screen)
     std::string replay; // replay path or name; "" = the newest one in Replays\Autosaves (resolved by the plugin)
     std::string map;
+    double startAfter = -1; // "now": start this many seconds after the game start; -1 = when the start key is pressed
     double seconds = 20; // one window
     double settle = 2;   // after switching options, before recording
     int runs = 3, warmup = 1;
@@ -57,6 +63,16 @@ struct SeriesStep {
     bool warmup = false;
     int run = 0;      // 1-based measured run (0 for warm-up)
 };
+// ---- start condition of a launcher request (bench-request.json), pure logic for the tests
+// Scene: the game shows what the request asks for (replay: the host reports a replay; map: the solo race).
+// Key: the player pressed the benchmark key (the plugin cannot see the scene, e.g. a replay on Sunrise, or
+// on ESWC before the host knew the replay viewer); from then on the scene is not checked.
+enum class StartBy { None, Scene, Key };
+// gameState: HORIZON_STATE_*; keyPressed: the start key went down since the last frame.
+StartBy benchStartBy(const std::string& where, int gameState, bool keyPressed);
+// While the series runs: does this frame show what is measured?
+bool benchSceneOk(const std::string& where, StartBy by, int gameState);
+
 // rounds = warmup + runs; round r visits the sets starting at set (r % nSets), wrapping around
 std::vector<SeriesStep> seriesOrder(int nSets, int runs, int warmup);
 
@@ -102,7 +118,9 @@ public:
 
     // user: the user's own options, put back at the end. Returns false (and why) with no usable set.
     bool start(const SeriesPlan& plan, const SeriesCaps& caps, const SeriesOptions& user, double nowMs, SeriesIO& io, std::string& why);
-    // Once per frame while the series runs. frame: the frame just finished (null for a loading hitch).
+    // Once per frame while the series runs. frame: the frame just finished (null for a loading hitch). Settle and
+    // window time count only frames without kSkipSeries bits: the window continues after a focus change, a replay
+    // restart or a short loss of the scene instead of measuring it.
     void tick(double nowMs, const FrameSample* frame, SeriesIO& io);
     // The scene is gone (replay closed): drop the current window, wait for resume().
     void pause();
@@ -113,6 +131,7 @@ public:
     bool waiting() const { return phase_ == Phase::Waiting; }
     Phase phase() const { return phase_; }
     std::string progress() const; // "Benchmark 7/21: priority-high, Lauf 2/3"
+    int windowsLeft() const;       // this one included
     const std::vector<SeriesRun>& runs() const { return results_; }
     const SeriesPlan& plan() const { return plan_; }
     const std::vector<SeriesSet>& activeSets() const { return active_; }
@@ -132,6 +151,7 @@ private:
     std::vector<SeriesStep> steps_;
     size_t step_ = 0;
     double t0_ = 0;
+    double settledMs_ = 0, recordedMs_ = 0; // scene time in the current settle / window
     std::string started_;
     std::vector<FrameSample> frames_;
     std::vector<SeriesRun> results_;        // skipped sets first (run = 0, skipped), then every window in order

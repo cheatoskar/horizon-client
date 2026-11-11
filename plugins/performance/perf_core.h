@@ -42,7 +42,17 @@ struct FrameSample {
     double cpuMs = 0;     // the rest: the game's own work for this frame
     CallCounts calls;
     bool hasCalls = false;
+    uint8_t skip = 0;     // kSkip* bits: why this frame is not gameplay (left out of the statistics)
 };
+
+// Frames that say nothing about how the game runs: the window was in the background or minimised, Present
+// failed (device lost, Alt+Tab out of full screen), the first second after a Reset, a focus change or a game
+// state change, the game was loading, or (benchmark series) the scene to measure was not on screen.
+constexpr uint8_t kSkipUnfocused = 0x01, kSkipLost = 0x02, kSkipSettle = 0x04, kSkipLoading = 0x08, kSkipScene = 0x10;
+constexpr uint8_t kSkipStats = kSkipUnfocused | kSkipLost | kSkipSettle | kSkipLoading; // live numbers and the log line
+// A stutter: a frame at least twice the median AND at least this much longer than it. At 400 fps (2.5 ms) the
+// factor alone counted every 5 ms frame, thousands per minute in menus, none of them visible.
+constexpr double kStutterMinExtraMs = 6.0;
 
 class FrameRing {
 public:
@@ -73,14 +83,17 @@ struct Summary {
     double avgFps = 0;
     double low1Fps = 0;  // 1000 / mean of the slowest 1 % of frame times
     double low01Fps = 0; // the same for the slowest 0.1 %
-    size_t stutters = 0; // frames longer than 2x the median
+    size_t stutters = 0; // frames longer than 2x the median and at least kStutterMinExtraMs longer than it
     double presentMsAvg = 0, cpuMsAvg = 0, sleepMsAvg = 0;
     double drawsPerFrame = -1; // -1: counting was off
+    size_t skipped = 0;  // frames left out (FrameSample::skip & mask)
 };
 
 // Percentile of a sorted vector (nearest rank, p in 0..100).
 double percentileSorted(const std::vector<double>& sorted, double p);
-Summary summarize(const std::vector<FrameSample>& frames);
+// Frames with (skip & skipMask) != 0 are left out (counted in Summary::skipped).
+Summary summarize(const std::vector<FrameSample>& frames, uint8_t skipMask = kSkipStats);
+bool isStutter(double frameMs, double medianMs);
 
 // ------------------------------------------------------------------ frame limiter maths
 // Deadlines on a fixed grid of `period` seconds. A frame that comes late by more than one period

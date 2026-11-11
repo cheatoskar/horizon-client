@@ -31,6 +31,13 @@ std::vector<Queued> g_queue;
 Plugin* fromHandle(HorizonPluginHandle h) { return reinterpret_cast<Plugin*>(h); }
 
 // ---------------------------------------------------------------- guarded calls (no C++ objects inside)
+// A benchmark request for Horizon Performance is waiting (written by tools/bench_series.ps1 or TM Horizon).
+bool benchRequestWaiting() {
+    const std::wstring path = state().dataRoot + L"data\\performance\\bench-request.json";
+    const DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 bool sehInfo(HorizonPlugin_InfoFn fn, const HorizonPluginInfo** out) {
     __try {
         *out = fn();
@@ -615,6 +622,29 @@ void pluginsLoadAll() {
             p->status = ui::PluginStatus::Off;
             p->statusText = "off in TM Horizon";
             logLine(HORIZON_LOG_INFO, p->id.c_str(), "not loaded: not enabled in profile.json");
+            if (p->id == "performance" && benchRequestWaiting()) {
+                logLine(HORIZON_LOG_WARN, p->id.c_str(), "a benchmark request is waiting, but TM Horizon has the module off");
+                HorizonToast t = {};
+                t.size = sizeof(t);
+                t.kind = HORIZON_TOAST_WARN;
+                t.title = "Benchmark wartet";
+                t.text = "Performance-Modul in TM Horizon einschalten.";
+                toastsPush("host", t);
+            }
+            continue;
+        }
+        if (!local && p->id == "performance" && benchRequestWaiting()) {
+            // tools/bench_series.ps1 (or TM Horizon) left a benchmark request: the module runs for this start only,
+            // the switch in the menu stays where it was
+            logLine(HORIZON_LOG_INFO, p->id.c_str(), "on for this start only: a benchmark request is waiting (data\\performance\\bench-request.json)");
+            HorizonToast t = {};
+            t.size = sizeof(t);
+            t.kind = HORIZON_TOAST_INFO;
+            t.title = "Benchmark wartet";
+            t.text = "Performance-Modul ist f\xC3\xBCr diesen Start eingeschaltet.";
+            toastsPush("host", t);
+            p->enabled = true;
+            loadOne(p);
             continue;
         }
         if (!local) {

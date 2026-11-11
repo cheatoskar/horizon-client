@@ -104,6 +104,7 @@ bool parseSeries(const horizon::Json& j, SeriesPlan& out, std::string& why) {
     }
     if (const auto* v = j.get("seconds"); v && v->isNumber()) p.seconds = v->num;
     if (const auto* v = j.get("settle"); v && v->isNumber()) p.settle = v->num;
+    if (const auto* v = j.get("startAfter"); v && v->isNumber()) p.startAfter = v->num;
     if (const auto* v = j.get("runs")) p.runs = static_cast<int>(v->asInt(p.runs));
     if (const auto* v = j.get("warmup")) p.warmup = static_cast<int>(v->asInt(p.warmup));
     if (const auto* v = j.get("returnToMenu"); v && v->type == horizon::Json::Bool) p.returnToMenu = v->b;
@@ -157,6 +158,19 @@ bool parseSeries(const horizon::Json& j, SeriesPlan& out, std::string& why) {
     }
     out = p;
     return true;
+}
+
+StartBy benchStartBy(const std::string& where, int gameState, bool keyPressed) {
+    if (keyPressed) return StartBy::Key;
+    if (where == "replay" && gameState == HORIZON_STATE_REPLAY) return StartBy::Scene;
+    if (where == "map" && gameState == HORIZON_STATE_SOLO_RACE) return StartBy::Scene;
+    return StartBy::None; // "now": only by its key (or startAfter, handled by the plugin)
+}
+
+bool benchSceneOk(const std::string& where, StartBy by, int gameState) {
+    if (by == StartBy::Key || where == "now") return true;
+    if (where == "replay") return gameState == HORIZON_STATE_REPLAY;
+    return gameState == HORIZON_STATE_SOLO_RACE || gameState == HORIZON_STATE_END_RACE;
 }
 
 std::vector<SeriesStep> seriesOrder(int nSets, int runs, int warmup) {
@@ -225,6 +239,7 @@ void Series::beginStep(double nowMs, SeriesIO& io) {
     io.apply(effective(active_[steps_[step_].set].options));
     phase_ = Phase::Settle;
     t0_ = nowMs;
+    settledMs_ = recordedMs_ = 0;
     frames_.clear();
 }
 
@@ -239,7 +254,9 @@ void Series::tick(double nowMs, const FrameSample* frame, SeriesIO& io) {
     const SeriesSet& set = active_[st.set];
     switch (phase_) {
     case Phase::Settle: {
-        if (nowMs - t0_ < plan_.settle * 1000.0) return;
+        // the time counts in frames that show the scene (background, loading, a replay restart: not)
+        if (frame && !(frame->skip & kSkipSeries)) settledMs_ += frame->frameMs;
+        if (settledMs_ < plan_.settle * 1000.0) return;
         const std::string why = io.unavailable(set.options);
         if (!why.empty()) {
             unavailable_[st.set] = 1;
@@ -254,14 +271,19 @@ void Series::tick(double nowMs, const FrameSample* frame, SeriesIO& io) {
         }
         phase_ = Phase::Recording;
         t0_ = nowMs;
+        recordedMs_ = 0;
         frames_.clear();
         frames_.reserve(static_cast<size_t>(plan_.seconds * 400));
         started_ = io.isoNow();
         return;
     }
     case Phase::Recording: {
-        if (frame) frames_.push_back(*frame);
-        if (nowMs - t0_ < plan_.seconds * 1000.0) return;
+        // a window is `seconds` of frames that show the scene: skipped frames neither count nor end it
+        if (frame && !(frame->skip & kSkipSeries)) {
+            frames_.push_back(*frame);
+            recordedMs_ += frame->frameMs;
+        }
+        if (recordedMs_ < plan_.seconds * 1000.0) return;
         SeriesRun r;
         r.set = st.set;
         r.label = set.label;
@@ -274,7 +296,7 @@ void Series::tick(double nowMs, const FrameSample* frame, SeriesIO& io) {
             r.note += (r.note.empty() ? "" : "; ");
             r.note += "vsync not applied (needs restart)";
         }
-        r.summary = summarize(frames_);
+        r.summary = summarize(frames_, kSkipSeries);
         results_.push_back(r);
         io.runDone(results_.back(), frames_);
         advance(nowMs, io);
@@ -295,6 +317,7 @@ void Series::resume(double nowMs) {
     if (phase_ != Phase::Waiting) return;
     phase_ = Phase::Settle;
     t0_ = nowMs;
+    settledMs_ = recordedMs_ = 0;
     frames_.clear();
 }
 
@@ -323,6 +346,14 @@ std::string Series::progress() const {
     if (st.warmup) snprintf(b, sizeof(b), "Benchmark Warmup %d/%d: %s", widx, wtot, label.c_str());
     else snprintf(b, sizeof(b), "Benchmark %d/%d: %s, Lauf %d/%d", midx, mtot, label.c_str(), st.run, plan_.runs);
     return b;
+}
+
+int Series::windowsLeft() const {
+    if (!active()) return 0;
+    int n = 0;
+    for (size_t i = step_; i < steps_.size(); i++)
+        if (!unavailable_[steps_[i].set]) n++;
+    return n;
 }
 
 // ------------------------------------------------------------------ the series file

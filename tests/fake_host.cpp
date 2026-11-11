@@ -119,7 +119,8 @@ void HORIZON_CALL f_subscribe(HorizonPluginHandle, uint32_t mask) { g_subscribed
 void HORIZON_CALL f_post_replay_saved(HorizonPluginHandle, const char* path) { printf("  replay saved posted: %s\n", path); }
 HorizonResult HORIZON_CALL f_play_map_file(HorizonPluginHandle, const char*, uint32_t) { return HORIZON_ERR_NOT_SUPPORTED; }
 HorizonResult HORIZON_CALL f_return_to_menu(HorizonPluginHandle) { return HORIZON_ERR_NOT_SUPPORTED; }
-int32_t HORIZON_CALL f_get_game_state(void) { return HORIZON_STATE_MAIN_MENU; }
+int32_t g_gameState = HORIZON_STATE_MAIN_MENU; // the performance scenarios change it
+int32_t HORIZON_CALL f_get_game_state(void) { return g_gameState; }
 int32_t HORIZON_CALL f_is_online(void) { return 0; }
 int32_t HORIZON_CALL f_actions_allowed(HorizonPluginHandle) { return 1; }
 void HORIZON_CALL f_run_on_game_thread(HorizonPluginHandle, HorizonCallback cb, void* user) {
@@ -127,7 +128,11 @@ void HORIZON_CALL f_run_on_game_thread(HorizonPluginHandle, HorizonCallback cb, 
     g_queue.push_back({cb, user});
 }
 void* HORIZON_CALL f_device(void) { return nullptr; }
-void HORIZON_CALL f_set_device_callbacks(HorizonPluginHandle, const HorizonDeviceCallbacks*) {}
+HorizonDeviceCallbacks g_devCb = {}; // the performance scenarios drive pre/post_present with it
+void HORIZON_CALL f_set_device_callbacks(HorizonPluginHandle, const HorizonDeviceCallbacks* cb) {
+    if (cb) g_devCb = *cb;
+    else g_devCb = HorizonDeviceCallbacks{};
+}
 int32_t HORIZON_CALL f_menu_open(void) { return 1; }
 void HORIZON_CALL f_request_restart_note(HorizonPluginHandle, const char* why) { printf("  restart note: %s\n", why); }
 int32_t HORIZON_CALL f_reflect_offset(const char*, const char*) { return -1; }
@@ -577,6 +582,96 @@ void fireFinishAndEnd(HorizonPlugin_OnEventFn onEvent) {
     flushQueue();
 }
 
+// Horizon Performance: a benchmark series from bench-request.json must start when a replay plays (the host reports
+// HORIZON_STATE_REPLAY) and, on a game where it cannot see the replay (Sunrise: "loading"), by the benchmark key.
+// While it waits, its line is drawn on screen (DrawOverlay, independent of the frame-time window).
+void perfFrames(int count, int sleepMs) {
+    for (int i = 0; i < count; i++) {
+        if (g_devCb.pre_present) g_devCb.pre_present(g_devCb.user, nullptr);
+        if (g_devCb.post_present) g_devCb.post_present(g_devCb.user, nullptr, 0);
+        Sleep(static_cast<DWORD>(sleepMs));
+        flushQueue();
+    }
+}
+
+int perfBanner(HMODULE mod) {
+    auto draw = proc<HorizonPlugin_DrawOverlayFn>(mod, HORIZON_EXPORT_DRAW_OVERLAY);
+    if (!draw) return -1;
+    int vtx = 0;
+    for (int frame = 0; frame < 2; frame++) {
+        ImGui::NewFrame();
+        draw();
+        vtx = ImGui::GetForegroundDrawList()->VtxBuffer.Size;
+        ImGui::Render();
+    }
+    return vtx;
+}
+
+bool waitLog(const char* part, int maxFrames) {
+    for (int i = 0; i < maxFrames && !logHas(part); i++) perfFrames(1, 5);
+    return logHas(part);
+}
+
+bool seriesFileWritten() {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((g_dataFolder + "bench\\*_series.json").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    FindClose(h);
+    return true;
+}
+
+void perfScenarios(const char* dll, HorizonHostApi* host, bool replayDetected) {
+    const char* req = "{\"version\": 1, \"label\": \"series\", \"series\": {\"mode\": \"replay\", \"seconds\": 1, \"settle\": 0.1, "
+                      "\"runs\": 1, \"warmup\": 0, \"sets\": [{\"label\": \"baseline\"}]}}";
+    // old results out of the way
+    const std::string bench = g_dataFolder + "bench\\";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((bench + "*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) DeleteFileA((bench + fd.cFileName).c_str());
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (FILE* f = fopen((g_dataFolder + "bench-request.json").c_str(), "wb")) {
+        fputs(req, f);
+        fclose(f);
+    }
+    printf("performance scenario: series in replay mode, %s\n", replayDetected ? "the host reports the replay" : "the replay is not visible (started by the key)");
+    g_gameState = HORIZON_STATE_MAIN_MENU;
+    g_devCb = HorizonDeviceCallbacks{};
+    ScenarioRun r = scenarioStart(dll, host, true);
+    check(r.init == 0 && g_devCb.pre_present && g_devCb.post_present, "Init ok, device callbacks set");
+    check(logHas("benchmark series from the launcher"), "the request was read");
+    if (r.init != 0 || !g_devCb.pre_present) {
+        scenarioStop(r);
+        return;
+    }
+    // waiting in the menu: no start, the line is on screen
+    perfFrames(40, 5);
+    check(!logHas("benchmark: starting"), "main menu: the series waits");
+    check(perfBanner(r.mod) > 0, "waiting: the benchmark line is drawn (DrawOverlay)");
+    check(!g_hotkeys.empty() && g_hotkeys[0].key == "Ctrl+Shift+B", "benchmark key Ctrl+Shift+B (Ctrl+F10 belongs to Legacy Randomizer)");
+    // the replay plays
+    g_gameState = replayDetected ? HORIZON_STATE_REPLAY : HORIZON_STATE_LOADING;
+    perfFrames(40, 5);
+    if (replayDetected) {
+        check(logHas("benchmark: starting (the scene is on screen"), "replay state: the series starts by itself");
+    } else {
+        check(!logHas("benchmark: starting"), "loading (replay not visible): no start by itself");
+        for (auto& k : g_hotkeys)
+            if (k.action == "bench") k.cb(k.user);
+        perfFrames(2, 5);
+        check(logHas("benchmark: starting (by its key"), "the benchmark key starts it");
+    }
+    check(waitLog("benchmark series started", 1200), "warm-up over: series started");
+    check(perfBanner(r.mod) > 0, "running: the progress line is drawn");
+    check(waitLog("benchmark series done", 1200), "series done");
+    check(seriesFileWritten(), "series file written in bench\\");
+    scenarioStop(r);
+    g_gameState = HORIZON_STATE_MAIN_MENU;
+}
+
 void autosaveScenarios(const char* dll, HorizonHostApi* host) {
     printf("scenario 1: default settings, nothing else installed\n");
     {
@@ -920,6 +1015,8 @@ int main(int argc, char** argv) {
     flushQueue();
     const std::string pluginName = pi->name; // pi points into the DLL
     check(FreeLibrary(mod) != 0, "FreeLibrary");
+    if (g_pluginId == "performance" && (g_gameInfo.game == HORIZON_GAME_ESWC || g_gameInfo.game == HORIZON_GAME_SUNRISE))
+        perfScenarios(dll, &host, g_gameInfo.game == HORIZON_GAME_ESWC);
     if (g_pluginId == "eswc-autosave" && g_gameInfo.game == HORIZON_GAME_ESWC) {
         check(pluginName == "Autosave & Login-Fix", "display name: Autosave & Login-Fix");
         autosaveScenarios(dll, &host);
