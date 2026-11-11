@@ -6,6 +6,8 @@
 //       game's (HAL, mixed vertex processing), 150 frames of a test scene with repeated states, locks and an
 //       event query polled like the engine's GPU sync. Writes the scene checksum and the measured frame time
 //       to <out.txt>; with "stall" the main thread also sleeps 2.5 s once (the hang log must catch it).
+//       With "series" the plugin also runs a benchmark series (request in "now" mode, 4 sets, 1 s windows) and the
+//       series file, the per-run files and the restored options are checked.
 //   perf_test compare <a.txt> <b.txt>      same scene checksum (the state filter changes nothing on screen)
 //   perf_test limit <a.txt> <fps>          measured average frame time within 4 % of 1000/fps
 // Exit code 0 = passed.
@@ -19,6 +21,8 @@
 #include <vector>
 
 #include "../plugins/performance/perf_core.h"
+#include "../plugins/performance/series.h"
+#include "common/json.h"
 
 static int g_failed = 0, g_passed = 0;
 #define CHECK(cond)                                                    \
@@ -196,6 +200,218 @@ static void testFiles() {
     CHECK(js.find("\"drawsPerFrame\": 590.0") != std::string::npos);
 }
 
+// ---- benchmark series: state machine against a fake host
+struct FakeIO : perf::SeriesIO {
+    std::vector<perf::SeriesOptions> applied;
+    std::vector<std::string> labels;
+    std::vector<int> runNos;
+    std::vector<size_t> frameCounts;
+    std::string blockFilter;
+    bool finishedCalled = false, completed = false;
+    std::string why;
+    void apply(const perf::SeriesOptions& o) override { applied.push_back(o); }
+    std::string unavailable(const perf::SeriesOptions& o) override { return o.filter ? blockFilter : std::string(); }
+    std::string note(const perf::SeriesOptions& o) override { return o.affinity ? "no hybrid CPU found: all cores" : ""; }
+    std::string isoNow() override { return "2026-11-12T10:00:00"; }
+    void runDone(perf::SeriesRun& r, const std::vector<perf::FrameSample>& frames) override {
+        labels.push_back(r.label);
+        runNos.push_back(r.run);
+        frameCounts.push_back(frames.size());
+        r.file = "f" + std::to_string(labels.size()) + ".json";
+    }
+    void finished(bool c, const std::string& w) override {
+        finishedCalled = true;
+        completed = c;
+        why = w;
+    }
+};
+
+// 10 ms frames until the series ends (or maxMs of fake time passed)
+static double driveSeries(perf::Series& s, FakeIO& io, double t, double maxMs) {
+    const double end = t + maxMs;
+    while (s.active() && t < end) {
+        perf::FrameSample f;
+        f.frameMs = 10;
+        t += 10;
+        s.tick(t, &f, io);
+    }
+    return t;
+}
+
+static perf::SeriesSet mkSet(const char* label, int priority, int filter, int vsync) {
+    perf::SeriesSet s;
+    s.label = label;
+    s.options.priority = priority;
+    s.options.filter = filter;
+    s.options.vsync = vsync;
+    return s;
+}
+
+static void testSeries() {
+    // rotation: every round starts one set later
+    const std::vector<perf::SeriesStep> o = perf::seriesOrder(3, 1, 1);
+    CHECK(o.size() == 6);
+    const int want[6] = {0, 1, 2, 1, 2, 0};
+    bool same = o.size() == 6;
+    for (size_t i = 0; same && i < 6; i++) same = o[i].set == want[i];
+    CHECK(same);
+    CHECK(o[0].warmup && o[2].warmup && !o[3].warmup && o[3].run == 1 && o[5].run == 1);
+    CHECK(perf::seriesOrder(0, 3, 1).empty());
+
+    // request parsing: defaults, custom sets, errors
+    perf::BenchRequest r;
+    std::string why;
+    CHECK(perf::parseBenchRequest(R"({"version":1,"series":{"replay":"x.Replay.Gbx","runs":3,"warmup":1}})", r, why) && r.series);
+    CHECK(r.series->sets.size() == 7 && r.series->sets[0].label == "baseline" && r.series->sets[0].options.allOff());
+    CHECK(r.series->sets[1].options.limitFps == 120 && r.series->sets[1].options.vsync == 1);
+    CHECK(r.series->sets[2].options.priority == 2 && r.series->sets[3].options.affinity == 2 && r.series->sets[4].options.filter == 1);
+    CHECK(r.series->sets[5].options.fineTimer == 1 && r.series->sets[6].options.powerThrottlingOff == 1);
+    CHECK(r.series->where == "replay" && r.series->seconds == 20 && r.series->settle == 2 && r.mode == "replay" && r.runs == 3);
+    CHECK(perf::parseBenchRequest(R"({"version":1,"series":{"map":"C:\\m.Challenge.Gbx","seconds":1,"settle":0.5,
+        "sets":[{"label":"a"},{"label":"b","options":{"priority":2,"fineTimer":true}}]}})", r, why));
+    CHECK(r.series->where == "map" && r.mode == "map" && r.series->sets.size() == 2 && r.series->sets[1].options.fineTimer == 1);
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a","options":{"turbo":1}}]}})", r, why));
+    CHECK(why.find("turbo") != std::string::npos);
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a"},{"label":"a"}]}})", r, why));
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"mode":"map"}})", r, why));
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"runs":0}})", r, why));
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a","options":{"limitFps":5}}]}})", r, why));
+
+    // full run: 3 sets, the third needs a restart (V-Sync only); 1 warm-up + 2 runs
+    {
+        perf::SeriesPlan plan;
+        plan.where = "now";
+        plan.seconds = 1;
+        plan.settle = 0.2;
+        plan.runs = 2;
+        plan.warmup = 1;
+        plan.sets = {mkSet("baseline", 0, 0, 0), mkSet("prio", 2, 0, 0), mkSet("vs", 0, 0, 1)};
+        perf::SeriesOptions user;
+        user.limitFps = 60;
+        user.priority = 1;
+        user.vsync = 0;
+        FakeIO io;
+        perf::Series s;
+        std::string w;
+        CHECK(s.start(plan, perf::SeriesCaps{}, user, 0, io, w));
+        CHECK(s.progress() == "Benchmark Warmup 1/2: baseline");
+        CHECK(io.applied.size() == 1 && io.applied[0].allOff()); // the user's limit and priority are not carried into the baseline
+        driveSeries(s, io, 0, 60000);
+        CHECK(s.phase() == perf::Series::Phase::Done && io.finishedCalled && io.completed);
+        const char* wl[6] = {"baseline", "prio", "prio", "baseline", "baseline", "prio"};
+        const int wn[6] = {0, 0, 1, 1, 2, 2};
+        bool ok = io.labels.size() == 6;
+        for (size_t i = 0; ok && i < 6; i++) ok = io.labels[i] == wl[i] && io.runNos[i] == wn[i];
+        CHECK(ok); // interleaved: baseline is first, then second, then first again
+        bool frames = true;
+        for (size_t n : io.frameCounts) frames = frames && n >= 90 && n <= 100;
+        CHECK(frames);
+        // every window switched the options (6), the last call put the user's own back
+        CHECK(io.applied.size() == 7);
+        CHECK(io.applied.back() == user);
+        CHECK(io.applied[1].priority == 2 && io.applied[1].limitFps == 0);
+        // the restart-only set is reported, not run
+        bool skipped = false;
+        for (const auto& x : s.runs())
+            if (x.skipped && x.label == "vs" && x.skipReason == "needs restart: vsync") skipped = true;
+        CHECK(skipped);
+        CHECK(s.activeSets().size() == 2);
+        perf::SeriesMeta m;
+        m.stamp = "20261112-100000";
+        m.game = "tmnf";
+        m.gpu = "Test GPU";
+        m.cpu = "Test CPU";
+        m.resolution = "1920x1080";
+        m.completed = true;
+        const std::string js = perf::seriesJson(plan, s.activeSets(), s.runs(), m);
+        CHECK(js.find("\"kind\": \"series\"") != std::string::npos && js.find("\"gpu\": \"Test GPU\"") != std::string::npos);
+        CHECK(js.find("\"status\": \"skipped\"") != std::string::npos && js.find("needs restart: vsync") != std::string::npos);
+        CHECK(js.find("\"warmup\": true") != std::string::npos && js.find("\"file\": \"f3.json\"") != std::string::npos);
+        horizon::Json parsed;
+        std::string err;
+        CHECK(horizon::JsonParser::parse(js, parsed, err));
+        const horizon::Json* runs = parsed.get("runs");
+        CHECK(runs && runs->arr.size() == 6);
+    }
+
+    // a set the plugin finds unavailable after the settle time (state filter blocked) is skipped once, then silently
+    {
+        perf::SeriesPlan plan;
+        plan.where = "now";
+        plan.seconds = 1;
+        plan.settle = 0.1;
+        plan.runs = 2;
+        plan.warmup = 0;
+        plan.sets = {mkSet("baseline", 0, 0, 0), mkSet("filt", 0, 1, 0)};
+        FakeIO io;
+        io.blockFilter = "a wrapper d3d9.dll is in use";
+        perf::Series s;
+        std::string w;
+        CHECK(s.start(plan, perf::SeriesCaps{}, perf::SeriesOptions{}, 0, io, w));
+        CHECK(s.progress() == "Benchmark 1/4: baseline, Lauf 1/2");
+        driveSeries(s, io, 0, 60000);
+        CHECK(io.completed && io.labels.size() == 2 && io.labels[0] == "baseline" && io.labels[1] == "baseline");
+        int skips = 0;
+        for (const auto& x : s.runs())
+            if (x.skipped && x.label == "filt" && x.skipReason == "a wrapper d3d9.dll is in use") skips++;
+        CHECK(skips == 1);
+        CHECK(io.applied.back().allOff()); // user options (all off here) restored
+    }
+
+    // only restart-only sets: nothing to run
+    {
+        perf::SeriesPlan plan;
+        plan.where = "now";
+        plan.sets = {mkSet("vs", 0, 0, 1)};
+        FakeIO io;
+        perf::Series s;
+        std::string w;
+        CHECK(!s.start(plan, perf::SeriesCaps{}, perf::SeriesOptions{}, 0, io, w) && !w.empty());
+        // V-Sync already off in the running game: the same set needs no restart and runs
+        perf::SeriesOptions user;
+        user.vsync = 1;
+        perf::SeriesCaps caps;
+        caps.vsyncInEffect = 1;
+        CHECK(s.start(plan, caps, user, 0, io, w));
+    }
+
+    // abort and pause: options are put back, windows restart after a pause
+    {
+        perf::SeriesPlan plan;
+        plan.where = "replay";
+        plan.seconds = 1;
+        plan.settle = 0.1;
+        plan.runs = 1;
+        plan.warmup = 0;
+        plan.sets = {mkSet("baseline", 0, 0, 0), mkSet("prio", 2, 0, 0)};
+        perf::SeriesOptions user;
+        user.fineTimer = 1;
+        FakeIO io;
+        perf::Series s;
+        std::string w;
+        CHECK(s.start(plan, perf::SeriesCaps{}, user, 0, io, w));
+        double t = driveSeries(s, io, 0, 500); // inside the first window
+        s.pause();
+        CHECK(s.waiting() && s.active());
+        perf::FrameSample f;
+        f.frameMs = 10;
+        s.tick(t + 10, &f, io); // ignored while waiting
+        CHECK(io.labels.empty());
+        s.resume(t + 5000);
+        t = driveSeries(s, io, t + 5000, 60000);
+        CHECK(io.completed && io.labels.size() == 2 && io.frameCounts[0] >= 90 && io.frameCounts[0] <= 100);
+
+        FakeIO io2;
+        perf::Series s2;
+        CHECK(s2.start(plan, perf::SeriesCaps{}, user, 0, io2, w));
+        driveSeries(s2, io2, 0, 300);
+        s2.abort("the race ended", io2);
+        CHECK(s2.phase() == perf::Series::Phase::Aborted && io2.finishedCalled && !io2.completed && io2.why == "the race ended");
+        CHECK(io2.applied.back() == user);
+        CHECK(!s2.active());
+    }
+}
+
 static int unit() {
     testStats();
     testRing();
@@ -203,6 +419,7 @@ static int unit() {
     testStateCache();
     testRequest();
     testFiles();
+    testSeries();
     printf("perf unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }
@@ -337,7 +554,24 @@ static bool has(const std::string& s, const char* what) { return s.find(what) !=
 
 __declspec(noinline) static void stallInsideTestFunction() { Sleep(2500); }
 
-static int host(const std::wstring& dir, const std::wstring& outTxt, const std::wstring& shot, bool stall) {
+static bool seriesFileIn(const std::wstring& dir, std::wstring* name) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*_series.json").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    FindClose(h);
+    if (name) *name = dir + fd.cFileName;
+    return true;
+}
+static size_t countOf(const std::string& s, const char* what) {
+    size_t n = 0, pos = 0;
+    while ((pos = s.find(what, pos)) != std::string::npos) {
+        n++;
+        pos += strlen(what);
+    }
+    return n;
+}
+
+static int host(const std::wstring& dir, const std::wstring& outTxt, const std::wstring& shot, bool stall, bool series) {
     struct Info {
         unsigned api, size, flags;
         const wchar_t* path;
@@ -414,6 +648,16 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
         if (stall && i == 100) stallInsideTestFunction();
     }
     (void)t1;
+    const std::wstring benchDir = dir + L"\\horizon\\data\\performance\\bench\\";
+    if (series) { // keep rendering until the plugin has written its series file (it runs in "now" mode: no game state needed)
+        const DWORD start = GetTickCount();
+        while (GetTickCount() - start < 90000 && !seriesFileIn(benchDir, nullptr)) {
+            drawScene(dev, target, sysmem, tex, vb, query, false);
+            dev->Present(nullptr, nullptr, nullptr, nullptr);
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        }
+    }
     if (stall) { // the measured average is not meaningful with a 2.5 s pause in it
         measured = 0;
         Sleep(400); // let the watcher write the "stall end" line
@@ -446,6 +690,28 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
         if (has(settings, "\"filter\": 1")) CHECK(!has(log, "filtered 0\r\n") && !has(log, "filtered 0\n"));
         else CHECK(has(log, "filtered 0"));
     }
+    if (series) {
+        std::wstring file;
+        CHECK(seriesFileIn(benchDir, &file));
+        const std::string js = readAll(file);
+        CHECK(has(js, "\"kind\": \"series\"") && has(js, "\"completed\": true"));
+        CHECK(has(js, "\"gpu\": \"") && !has(js, "\"gpu\": \"\"") && has(js, "\"cpu\": \"") && !has(js, "\"cpu\": \"\""));
+        CHECK(has(js, "\"resolution\": \"") && !has(js, "\"resolution\": \"\""));
+        CHECK(has(js, "\"tmvs\": false") && has(js, "\"mode\": \"now\""));
+        // 3 sets that run (baseline, prio, filt) x (1 warm-up + 2 runs); "vs" needs a restart
+        CHECK(countOf(js, "\"warmup\": true") == 3 && countOf(js, "\"warmup\": false") == 6);
+        CHECK(has(js, "\"label\": \"vs\"") && has(js, "\"status\": \"skipped\"") && has(js, "needs restart: vsync"));
+        // per-run files with the options that were on in that window
+        const std::string filt = readAll(benchDir + file.substr(benchDir.size(), 15) + L"_series_filt_r1.json");
+        CHECK(has(filt, "\"filter\": 1") && has(filt, "\"request\": \"series\"") && has(filt, "\"priority\": 0"));
+        const std::string prio = readAll(benchDir + file.substr(benchDir.size(), 15) + L"_series_prio_r2.json");
+        CHECK(has(prio, "\"priority\": 2") && has(prio, "\"filter\": 0"));
+        const std::string base = readAll(benchDir + file.substr(benchDir.size(), 15) + L"_series_baseline_w1.json");
+        CHECK(has(base, "\"priority\": 0") && has(base, "\"avgFps\""));
+        CHECK(has(log, "benchmark series started") && has(log, "benchmark series done"));
+        // the user's own settings are back: priority class normal again
+        CHECK(GetPriorityClass(GetCurrentProcess()) == NORMAL_PRIORITY_CLASS);
+    }
     if (stall) {
         const std::string hangs = readAll(dir + L"\\horizon\\data\\performance\\hangs.log");
         CHECK(has(hangs, "stall: no frame for"));
@@ -476,12 +742,13 @@ int wmain(int argc, wchar_t** argv) {
     if (argc >= 2 && !wcscmp(argv[1], L"unit")) return unit();
     if (argc >= 4 && !wcscmp(argv[1], L"host")) {
         std::wstring shot;
-        bool stall = false;
+        bool stall = false, series = false;
         for (int i = 4; i < argc; i++) {
             if (!wcscmp(argv[i], L"stall")) stall = true;
+            else if (!wcscmp(argv[i], L"series")) series = true;
             else shot = argv[i];
         }
-        const int r = host(argv[2], argv[3], shot, stall);
+        const int r = host(argv[2], argv[3], shot, stall, series);
         TerminateProcess(GetCurrentProcess(), static_cast<UINT>(r)); // the host's threads stay until the process ends
         return r;
     }
@@ -500,6 +767,6 @@ int wmain(int argc, wchar_t** argv) {
         printf("%s limiter: %.3f ms per frame, target %.3f ms\n", ok ? "PASS" : "FAIL", ms, fps > 0 ? 1000.0 / fps : 0.0);
         return ok ? 0 : 1;
     }
-    printf("usage: perf_test unit | host <dir> <out.txt> [shot.png] [stall] | compare <a> <b> | limit <a> <fps>\n");
+    printf("usage: perf_test unit | host <dir> <out.txt> [shot.png] [stall] [series] | compare <a> <b> | limit <a> <fps>\n");
     return 2;
 }

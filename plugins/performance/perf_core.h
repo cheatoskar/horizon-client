@@ -8,10 +8,13 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace perf {
+
+struct SeriesPlan; // series.h
 
 // Per-frame counters of Direct3D 9 calls (filled by d3d_hooks.cpp while counting is on).
 struct CallCounts {
@@ -186,6 +189,7 @@ struct BenchRequest {
     std::string label = "run";
     int runs = 1;
     bool returnToMenu = true;
+    std::shared_ptr<SeriesPlan> series; // set: a benchmark series ("series" in the request), mode/map/seconds follow it
 };
 // false (and why) when the text is not a usable request
 bool parseBenchRequest(const std::string& json, BenchRequest& out, std::string& why);

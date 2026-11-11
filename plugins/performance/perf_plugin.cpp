@@ -14,6 +14,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <intrin.h>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@
 
 #include "d3d_hooks.h"
 #include "perf_core.h"
+#include "series.h"
 #include "stall.h"
 #include "sysopts.h"
 
@@ -37,6 +39,7 @@ bool g_hasPostPresent = false;
 std::wstring g_data;     // data folder, trailing backslash
 uint32_t g_game = 0;
 std::string g_gameKey;   // "tmnf" ...
+std::wstring g_userFolder; // the game's user data folder (Documents\TrackMania...), trailing backslash, "" unknown
 
 // ---- settings (names are the keys in horizon\settings\performance.json)
 struct Settings {
@@ -94,7 +97,7 @@ double g_liveAt = 0;
 HWND g_window = nullptr;
 
 // ---- benchmark
-enum class Bench { Idle, WaitMenu, WaitRace, Warmup, Recording };
+enum class Bench { Idle, WaitMenu, WaitRace, Warmup, Recording, Series };
 Bench g_bench = Bench::Idle;
 perf::BenchRequest g_req;
 bool g_reqFromLauncher = false;
@@ -103,6 +106,12 @@ double g_benchT = 0;       // when the current step started (ms)
 std::vector<perf::FrameSample> g_recorded;
 std::string g_benchStatus = "";
 std::string g_lastResult = "";
+// series (docs/performance.md, "Benchmark series")
+perf::Series g_series;
+perf::SeriesMeta g_seriesMeta;
+bool g_seriesHooks = false;   // the series needs the Direct3D hooks in every window (filter / count sets)
+bool g_forceOverlay = false;  // the progress line lives in the frame-time window: show it during a series
+std::string g_seriesReplay;   // replay path chosen for the series ("" none)
 
 std::string isoNow() {
     SYSTEMTIME st;
@@ -158,6 +167,14 @@ std::vector<std::pair<std::string, std::string>> optionList() {
             {"wrapperD3d9", i(perf::d3d::filterBlockedWhy()[0] != 0)}};
 }
 
+std::string narrow(const std::wstring& w) {
+    if (w.empty()) return "";
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(n > 0 ? n - 1 : 0, '\0');
+    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
+    return s;
+}
+
 void writeResult(const std::vector<perf::FrameSample>& frames, const std::string& label, int run, const char* request) {
     const perf::Summary s = perf::summarize(frames);
     perf::ResultMeta m;
@@ -205,15 +222,228 @@ const char* stateName(int s) {
     }
 }
 
+void registerOverlay();
+void applyProcessOptions();
+
+// ---- benchmark series
+perf::SeriesOptions currentOptions() {
+    perf::SeriesOptions o;
+    o.count = S.count;
+    o.filter = S.filter;
+    o.limitFps = S.limitFps;
+    o.vsync = S.vsync;
+    o.priority = S.priority;
+    o.affinity = S.affinity;
+    o.powerThrottlingOff = S.powerThrottlingOff;
+    o.fineTimer = S.fineTimer;
+    return o;
+}
+
+std::string cpuName() {
+    int r[4] = {};
+    char b[49] = {};
+    __cpuid(r, 0x80000000);
+    if (static_cast<unsigned>(r[0]) < 0x80000004u) return "unknown";
+    for (int i = 0; i < 3; i++) {
+        __cpuid(r, 0x80000002 + i);
+        memcpy(b + 16 * i, r, 16);
+    }
+    std::string s(b);
+    const size_t a = s.find_first_not_of(' ');
+    return a == std::string::npos ? "unknown" : s.substr(a);
+}
+
+void gpuAndResolution(std::string& gpu, std::string& res) {
+    auto* dev = static_cast<IDirect3DDevice9*>(g_host->device());
+    if (!dev) return;
+    IDirect3D9* d3d = nullptr;
+    D3DDEVICE_CREATION_PARAMETERS cp = {};
+    if (SUCCEEDED(dev->GetDirect3D(&d3d)) && d3d) {
+        D3DADAPTER_IDENTIFIER9 id = {};
+        if (SUCCEEDED(dev->GetCreationParameters(&cp)) && SUCCEEDED(d3d->GetAdapterIdentifier(cp.AdapterOrdinal, 0, &id))) gpu = id.Description;
+        d3d->Release();
+    }
+    IDirect3DSurface9* rt = nullptr;
+    if (SUCCEEDED(dev->GetRenderTarget(0, &rt)) && rt) {
+        D3DSURFACE_DESC d = {};
+        if (SUCCEEDED(rt->GetDesc(&d))) res = std::to_string(d.Width) + "x" + std::to_string(d.Height);
+        rt->Release();
+    }
+}
+
+// The newest *.Replay.Gbx in a folder ("" none).
+std::wstring newestReplayIn(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*.Replay.Gbx").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return L"";
+    std::wstring best;
+    ULONGLONG bestT = 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const ULONGLONG t = (static_cast<ULONGLONG>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        if (t >= bestT) {
+            bestT = t;
+            best = dir + fd.cFileName;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return best;
+}
+bool fileExists(const std::wstring& p) {
+    const DWORD a = GetFileAttributesW(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// The replay the series is about: the given path or name, else the newest one in Tracks\Replays\Autosaves
+// (then Tracks\Replays). The game cannot be told to open it (host ABI 1.3): the name is shown on screen.
+std::string resolveReplay(const std::string& given) {
+    const std::wstring root = g_userFolder.empty() ? L"" : g_userFolder + L"Tracks\\Replays\\";
+    if (!given.empty()) {
+        const std::wstring g = widen(given);
+        if (g.find(L':') != std::wstring::npos || g.compare(0, 2, L"\\\\") == 0) return given;
+        if (!root.empty()) {
+            const std::wstring c[] = {root + g, root + g + L".Replay.Gbx", root + L"Autosaves\\" + g, root + L"Autosaves\\" + g + L".Replay.Gbx"};
+            for (const auto& p : c)
+                if (fileExists(p)) return narrow(p);
+        }
+        return given;
+    }
+    if (root.empty()) return "";
+    std::wstring p = newestReplayIn(root + L"Autosaves\\");
+    if (p.empty()) p = newestReplayIn(root);
+    return narrow(p);
+}
+
+std::string fileNameOf(const std::string& path) {
+    const size_t i = path.find_last_of("\\/");
+    return i == std::string::npos ? path : path.substr(i + 1);
+}
+
+void writeSeriesFile(bool completed, const std::string& why) {
+    g_seriesMeta.finished = isoNow();
+    g_seriesMeta.completed = completed;
+    g_seriesMeta.abortedWhy = why;
+    const std::wstring dir = g_data + L"bench\\";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring path = dir + widen(g_seriesMeta.stamp + "_series.json");
+    const bool ok = writeFile(path, perf::seriesJson(g_series.plan(), g_series.activeSets(), g_series.runs(), g_seriesMeta));
+    logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_ERROR, "benchmark series %s: %s%s%s", completed ? "done" : "stopped", ok ? narrow(path).c_str() : "file could not be written",
+         why.empty() ? "" : " - ", why.c_str());
+}
+
+void applySeriesOptions(const perf::SeriesOptions& o);
+void benchSeriesFinished(bool completed, const std::string& why);
+
+struct PluginSeriesIO : perf::SeriesIO {
+    void apply(const perf::SeriesOptions& o) override { applySeriesOptions(o); }
+    std::string unavailable(const perf::SeriesOptions& o) override {
+        if (o.filter || o.count) {
+            if (!callsAllowed()) return "Competition Patch is loaded";
+            if (!perf::d3d::attached()) return "the Direct3D hooks are not attached";
+            if (o.filter && perf::d3d::filterBlockedWhy()[0]) return perf::d3d::filterBlockedWhy();
+        }
+        return "";
+    }
+    std::string note(const perf::SeriesOptions& o) override { return o.affinity ? perf::sys::affinityNote() : ""; }
+    std::string isoNow() override { return ::isoNow(); }
+    void runDone(perf::SeriesRun& r, const std::vector<perf::FrameSample>& frames) override {
+        perf::ResultMeta m;
+        m.game = g_gameKey;
+        m.label = r.label;
+        m.run = r.run;
+        m.request = "series";
+        m.started = r.started;
+        m.options = optionList();
+        const std::string base = g_seriesMeta.stamp + "_series_" + perf::safeLabel(r.label) + (r.run ? "_r" + std::to_string(r.run) : "_w" + std::to_string(r.warmupNo));
+        const std::wstring dir = g_data + L"bench\\";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        const bool ok = writeFile(dir + widen(base + ".json"), perf::summaryJson(r.summary, m)) &&
+                        writeFile(dir + widen(base + ".csv"), perf::framesCsv(frames));
+        r.file = ok ? base + ".json" : "";
+        char line[300];
+        snprintf(line, sizeof(line), "series %s %s: %.1f fps avg, 1%% low %.1f, %u stutters, %u frames", r.label.c_str(),
+                 r.run ? ("run " + std::to_string(r.run)).c_str() : "warm-up", r.summary.avgFps, r.summary.low1Fps,
+                 static_cast<unsigned>(r.summary.stutters), static_cast<unsigned>(r.summary.frames));
+        g_lastResult = line;
+        logf(HORIZON_LOG_INFO, "%s", line);
+    }
+    void finished(bool completed, const std::string& why) override { benchSeriesFinished(completed, why); }
+} g_seriesIO;
+
+void applySeriesOptions(const perf::SeriesOptions& o) {
+    // V-Sync is not touched: it is applied at device creation. Nothing is saved: the settings file keeps the user's own values.
+    S.count = o.count;
+    S.filter = o.filter;
+    S.limitFps = o.limitFps;
+    S.priority = o.priority;
+    S.affinity = o.affinity;
+    S.powerThrottlingOff = o.powerThrottlingOff;
+    S.fineTimer = o.fineTimer;
+    applyProcessOptions();
+}
+
+void benchSeriesFinished(bool completed, const std::string& why) {
+    writeSeriesFile(completed, why);
+    const bool map = g_req.series && g_req.series->where == "map";
+    g_benchStatus = completed ? "series done: " + std::to_string(g_series.runs().size()) + " windows" : "series stopped: " + why;
+    g_bench = Bench::Idle;
+    g_seriesHooks = false;
+    g_forceOverlay = false;
+    registerOverlay();
+    if (completed && map && g_req.returnToMenu) g_host->return_to_menu(g_host->plugin);
+    g_reqFromLauncher = false;
+}
+
+void startSeries(double now) {
+    const perf::SeriesPlan& plan = *g_req.series;
+    perf::SeriesCaps caps;
+    caps.vsyncInEffect = S.vsync;
+    perf::SeriesMeta& m = g_seriesMeta;
+    m = perf::SeriesMeta{};
+    m.stamp = stampNow();
+    m.started = isoNow();
+    m.game = g_gameKey;
+    m.cpu = cpuName();
+    gpuAndResolution(m.gpu, m.resolution);
+    m.where = plan.where;
+    m.replay = plan.where == "replay" ? g_seriesReplay : "";
+    m.map = plan.map;
+    m.user = currentOptions();
+    m.vsyncInEffect = S.vsync;
+    const bool wrapper = perf::d3d::facts().wrapper;
+    m.tmvs = GetModuleHandleW(L"TMVibrantShaders.dll") != nullptr || wrapper;
+    m.tmvsNote = GetModuleHandleW(L"TMVibrantShaders.dll") ? "TMVibrantShaders.dll is loaded" : wrapper ? "another d3d9.dll is loaded (probably TM Vibrant Shaders standalone)" : "";
+    for (const auto& s : plan.sets)
+        if ((s.options.filter || s.options.count) && callsAllowed()) g_seriesHooks = true;
+    std::string why;
+    if (!g_series.start(plan, caps, m.user, now, g_seriesIO, why)) {
+        g_seriesHooks = false;
+        benchAbort(("series: " + why).c_str());
+        return;
+    }
+    logf(HORIZON_LOG_INFO, "benchmark series started: %u sets, %d warm-up + %d runs, %.0f s each, %s%s%s", static_cast<unsigned>(g_series.activeSets().size()),
+         plan.warmup, plan.runs, plan.seconds, plan.where.c_str(), m.replay.empty() ? "" : ", replay ", m.replay.c_str());
+    g_bench = Bench::Series;
+    g_benchStatus = g_series.progress();
+}
+
 void benchTick(double now, const perf::FrameSample* frame) {
     const int st = g_host->get_game_state();
     switch (g_bench) {
     case Bench::Idle: return;
     case Bench::WaitMenu:
+        if (g_req.series && g_req.series->where == "now") {
+            g_bench = Bench::WaitRace;
+            g_benchT = now;
+            g_benchStatus = "Benchmark: starting";
+            return;
+        }
         if (g_req.mode == "replay") {
             g_bench = Bench::WaitRace;
             g_benchT = now;
-            g_benchStatus = "open a replay now; recording starts by itself";
+            g_benchStatus = g_req.series ? "Benchmark: open " + (g_seriesReplay.empty() ? std::string("a replay") : "the replay " + fileNameOf(g_seriesReplay)) +
+                                               ", the series starts by itself"
+                                         : "open a replay now; recording starts by itself";
             return;
         }
         if (st != HORIZON_STATE_MAIN_MENU) {
@@ -235,7 +465,8 @@ void benchTick(double now, const perf::FrameSample* frame) {
         g_benchStatus = "loading the map";
         return;
     case Bench::WaitRace: {
-        const bool ready = g_req.mode == "replay" ? st == HORIZON_STATE_REPLAY : st == HORIZON_STATE_SOLO_RACE;
+        const bool anyScene = g_req.series && g_req.series->where == "now";
+        const bool ready = anyScene ? now - g_benchT > 1500 : g_req.mode == "replay" ? st == HORIZON_STATE_REPLAY : st == HORIZON_STATE_SOLO_RACE;
         if (ready) {
             g_bench = Bench::Warmup;
             g_benchT = now;
@@ -246,8 +477,27 @@ void benchTick(double now, const perf::FrameSample* frame) {
         return;
     }
     case Bench::Warmup:
-        if (now - g_benchT >= g_req.warmup * 1000.0) benchStartRecording(now);
+        if (now - g_benchT < g_req.warmup * 1000.0) return;
+        if (g_req.series) startSeries(now);
+        else benchStartRecording(now);
         return;
+    case Bench::Series: {
+        const std::string& where = g_req.series->where;
+        const bool sceneOk = where == "now" || (where == "replay" ? st == HORIZON_STATE_REPLAY : (st == HORIZON_STATE_SOLO_RACE || st == HORIZON_STATE_END_RACE));
+        if (!sceneOk) {
+            if (where == "replay") { // the replay was closed: wait for it, the window starts over
+                g_series.pause();
+                g_benchStatus = "Benchmark paused: open the replay again";
+                return;
+            }
+            g_series.abort("the race ended during the series", g_seriesIO);
+            return;
+        }
+        if (g_series.waiting()) g_series.resume(now);
+        g_series.tick(now, frame, g_seriesIO);
+        if (g_series.active()) g_benchStatus = g_series.progress();
+        return;
+    }
     case Bench::Recording: {
         const bool stillThere = !g_reqFromLauncher || (g_req.mode == "replay" ? st == HORIZON_STATE_REPLAY
                                                                               : (st == HORIZON_STATE_SOLO_RACE || st == HORIZON_STATE_END_RACE));
@@ -274,6 +524,10 @@ void benchTick(double now, const perf::FrameSample* frame) {
 }
 
 void startManualBench() {
+    if (g_bench == Bench::Series) {
+        g_series.abort("stopped by hand", g_seriesIO);
+        return;
+    }
     if (g_bench != Bench::Idle) {
         benchAbort("stopped by hand");
         return;
@@ -305,6 +559,14 @@ void readLauncherRequest() {
     g_bench = Bench::WaitMenu;
     g_benchT = perf::sys::nowMs();
     g_benchStatus = g_req.mode == "map" ? "waiting for the main menu" : "open a replay now";
+    if (g_req.series) {
+        g_req.warmup = g_req.series->where == "now" ? 0 : 3;
+        if (g_req.series->where == "replay") g_seriesReplay = resolveReplay(g_req.series->replay);
+        g_forceOverlay = true;
+        g_benchStatus = "Benchmark: waiting";
+        logf(HORIZON_LOG_INFO, "benchmark series from the launcher: %u sets, %d runs of %.0f s, %s%s%s", static_cast<unsigned>(g_req.series->sets.size()),
+             g_req.runs, g_req.seconds, g_req.series->where.c_str(), g_seriesReplay.empty() ? "" : ", replay ", g_seriesReplay.c_str());
+    }
     logf(HORIZON_LOG_INFO, "benchmark from the launcher: %s, %s, %.0f s x %d, warm-up %.0f s", g_req.label.c_str(), g_req.mode.c_str(),
          g_req.seconds, g_req.runs, g_req.warmup);
 }
@@ -332,7 +594,7 @@ void d3dLog(int level, const char* fmt, ...) {
 }
 
 void ensureHooks(void* device) {
-    if (!device || !callsAllowed() || (!S.count && !S.filter) || perf::d3d::attached()) return;
+    if (!device || !callsAllowed() || (!S.count && !S.filter && !g_seriesHooks) || perf::d3d::attached()) return;
     if (GetModuleHandleW(L"TMCompPatch.dll")) {
         g_competitionPatch = true; // loaded after my Init: never hook
         return;
@@ -541,12 +803,13 @@ void HORIZON_CALL drawOverlayPanel(void*) {
         ImGui::TextDisabled("locks %u (%.2f ms)  readback %u  GPU wait %.2f ms  filtered %u", c.locks, c.lockMs, c.readbacks, c.queryWaitMs,
                             c.filtered);
     }
-    if (g_bench != Bench::Idle) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Benchmark: %s", g_benchStatus.c_str());
+    if (g_bench == Bench::Series) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", g_benchStatus.c_str());
+    else if (g_bench != Bench::Idle) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Benchmark: %s", g_benchStatus.c_str());
 }
 
 void registerOverlay() {
     if (!g_host || g_host->abi_minor < 2) return;
-    if (!S.overlay) {
+    if (!S.overlay && !g_forceOverlay) {
         g_host->unregister_panel(g_host->plugin, "graph");
         return;
     }
@@ -734,6 +997,10 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
 
     std::wstring gameFolder;
     if (gi && gi->game_folder) gameFolder = widen(gi->game_folder);
+    if (gi && gi->user_folder && *gi->user_folder) {
+        g_userFolder = widen(gi->user_folder);
+        if (g_userFolder.back() != L'\\' && g_userFolder.back() != L'/') g_userFolder += L'\\';
+    }
     perf::stall::start(g_data.c_str(), gameFolder.c_str(), gi ? gi->exe_timestamp : 0);
     perf::stall::note("Horizon Performance started on %s (host %s, %s)", g_gameKey.c_str(), gi && gi->host_version ? gi->host_version : "?",
                       g_competitionPatch ? "Competition Patch loaded" : "no Competition Patch");
@@ -751,8 +1018,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     host->subscribe(host->plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_GAME_STATE) | HORIZON_EVENT_BIT(HORIZON_EVENT_MAP_LOADED) |
                                       HORIZON_EVENT_BIT(HORIZON_EVENT_MENU_ENTERED) | HORIZON_EVENT_BIT(HORIZON_EVENT_ONLINE_CHANGED));
     g_benchHotkey = host->register_hotkey(host->plugin, "bench", "Benchmark start/stop", "Ctrl+F10", &onBenchHotkey, nullptr);
-    registerOverlay();
     readLauncherRequest();
+    registerOverlay();
     logf(HORIZON_LOG_INFO, "started: post_present %s, timer %.2f ms, %s", g_hasPostPresent ? "yes" : "no (older host: limiter before Present)",
          perf::sys::currentTimerMs(), g_competitionPatch ? "Competition Patch: call counter and filter off" : "all options available");
     return 0;
@@ -760,6 +1027,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
     perf::stall::note("shutdown");
+    if (g_series.active()) g_series.abort("the game was closed", g_seriesIO);
     perf::stall::stop();
     perf::d3d::detach();
     perf::sys::setFineTimer(false);
@@ -793,6 +1061,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
     g_enabled = enabled != 0;
+    if (!g_enabled && g_series.active()) g_series.abort("the plugin was switched off", g_seriesIO);
     if (!g_enabled) {
         perf::d3d::setMode(false, false);
         perf::sys::setPriority(0);

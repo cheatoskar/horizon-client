@@ -28,6 +28,42 @@ Cost of measuring: the frame timer costs nothing measurable. The call counter go
 
 Summary fields: `version, game, label, request (map/replay/manual), run, started, seconds, frames, avgFps, avgMs, medianMs, p99Ms, p999Ms, maxMs, low1Fps, low01Fps, stutters, presentMsAvg, cpuMsAvg, sleepMsAvg, drawsPerFrame, options{}`.
 
+## Benchmark series
+
+One game start, no clicking, a table "option -> effect". The plugin runs the same scene several times and switches one option set per window; `tools/bench_report.py` turns the result into the table. Nothing in it has been run in the game yet (offline: the state machine against a fake host, and the real host with the plugin, `tests\run_perf_tests.cmd`).
+
+**Start without the launcher:** `tools/bench_series.ps1 -GamePath <game folder>` writes `bench-request.json` into `<game>\horizon\data\performance\` (ESWC, Sunrise). For Forever it only prints the file's content and the place it belongs (`%LOCALAPPDATA%\TMLoader\database\TmForever\products\Horizon Host\data\performance\`); I put it there myself. Then start the game and leave it alone (about 10 minutes with the defaults: 7 sets x (1 warm-up + 3 runs) x (20 s + 2 s settle)).
+
+**The request** (read once at the start, renamed to `bench-request.taken.json`):
+
+```json
+{"version": 1, "series": {
+  "replay": "<path or name>", "runs": 3, "warmup": 1, "seconds": 20, "settle": 2,
+  "sets": [{"label": "baseline", "options": {}},
+           {"label": "limiter+vsync-off", "options": {"limitFps": 120, "vsync": 1}}]}}
+```
+
+| Field | Meaning | Default |
+|---|---|---|
+| `replay` | Path or name of the replay (see below). `map`: path of a `.Challenge.Gbx`, then the plugin starts that map in solo itself. `mode` is `replay`, `map` or `now` (`now`: measure whatever is on screen; for tests). | `replay`, the newest one |
+| `runs`, `warmup` | Measured windows and discarded windows per set. | 3, 1 |
+| `seconds`, `settle` | Length of one window; wait after switching the options before recording. | 20, 2 |
+| `sets` | `label` and `options` (`count`, `filter`, `limitFps`, `vsync`, `priority`, `affinity`, `powerThrottlingOff`, `fineTimer`; same names and values as in the result files, missing = off). | the 7 sets below |
+
+Default sets: `baseline` (all off), `limiter+vsync-off` (limit 120, V-Sync off), `priority-high`, `perf-cores`, `skip-repeated-states`, `fine-timer`, `no-power-throttling`. Every set starts from "everything off" plus its own options, so each one is compared with the baseline, never with the one before it.
+
+**Order:** interleaved by rotation: warm-up round, then the measured rounds, and every round starts one set later (A B C, B C A, C A B ...). Heat and background load then do not favour one set. The state filter (and the call counter, if a set asks for it) needs the Direct3D hooks: they are attached for the whole series, so every window runs with the same hooks, only the mode differs.
+
+**What cannot change at run time:** V-Sync is applied when the device is created, and the plugin does not trigger a device Reset. A set whose only option is V-Sync is not run and shows "needs restart: vsync" in the result; in a set with other options V-Sync is left as the game started with and the run's `note` says so. So `limiter+vsync-off` measures the limiter only. Options that turn out unavailable after the settle time (state filter with a wrapper `d3d9.dll`, Competition Patch) skip that set once with the reason.
+
+**Replay or map:** the host cannot open a replay (ABI 1.3 has `play_map_file` only), so in replay mode I open the replay once myself; the frame-time window says which one ("Benchmark: open the replay X.Replay.Gbx, the series starts by itself"). From then on it runs by itself; closing the replay pauses the series until a replay is open again. `-Map` (or `"map"` in the request) is fully unattended, but the car stands at the start. Picking a replay: `"replay": "C:\\path\\x.Replay.Gbx"`, or a name, looked up in `<user folder>\Tracks\Replays\` and `...\Autosaves\` (`.Replay.Gbx` is added). Without `replay`: the newest `*.Replay.Gbx` in `Tracks\Replays\Autosaves`, else in `Tracks\Replays`. The user folder is the game's own (`Documents\TrackMania...`).
+
+**Progress and safety:** the frame-time window shows "Benchmark 7/21: priority-high, Lauf 2/3" (warm-ups: "Benchmark Warmup 2/7: label"). Ctrl+F10 (the benchmark hotkey) stops the series. At the end, on a stop, when the race or replay ends, when the plugin is switched off or the game quits, my own settings are put back (the settings file is never written during a series, so a crash leaves them untouched too). Priority, affinity, timer and power throttling go back to what the game had.
+
+**Result files** in `<data>\bench\`: `<stamp>_series.json` (everything: sets, status, every run's numbers, GPU, CPU, resolution, game, replay or map, TM Vibrant Shaders yes/no, `completed`) and per window `<stamp>_series_<label>_r<N>.json/.csv` (measured) or `_w<N>` (warm-up), same format as a single benchmark with `"request": "series"`. TMVS is "yes" when `TMVibrantShaders.dll` is loaded or another `d3d9.dll` wraps the device (probably TMVS standalone).
+
+**Analysis:** `python tools/bench_report.py <stamp>_series.json` prints and writes `<stamp>_series.md`: per set average FPS, median ms, 1 % low, 0.1 % low and stutters per minute (mean of the measured runs), each with the difference to the baseline in percent. Hint column: "Unterschied kleiner als die Streuung" when the difference of the means is smaller than max-min of the baseline's own runs (for every metric); otherwise the metrics that are above it. With one baseline run there is no spread and the hint says so. Test: `python tools/test_bench_report.py` (synthetic data, also run by `tests\run_perf_tests.cmd`).
+
 ## Where the frame time goes (static analysis, test copies only)
 
 From the exes in `C:\Users\osaro\Games\*-test` (imports, call sites with capstone, TMNF symbols from `TmForever.map`), and TM Vibrant Shaders' notes. Measured in the game: nothing yet.
@@ -97,4 +133,4 @@ DXVK 3.1.1 (`x32\d3d9.dll`) works with the Horizon host and this plugin in my of
 
 ## Tests (no game)
 
-`tests\run_perf_tests.cmd` (after `build.cmd` and `tests\build_fake_host.cmd`): 61 unit checks (statistics, limiter maths, state cache, request parsing, CSV/JSON), the real host with the plugin on a mixed-VP device (counting on, screenshot `screens\perf-menu.png`), the same with the state filter (scene checksum identical), the 60 fps limiter (within 4 %), the hang log on a 2.5 s stall, and the fake host on ESWC, Sunrise, TMNF and TMUF.
+`tests\run_perf_tests.cmd` (after `build.cmd` and `tests\build_fake_host.cmd`): 110 unit checks (statistics, limiter maths, state cache, request parsing, CSV/JSON), the real host with the plugin on a mixed-VP device (counting on, screenshot `screens\perf-menu.png`), the same with the state filter (scene checksum identical), the 60 fps limiter (within 4 %), the hang log on a 2.5 s stall, and a benchmark series in the real host (4 sets, one needing a restart: file contents, per-run files, options restored), the series state machine against a fake host (interleaving, restore, restart-only and unavailable sets, pause, abort), and the fake host on ESWC, Sunrise, TMNF and TMUF.

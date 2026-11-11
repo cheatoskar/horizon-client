@@ -11,8 +11,8 @@ cd /d "%~dp0.."
 if not exist build\test\perf mkdir build\test\perf
 if not exist screens mkdir screens
 set "DEFS=/DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS"
-cl /nologo /c /O2 /MT /GS /Zi /W4 /WX /EHsc /std:c++17 /utf-8 %DEFS% /Iinclude /Isrc /Fo"build\test\perf\\" /Fd"build\test\perf\t.pdb" tests\perf_test.cpp plugins\performance\perf_core.cpp || exit /b 1
-link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\perf_test.exe build\test\perf\perf_test.obj build\test\perf\perf_core.obj user32.lib kernel32.lib ole32.lib windowscodecs.lib || exit /b 1
+cl /nologo /c /O2 /MT /GS /Zi /W4 /WX /EHsc /std:c++17 /utf-8 %DEFS% /Iinclude /Isrc /Fo"build\test\perf\\" /Fd"build\test\perf\t.pdb" tests\perf_test.cpp plugins\performance\perf_core.cpp plugins\performance\series.cpp || exit /b 1
+link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\perf_test.exe build\test\perf\perf_test.obj build\test\perf\perf_core.obj build\test\perf\series.obj user32.lib kernel32.lib ole32.lib windowscodecs.lib || exit /b 1
 set FAIL=0
 set "P=build\test\perf"
 
@@ -40,6 +40,16 @@ call :setup stall
 > %P%\stall\horizon\settings\performance.json echo {"hang_log": 1, "hang_ms": 1000, "overlay": 0}
 echo === hang log: the main thread sleeps 2.5 s
 build\test\perf_test.exe host "%CD%\%P%\stall" "%CD%\%P%\stall.txt" stall || set FAIL=1
+
+call :setup series
+mkdir %P%\series\horizon\data\performance
+> %P%\series\horizon\settings\performance.json echo {"overlay": 0, "hang_log": 0}
+> %P%\series\horizon\data\performance\bench-request.json echo {"version": 1, "series": {"mode": "now", "seconds": 1, "settle": 0.3, "runs": 2, "warmup": 1, "sets": [{"label": "baseline"}, {"label": "prio", "options": {"priority": 2}}, {"label": "filt", "options": {"filter": 1}}, {"label": "vs", "options": {"vsync": 1}}]}}
+echo === benchmark series: 4 sets (one needs a restart), warm-up + 2 runs, options restored
+build\test\perf_test.exe host "%CD%\%P%\series" "%CD%\%P%\series.txt" series || set FAIL=1
+
+echo === bench_report.py (synthetic series)
+where python >nul 2>nul && (python tools\test_bench_report.py >nul 2>&1 && echo PASS  bench_report || (echo FAIL  bench_report & set FAIL=1)) || echo SKIP  python not found
 
 echo === fake host, four games
 for %%g in (eswc sunrise tmnf tmuf) do (

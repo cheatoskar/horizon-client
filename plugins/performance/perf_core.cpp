@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "common/json.h"
+#include "series.h"
 
 namespace perf {
 
@@ -113,6 +114,22 @@ bool parseBenchRequest(const std::string& text, BenchRequest& out, std::string& 
     if (r.version != 1) {
         why = "unknown version";
         return false;
+    }
+    if (const auto* sv = j.get("series")) {
+        auto plan = std::make_shared<SeriesPlan>();
+        if (!parseSeries(*sv, *plan, why)) return false;
+        r.series = plan;
+        r.mode = plan->where == "map" ? "map" : "replay"; // "now" needs no game state either; the plugin looks at series->where
+        r.map = plan->map;
+        r.seconds = plan->seconds;
+        r.warmup = 0;
+        r.runs = plan->runs;
+        r.returnToMenu = plan->returnToMenu;
+        if (const auto* v = j.get("label")) r.label = v->asString();
+        else r.label = "series";
+        r.label = safeLabel(r.label);
+        out = r;
+        return true;
     }
     if (const auto* v = j.get("mode")) r.mode = v->asString();
     if (r.mode != "map" && r.mode != "replay") {
