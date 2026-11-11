@@ -50,7 +50,7 @@ copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 build\test\host_test.exe host "%CD%\%T%" expect-no-plugin || set FAIL=1
 
 echo === plugins against the fake host
-call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autosave) || (echo FAIL  fake host & set FAIL=1)
+call tests\build_fake_host.cmd >nul 2>&1 && echo PASS  fake host (sample + autosave + tmx-upload) || (echo FAIL  fake host & set FAIL=1)
 
 if %FAIL%==0 (echo ALL TESTS PASSED) else (echo SOME TESTS FAILED)
 exit /b %FAIL%

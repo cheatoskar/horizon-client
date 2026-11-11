@@ -1,0 +1,19 @@
+{
+  "id": "tmx-upload",
+  "name": "TMX Upload",
+  "version": "0.1.0",
+  "dll": "tmx-upload.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "original",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Offers your new replays to TM Horizon or the browser extension for upload to TMX.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": false
+}

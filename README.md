@@ -30,6 +30,7 @@ MSVC Build Tools (x86). `build.cmd` builds everything into `dist\legacy\` and th
 
 - `docs/plugin-abi.md`: writing a plugin
 - `docs/profile-json.md`: how TM Horizon enables plugins (and what happens without it)
+- `docs/plugins/tmx-upload.md`: the TMX Upload plugin (replays offered to TM Horizon or the browser extension)
 - `TESTPLAN.md`: my test steps for the game
 
 ## Licence

@@ -7,15 +7,20 @@
 // short event sequence, draws the menu and overlay inside a frame, fires the plugin's hotkeys, toggles
 // SetEnabled, calls Shutdown and unloads the DLL. engine_pointer returns NULL, so a plugin that carries
 // game addresses must not touch game code. Exit code 0 = everything behaved as expected.
+#include <winsock2.h>
 #include <windows.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "imgui.h"
@@ -34,6 +39,7 @@ struct Hotkey {
 std::map<std::string, std::string> g_settings;
 std::vector<Hotkey> g_hotkeys;
 std::vector<std::pair<HorizonCallback, void*>> g_queue;
+std::mutex g_queueMu; // run_on_game_thread may be called from a plugin thread
 std::string g_dataFolder;
 std::wstring g_dataFolderW;
 std::string g_pluginId = "plugin";
@@ -108,7 +114,11 @@ HorizonResult HORIZON_CALL f_return_to_menu(HorizonPluginHandle) { return HORIZO
 int32_t HORIZON_CALL f_get_game_state(void) { return HORIZON_STATE_MAIN_MENU; }
 int32_t HORIZON_CALL f_is_online(void) { return 0; }
 int32_t HORIZON_CALL f_actions_allowed(HorizonPluginHandle) { return 1; }
-void HORIZON_CALL f_run_on_game_thread(HorizonPluginHandle, HorizonCallback cb, void* user) { g_queue.push_back({cb, user}); }
+void HORIZON_CALL f_run_on_game_thread(HorizonPluginHandle, HorizonCallback cb, void* user) {
+    std::lock_guard<std::mutex> lk(g_queueMu);
+    g_queue.push_back({cb, user});
+}
+HorizonResult HORIZON_CALL f_save_replay(HorizonPluginHandle, const char*) { return HORIZON_ERR_NOT_SUPPORTED; }
 void* HORIZON_CALL f_device(void) { return nullptr; }
 void HORIZON_CALL f_set_device_callbacks(HorizonPluginHandle, const HorizonDeviceCallbacks*) {}
 int32_t HORIZON_CALL f_menu_open(void) { return 1; }
@@ -118,7 +128,10 @@ void* HORIZON_CALL f_reflect_method(const char*, const char*) { return nullptr; 
 
 void flushQueue() {
     std::vector<std::pair<HorizonCallback, void*>> q;
-    q.swap(g_queue);
+    {
+        std::lock_guard<std::mutex> lk(g_queueMu);
+        q.swap(g_queue);
+    }
     for (auto& c : q) c.first(c.second);
 }
 
@@ -141,6 +154,323 @@ HorizonEvent makeEvent(uint32_t type) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------- TMX Upload: acts as the launcher over real HTTP ----
+namespace tmxtest {
+
+struct HttpResp {
+    int status = 0; // 0 = no connection
+    std::string body;
+    double secs = 0;
+};
+
+HttpResp httpCall(int port, const char* method, const std::string& path, const std::string& key = "", const std::string& body = "",
+                  const char* hostHeader = nullptr, const char* ua = "ureq/2.9") {
+    HttpResp r;
+    const auto t0 = std::chrono::steady_clock::now();
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return r;
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = htons(static_cast<u_short>(port));
+    if (connect(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) {
+        closesocket(s);
+        return r;
+    }
+    DWORD to = 20000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof(to));
+    std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: " + (hostHeader ? std::string(hostHeader) : "127.0.0.1:" + std::to_string(port)) +
+                      "\r\nUser-Agent: " + ua + "\r\n";
+    if (!key.empty()) req += "X-TMX-Key: " + key + "\r\n";
+    if (!body.empty()) req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+    req += "Connection: close\r\n\r\n" + body;
+    send(s, req.data(), static_cast<int>(req.size()), 0);
+    std::string all;
+    char buf[8192];
+    for (;;) {
+        const int n = recv(s, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        all.append(buf, static_cast<size_t>(n));
+    }
+    closesocket(s);
+    if (all.rfind("HTTP/1.1 ", 0) == 0) r.status = atoi(all.c_str() + 9);
+    const size_t he = all.find("\r\n\r\n");
+    if (he != std::string::npos) r.body = all.substr(he + 4);
+    r.secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return r;
+}
+
+std::string between(const std::string& s, const std::string& a, const std::string& b) {
+    const size_t i = s.find(a);
+    if (i == std::string::npos) return "";
+    const size_t j = s.find(b, i + a.size());
+    return j == std::string::npos ? "" : s.substr(i + a.size(), j - i - a.size());
+}
+
+bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+
+void writeFileBytes(const std::string& path, const std::string& bytes) {
+    FILE* f = nullptr;
+    fopen_s(&f, path.c_str(), "wb");
+    if (f) {
+        fwrite(bytes.data(), 1, bytes.size(), f);
+        fclose(f);
+    }
+}
+
+// A stand-in for the mod's bridge: answers every request with the ping body.
+struct FakeBridge {
+    SOCKET l = INVALID_SOCKET;
+    int port = 0;
+    std::atomic<bool> run{true};
+    std::thread t;
+    bool start() {
+        for (int p = 27311; p < 27316; p++) {
+            SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            sockaddr_in a = {};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = htons(static_cast<u_short>(p));
+            if (bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0 && listen(s, 4) == 0) {
+                l = s;
+                port = p;
+                break;
+            }
+            closesocket(s);
+        }
+        if (l == INVALID_SOCKET) return false;
+        t = std::thread([this]() {
+            while (run) {
+                fd_set rs;
+                FD_ZERO(&rs);
+                FD_SET(l, &rs);
+                timeval tv = {0, 100000};
+                if (select(0, &rs, nullptr, nullptr, &tv) <= 0) continue;
+                SOCKET c = accept(l, nullptr, nullptr);
+                if (c == INVALID_SOCKET) continue;
+                char b[2048];
+                recv(c, b, sizeof(b), 0);
+                const std::string body = "{\"ok\":true,\"mod\":\"1.1.1\"}";
+                const std::string resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+                                         "\r\nConnection: close\r\n\r\n" + body;
+                send(c, resp.data(), static_cast<int>(resp.size()), 0);
+                closesocket(c);
+            }
+        });
+        return true;
+    }
+    void stop() {
+        run = false;
+        if (t.joinable()) t.join();
+        if (l != INVALID_SOCKET) closesocket(l);
+        l = INVALID_SOCKET;
+    }
+};
+
+} // namespace tmxtest
+
+typedef int32_t(__cdecl* TmxTestHookFn)(int32_t op, int32_t arg, char* out, int32_t outSize);
+
+static void tmxUploadTests(HMODULE mod, HorizonPlugin_InitFn init, HorizonPlugin_ShutdownFn shutdown, HorizonPlugin_SetEnabledFn setEnabled,
+                           HorizonPlugin_OnEventFn onEvent, const HorizonHostApi* host, const char* gameName) {
+    using namespace tmxtest;
+    printf("tmx-upload: acting as the launcher over HTTP on 127.0.0.1\n");
+    WSADATA wsa = {};
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    auto hook = proc<TmxTestHookFn>(mod, "HorizonPlugin_TestHook");
+    check(hook && setEnabled && onEvent, "test hook, SetEnabled and OnEvent exported");
+    if (!hook || !setEnabled || !onEvent) return;
+    auto status = [&]() {
+        char b[96];
+        hook(2, 0, b, sizeof(b));
+        return std::string(b);
+    };
+    auto state = [&]() {
+        char b[96];
+        hook(4, 0, b, sizeof(b));
+        return std::string(b);
+    };
+    auto waitMode = [&](const char* m, int ms) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() < ms) {
+            if (status().rfind(m, 0) == 0) return true;
+            Sleep(50);
+        }
+        return false;
+    };
+    hook(3, 300, nullptr, 0);
+    if (!waitMode("serving", 6000)) {
+        if (status().rfind("passive", 0) == 0) {
+            printf("  SKIPPED: a real bridge answers on 27311-27315 (%s), nothing to test against\n", status().c_str());
+            return;
+        }
+        check(false, "bridge serving after Init");
+        return;
+    }
+    const int port = atoi(between(status() + ":", ":", ":").c_str());
+    printf("  bridge on port %d\n", port);
+    check(port >= 27311 && port <= 27315, "port in 27311-27315");
+    const std::string expectSite = !strcmp(gameName, "eswc") ? "tmn" : !strcmp(gameName, "sunrise") ? "tms" : "tmnf";
+
+    HttpResp r = httpCall(port, "GET", "/v1/ping");
+    check(r.status == 200 && has(r.body, "\"ok\":true") && has(r.body, "\"mod\""), "ping");
+    r = httpCall(port, "GET", "/v1/ping", "", "", "evil.example:27311");
+    check(r.status == 403, "rebound Host header refused");
+    r = httpCall(port, "GET", "/v1/hello");
+    check(r.status == 401, "hello without key: 401");
+    r = httpCall(port, "GET", "/v1/next?wait=0", "nope");
+    check(r.status == 401, "next with a wrong key: 401");
+
+    // pairing: pending, No, cool-down, Allow, key
+    r = httpCall(port, "POST", "/v1/pair");
+    check(r.status == 200 && has(r.body, "\"pending\""), "pair: pending");
+    check(state().rfind("asked", 0) == 0, "pair prompt is up");
+    r = httpCall(port, "POST", "/v1/pair");
+    check(has(r.body, "\"pending\""), "pair: still pending");
+    hook(1, 0, nullptr, 0);
+    check(state().rfind("idle", 0) == 0, "No closes the prompt");
+    r = httpCall(port, "POST", "/v1/pair");
+    check(has(r.body, "\"denied\"") && state().rfind("idle", 0) == 0, "pair after No: denied, no new prompt");
+    hook(5, 0, nullptr, 0);
+    r = httpCall(port, "POST", "/v1/pair");
+    check(has(r.body, "\"pending\"") && state().rfind("asked", 0) == 0, "pair asks again after the cool-down");
+    hook(1, 1, nullptr, 0);
+    r = httpCall(port, "POST", "/v1/pair");
+    const std::string key = between(r.body, "\"key\":\"", "\"");
+    check(r.status == 200 && has(r.body, "\"ok\":true") && key.size() == 32, "pair: key after Allow");
+    flushQueue();
+    check(g_settings["Tokens"].find(key) != std::string::npos, "token saved in the plugin settings");
+
+    r = httpCall(port, "GET", "/v1/hello", key);
+    check(r.status == 200 && has(r.body, ("\"game\":\"" + expectSite + "\"").c_str()) && has(r.body, "\"mod\""), "hello with key");
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(r.status == 200 && has(r.body, "\"upload\":null"), "next: nothing yet");
+
+    // events: a replay before any finish is ignored, then a local finish and its replay is queued
+    const std::string dir = g_dataFolder;
+    const std::string f1 = dir + "tmxtest1.Replay.Gbx";
+    static const char kHead[] = "GBX\x06\0 header tmxtestuid \xff\x01\x02 body ";
+    std::string bytes1(kHead, sizeof(kHead) - 1);
+    bytes1 += std::string(5000, '\x7f');
+    writeFileBytes(f1, bytes1);
+    writeFileBytes(dir + "notes.txt", "x");
+    HorizonMapInfo map = {};
+    map.size = sizeof(map);
+    map.uid = "tmxtestuid";
+    map.name = "A01-Race";
+    map.path = "C:\\fake\\A01.Challenge.Gbx";
+    auto ev = [&](uint32_t type, int time, const char* path) {
+        HorizonEvent e = makeEvent(type);
+        e.map = &map;
+        e.time_ms = time;
+        e.is_local_player = 1;
+        e.path = path;
+        e.source = "test";
+        onEvent(&e);
+    };
+    ev(HORIZON_EVENT_MAP_LOADED, -1, nullptr);
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, f1.c_str());
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(has(r.body, "\"upload\":null"), "replay without a local finish is not queued");
+    ev(HORIZON_EVENT_FINISH, 26500, nullptr);
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, (dir + "missing.Replay.Gbx").c_str());
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, (dir + "notes.txt").c_str());
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(has(r.body, "\"upload\":null"), "missing file and non-replay file are not queued");
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, f1.c_str());
+    r = httpCall(port, "GET", "/v1/next?wait=0", key, "", nullptr, "Mozilla/5.0");
+    const std::string id1 = between(r.body, "\"id\":\"", "\"");
+    check(!id1.empty() && has(r.body, "\"verified\":true") && has(r.body, "\"fileName\":\"tmxtest1.Replay.Gbx\"") && has(r.body, "\"mapName\":\"A01-Race\"") &&
+              has(r.body, "\"timeMs\":26500") && has(r.body, ("\"site\":\"" + expectSite + "\"").c_str()) && has(r.body, "\"trackId\":0"),
+          "next: the queued replay with id, site, map, time, verified");
+    r = httpCall(port, "GET", "/v1/file?id=" + id1, key);
+    check(r.status == 200 && r.body == bytes1, "file: the exact bytes");
+    r = httpCall(port, "GET", "/v1/file?id=nope", key);
+    check(r.status == 404, "file: unknown id 404");
+    r = httpCall(port, "POST", "/v1/result", key, "{\"id\":\"" + id1 + "\",\"ok\":true,\"detail\":\"Replay uploaded to TMX by TM Horizon.\"}");
+    check(r.status == 200 && state().find(":1:0") != std::string::npos, "result accepted and listed");
+    r = httpCall(port, "POST", "/v1/result", key, "{\"id\":\"" + id1 + "\",\"ok\":true}");
+    check(r.status == 404, "result twice: 404");
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(has(r.body, "\"upload\":null"), "next: queue empty after the result");
+
+    // Upload last: the newest replay again (the stub host's save_replay says NOT_SUPPORTED, and the queue covers the finish anyway)
+    hook(6, 0, nullptr, 0);
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    const std::string id2 = between(r.body, "\"id\":\"", "\"");
+    check(!id2.empty() && id2 != id1, "Upload last offers the replay again with a new id");
+    r = httpCall(port, "POST", "/v1/result", key, "{\"id\":\"" + id2 + "\",\"ok\":false,\"detail\":\"Not faster than your \\\"record\\\"\"}");
+    check(r.status == 200 && state().find(":2:0") != std::string::npos, "result not ok accepted");
+
+    // a second finish: the TMX copy replaces the full file of the same finish
+    const std::string f2 = dir + "tmxtest2.Replay.Gbx", f3 = dir + "tmxtest2 TMX.Replay.Gbx";
+    writeFileBytes(f2, "GBX tmxtestuid full");
+    writeFileBytes(f3, "GBX tmxtestuid local only");
+    ev(HORIZON_EVENT_FINISH, 25000, nullptr);
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, f2.c_str());
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, f3.c_str());
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    const std::string id3 = between(r.body, "\"id\":\"", "\"");
+    check(has(r.body, "tmxtest2 TMX.Replay.Gbx") && has(r.body, "\"timeMs\":25000"), "TMX copy is offered");
+    httpCall(port, "POST", "/v1/result", key, "{\"id\":\"" + id3 + "\",\"ok\":true}");
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(has(r.body, "\"upload\":null"), "the full file of that finish was dropped");
+
+    // a map whose uid is not in the file: offered, not verified
+    map.uid = "someotheruid";
+    ev(HORIZON_EVENT_MAP_LOADED, -1, nullptr);
+    ev(HORIZON_EVENT_FINISH, 30000, nullptr);
+    ev(HORIZON_EVENT_REPLAY_SAVED, -1, f1.c_str());
+    r = httpCall(port, "GET", "/v1/next?wait=0", key);
+    check(has(r.body, "\"verified\":false"), "uid not in the file: verified false");
+    httpCall(port, "POST", "/v1/result", key, "{\"id\":\"" + between(r.body, "\"id\":\"", "\"") + "\",\"ok\":false,\"detail\":\"x\"}");
+
+    // long poll with nothing new
+    r = httpCall(port, "GET", "/v1/next?wait=1", key);
+    check(r.status == 200 && r.secs >= 0.8 && r.secs < 3.0, "next?wait=1 waits about a second");
+
+    // restart: the token survives, Shutdown is quick and frees the port
+    flushQueue();
+    const auto t0 = std::chrono::steady_clock::now();
+    shutdown();
+    const double down = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("  Shutdown took %.2f s\n", down);
+    check(down < 2.0, "Shutdown returns quickly");
+    check(httpCall(port, "GET", "/v1/ping").status == 0, "port closed after Shutdown");
+    check(init(host) == 0, "Init again");
+    check(waitMode("serving", 6000), "serving again");
+    const int port2 = atoi(between(status() + ":", ":", ":").c_str());
+    r = httpCall(port2, "GET", "/v1/hello", key);
+    check(r.status == 200, "paired app is not asked again after a restart");
+
+    // SetEnabled(0) stops the server, an open long poll does not hold it up
+    HttpResp slow;
+    std::thread poller([&]() { slow = httpCall(port2, "GET", "/v1/next?wait=30", key); });
+    Sleep(300);
+    const auto t1 = std::chrono::steady_clock::now();
+    setEnabled(0);
+    const double off = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+    poller.join();
+    printf("  SetEnabled(0) took %.2f s\n", off);
+    check(off < 2.0 && slow.status == 200, "SetEnabled(0) is quick even with a long poll open");
+    check(httpCall(port2, "GET", "/v1/ping").status == 0, "no server while switched off");
+
+    // coexistence: another bridge on a port -> passive, no second server; takeover when it goes
+    FakeBridge fb;
+    check(fb.start(), "fake bridge started");
+    setEnabled(1);
+    check(waitMode("passive", 6000), "passive while another bridge answers the ping");
+    check(status() == "passive:0:" + std::to_string(fb.port), "passive status names that port");
+    int listening = 0;
+    for (int p = 27311; p < 27316; p++)
+        if (p != fb.port && httpCall(p, "GET", "/v1/ping").status != 0) listening++;
+    check(listening == 0, "no second bridge was started");
+    fb.stop();
+    check(waitMode("serving", 8000), "takes over after the other bridge is gone");
+    printf("tmx-upload tests done\n");
+    WSACleanup();
+}
 
 int main(int argc, char** argv) {
     const char* dll = nullptr;
@@ -271,6 +601,7 @@ int main(int argc, char** argv) {
     host.request_restart_note = f_request_restart_note;
     host.reflect_offset = f_reflect_offset;
     host.reflect_method = f_reflect_method;
+    host.save_replay = f_save_replay;
 
     const int32_t r = init(&host);
     printf("  Init returned %d (expected %d)\n", r, expectInit);
@@ -357,6 +688,8 @@ int main(int argc, char** argv) {
         }
         setEnabled(1);
     }
+
+    if (!strcmp(pi->id, "tmx-upload")) tmxUploadTests(mod, init, shutdown, setEnabled, onEvent, &host, gameName);
 
     printf("Shutdown\n");
     shutdown();

@@ -4,6 +4,7 @@
 
 - Handshake for mods that are not plugins (TMVS): `HorizonHost_GetUiState`, `HorizonHost_SetCaptureActive` (heartbeat, 10 s), `HorizonHost_Version`. While a capture is active Horizon draws nothing and takes no input.
 - Plugin ABI 1.2 (header): panels (`register_panel`), host flags (`HORIZON_HOST_FLAG_CAPTURE`).
+- TMX Upload plugin (`tmx-upload`, off by default, all games): offers new replays to TM Horizon or the browser extension over the local bridge protocol of the 100% TMX mod (127.0.0.1:27311-27315, pairing with Allow in the game); stays passive when the Bingo mod already runs the bridge.
 
 ## 0.1.0 (2026-11-11, first test build, not released)
 
