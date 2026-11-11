@@ -63,6 +63,15 @@ enum class PluginStatus {
     WrongGame      // not made for this game
 };
 
+// A panel of a plugin (ABI minor 2): a tab on its page, maybe popped out into its own window.
+struct PanelView {
+    std::string key;
+    std::string label;        // tab text: icon (when the font has it) + title
+    std::string title;
+    unsigned icon = 0;        // codepoint, 0 = none
+    bool detached = false;    // in its own window
+};
+
 struct PluginView {
     std::string id, name, version, author, description;
     PluginStatus status = PluginStatus::Off;
@@ -71,6 +80,7 @@ struct PluginView {
     bool hasMenu = false;     // has a settings page (DrawMenu)
     bool liveToggle = false;  // switching applies now
     bool soloOnly = false;
+    std::vector<PanelView> panels; // tabs after "Settings"
 };
 
 struct HotkeyView {
@@ -131,6 +141,7 @@ struct Actions {
     std::function<void()> closeMenu;
     std::function<void(bool on)> setBarEnabled;
     std::function<void(bool on)> setOnlineFix;
+    std::function<void(const std::string& pluginId, const std::string& key)> drawPanelTab; // body or window options
 };
 
 // Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",

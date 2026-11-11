@@ -89,6 +89,12 @@ public:
     virtual void* engine(uint32_t /*which*/) { return nullptr; }
     virtual HorizonResult playMapFile(const char* /*path*/, uint32_t /*flags*/) { return HORIZON_ERR_NOT_SUPPORTED; }
     virtual HorizonResult returnToMenu() { return HORIZON_ERR_NOT_SUPPORTED; }
+    // save_replay: the run's replay without dialogs. stem "" = the game's default name. pathOut: the file
+    // written (UTF-8), why: a short reason when not OK. Game thread.
+    virtual HorizonResult saveReplay(const std::wstring& /*stem*/, std::string* /*pathOut*/, std::string* why) {
+        if (why) *why = "not supported for this game";
+        return HORIZON_ERR_NOT_SUPPORTED;
+    }
     virtual bool usesDirectInputBlock() const { return true; } // false on Forever (Competition Patch rule)
     virtual std::string status() const { return std::string(); } // one line for the About page
 };

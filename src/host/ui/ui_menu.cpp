@@ -432,11 +432,26 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
     }
     (void)f;
     if (beginCard("##plugin_page", 20.0f, 16.0f, false)) {
-        if (actions.drawPluginPage) {
-            ImGui::PushID(plugin.id.c_str());
-            actions.drawPluginPage(plugin.id);
-            ImGui::PopID();
+        ImGui::PushID(plugin.id.c_str());
+        if (plugin.panels.empty()) {
+            if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
+        } else if (ImGui::BeginTabBar("##panels")) {
+            // Settings (the plugin's DrawMenu) first, then one tab per panel (ABI minor 2)
+            if (plugin.hasMenu && ImGui::BeginTabItem("Settings")) {
+                if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
+                ImGui::EndTabItem();
+            }
+            for (const PanelView& pv : plugin.panels) {
+                const std::string label = pv.label + (pv.detached ? " (window)" : "") + "###tab_" + pv.key;
+                if (ImGui::BeginTabItem(label.c_str())) {
+                    ImGui::Spacing();
+                    if (actions.drawPanelTab) actions.drawPanelTab(plugin.id, pv.key);
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
         }
+        ImGui::PopID();
     }
     endCard();
 }
@@ -863,7 +878,8 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     const ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
-                                        ImGuiWindowFlags_NoScrollWithMouse;
+                                        ImGuiWindowFlags_NoScrollWithMouse |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus; // popped-out panel windows stay above it
     ImGui::Begin("##horizon_panel", nullptr, panelFlags);
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);

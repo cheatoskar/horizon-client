@@ -1,6 +1,7 @@
 // Plugin loading (profile.json -> horizon\plugins\<id>\), the per-plugin HorizonHostApi tables, and
 // every call into a plugin (each one SEH-guarded: a plugin that crashes is switched off, the game goes on).
 #include "host/plugins.h"
+#include "host/panels.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -291,11 +292,48 @@ uint64_t HORIZON_CALL apiCreateTexture(HorizonPluginHandle h, uint32_t w, uint32
     return id;
 }
 void HORIZON_CALL apiReleaseTexture(HorizonPluginHandle, uint64_t id) { releaseTexture(id); }
-HorizonResult HORIZON_CALL apiSaveReplay(HorizonPluginHandle h, const char*) {
+HorizonResult HORIZON_CALL apiSaveReplay(HorizonPluginHandle h, const char* name) {
     Plugin* p = fromHandle(h);
-    if (p) logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: not supported by this host version yet");
-    return HORIZON_ERR_NOT_SUPPORTED;
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "save_replay: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    const std::wstring stem = replayStemFromName(wide(name ? name : ""));
+    std::string path, why;
+    const HorizonResult r = game().saveReplay(stem, &path, &why);
+    if (r == HORIZON_OK) {
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: saved %s", path.c_str());
+        postReplaySavedNow(p, path);
+    } else {
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: %d (%s)", r, why.c_str());
+    }
+    return r;
 }
+
+// ---- ABI minor 2: panels, host flags
+HorizonResult HORIZON_CALL apiRegisterPanel(HorizonPluginHandle h, const HorizonPanelDef* def) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    const HorizonResult r = panelRegister(p, def);
+    if (r != HORIZON_OK) logLine(HORIZON_LOG_WARN, p->id.c_str(), "register_panel: invalid (key [a-z0-9-], title and draw needed)");
+    return r;
+}
+void HORIZON_CALL apiUnregisterPanel(HorizonPluginHandle h, const char* key) {
+    if (Plugin* p = fromHandle(h)) panelUnregister(p, key);
+}
+int32_t HORIZON_CALL apiPanelVisible(HorizonPluginHandle h, const char* key) {
+    Plugin* p = fromHandle(h);
+    return p ? panelVisible(p, key) : 0;
+}
+void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t on) {
+    Plugin* p = fromHandle(h);
+    if (!p) return;
+    const uint32_t before = p->hostFlags;
+    p->hostFlags = on ? (p->hostFlags | flag) : (p->hostFlags & ~flag);
+    if (before != p->hostFlags) logLine(HORIZON_LOG_INFO, p->id.c_str(), "host flags 0x%x", p->hostFlags);
+}
+uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll(); }
 
 void fillApi(Plugin* p) {
     HorizonHostApi& a = p->api;
@@ -338,6 +376,11 @@ void fillApi(Plugin* p) {
     a.create_texture_rgba = &apiCreateTexture;
     a.release_texture = &apiReleaseTexture;
     a.save_replay = &apiSaveReplay;
+    a.register_panel = &apiRegisterPanel;
+    a.unregister_panel = &apiUnregisterPanel;
+    a.panel_visible = &apiPanelVisible;
+    a.set_host_flag = &apiSetHostFlag;
+    a.host_flags = &apiHostFlags;
 }
 
 // ---------------------------------------------------------------- loading
@@ -598,6 +641,8 @@ bool pluginSwitchPosition(const Plugin* p) {
     return p->enabled;
 }
 
+void pluginCrashed(Plugin* p, const char* where) { crashed(p, where); }
+
 void pluginDrawMenu(const std::string& id) {
     Plugin* p = findPlugin(id);
     if (!p) return;
@@ -657,6 +702,7 @@ void pluginsShutdownAll() {
         p->running = false;
         if (!sehVoid(p->shutdown)) logLine(HORIZON_LOG_ERROR, p->id.c_str(), "crashed in Shutdown");
         else logLine(HORIZON_LOG_INFO, p->id.c_str(), "shut down");
+        panelsRemovePlugin(p);
     }
     pluginsSaveSettings(true);
     // The DLLs stay loaded until the process ends: queued calls, threads and hooks of theirs may still point into them.

@@ -8,6 +8,8 @@
 //   - HorizonPlugin_DrawOverlay a small always-on HUD (can be switched off by a setting)
 //   - HorizonPlugin_SetEnabled  live on/off from the menu
 //   - HorizonPlugin_Shutdown  called before the DLL is unloaded
+//   - panels (ABI 1.2)        "Events" (a tab, can be popped out) and "Clock" (a HUD window)
+//   - save_replay (ABI 1.1)   the "Save replay" button
 // Everything runs on the game's main thread. Keep handlers short.
 //
 // Build: see plugins\sample\build_plugin.cmd. Needs the same Dear ImGui version as the host.
@@ -16,7 +18,9 @@
 #define HORIZON_PLUGIN_BUILD
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "imgui.h"
 #include "horizon_imgui.h"   // horizon_imgui_attach(), after imgui.h
@@ -34,6 +38,7 @@ constexpr int kMaxLines = 20;
 char g_lines[kMaxLines][96];            // ring buffer of event texts
 int g_lineCount = 0;                    // how many are stored (<= kMaxLines)
 int g_lineNext = 0;                     // where the next one goes
+char g_saveResult[96] = "";             // what the last "Save replay" did
 
 void addLine(const char* fmt, ...) {
     va_list ap;
@@ -63,6 +68,36 @@ const char* eventName(uint32_t type) {
     case HORIZON_EVENT_ONLINE_CHANGED: return "online changed";
     case HORIZON_EVENT_GAME_STATE: return "game state";
     default: return "event";
+    }
+}
+
+// Panel "Events": the event list. The host draws the tab or the window around it.
+void HORIZON_CALL drawEvents(void*) {
+    if (g_lineCount == 0) ImGui::TextUnformatted("No events yet.");
+    const int first = (g_lineNext - g_lineCount + kMaxLines) % kMaxLines; // oldest first
+    for (int i = 0; i < g_lineCount; i++) ImGui::TextUnformatted(g_lines[(first + i) % kMaxLines]);
+}
+
+// Panel "Clock": a small HUD window (starts popped out and stays with the menu closed).
+void HORIZON_CALL drawClock(void*) {
+    char text[16];
+    const time_t now = time(nullptr);
+    struct tm local;
+    localtime_s(&local, &now);
+    strftime(text, sizeof(text), "%H:%M:%S", &local);
+    ImGui::TextUnformatted(text);
+    const int last = (g_lineNext - 1 + kMaxLines) % kMaxLines;
+    ImGui::TextDisabled("%s", g_lineCount ? g_lines[last] : "waiting");
+}
+
+void saveReplay() {
+    if (g_host->abi_minor < 1) return;
+    const HorizonResult r = g_host->save_replay(g_host->plugin, ""); // "" = the game's default name
+    switch (r) {
+    case HORIZON_OK: snprintf(g_saveResult, sizeof(g_saveResult), "Saved (see the log for the file)."); break;
+    case HORIZON_ERR_NOT_SUPPORTED: snprintf(g_saveResult, sizeof(g_saveResult), "Not supported in this game."); break;
+    case HORIZON_ERR_WRONG_STATE: snprintf(g_saveResult, sizeof(g_saveResult), "Nothing to save right now."); break;
+    default: snprintf(g_saveResult, sizeof(g_saveResult), "Failed (%d).", r); break;
     }
 }
 
@@ -104,6 +139,38 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     // Ask for the events we want. Without this, OnEvent is never called.
     host->subscribe(host->plugin, HORIZON_EVENTS_ALL);
 
+    // Panels (ABI 1.2): the host owns tabs, windows and their options; we only draw the bodies.
+    if (host->abi_minor >= 2) {
+        HorizonPanelDef events = {};
+        events.size = sizeof(events);
+        events.key = "events";
+        events.title = "Events";
+        events.flags = HORIZON_PANEL_MENU_PAGE;
+        events.draw = drawEvents;
+        events.default_x = 0.05f;
+        events.default_y = 0.20f;
+        events.default_w = 0.22f;
+        events.default_h = 0.30f;
+        host->register_panel(host->plugin, &events);
+        HorizonPanelDef clock = {};
+        clock.size = sizeof(clock);
+        clock.key = "clock";
+        clock.title = "Clock";
+        clock.flags = HORIZON_PANEL_HUD;
+        clock.draw = drawClock;
+        clock.default_x = 0.82f;
+        clock.default_y = 0.08f; // w/h 0: the window fits its content
+        host->register_panel(host->plugin, &clock);
+    }
+
+    // Test hook (tests/run_tests.cmd): outside the game save_replay must answer NOT_SUPPORTED.
+    char env[8];
+    size_t n = 0;
+    if (getenv_s(&n, env, sizeof(env), "HORIZON_TEST_SAVE_REPLAY") == 0 && n > 0 && env[0] == '1') {
+        saveReplay();
+        host->log(host->plugin, HORIZON_LOG_INFO, "test: save_replay -> %s", g_saveResult);
+    }
+
     const HorizonGameInfo* gi = host->game_info();
     host->log(host->plugin, HORIZON_LOG_INFO, "loaded in %s", gi ? gi->game_name : "?");
     return 0;
@@ -134,11 +201,16 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (ImGui::Checkbox("Show overlay", &g_showOverlay)) g_host->set_int(g_host->plugin, "ShowOverlay", g_showOverlay ? 1 : 0);
     const char* key = g_pingHotkey ? g_host->hotkey_text(g_host->plugin, g_pingHotkey) : "";
     ImGui::Text("Ping key: %s", (key && *key) ? key : "none (set one in the hotkey list)");
-    ImGui::Separator();
-    if (g_lineCount == 0) ImGui::TextUnformatted("No events yet.");
-    // Oldest first.
-    const int first = (g_lineNext - g_lineCount + kMaxLines) % kMaxLines;
-    for (int i = 0; i < g_lineCount; i++) ImGui::TextUnformatted(g_lines[(first + i) % kMaxLines]);
+    if (ImGui::Button("Save replay")) saveReplay();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Saves the last run's replay without dialogs (ESWC).");
+    if (g_saveResult[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", g_saveResult);
+    }
+    if (g_host->abi_minor < 2) {
+        ImGui::Separator();
+        drawEvents(nullptr); // older host: no panels, the list stays here
+    }
 }
 
 // Called every frame while enabled and not gated. Draw with the foreground list: no window needed.

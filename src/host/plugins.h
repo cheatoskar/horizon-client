@@ -41,6 +41,7 @@ struct Plugin {
     HorizonDeviceCallbacks dev = {};
     bool hasDev = false;
     std::string hotkeyTextBuf;
+    uint32_t hostFlags = 0; // set_host_flag (ABI minor 2)
 };
 
 std::vector<std::unique_ptr<Plugin>>& plugins();
@@ -50,5 +51,6 @@ bool pluginGated(const Plugin* p);
 void pluginSetEnabled(const std::string& id, bool on);
 bool pluginSwitchPosition(const Plugin* p);
 void pluginDrawMenu(const std::string& id);
+void pluginCrashed(Plugin* p, const char* where); // stops calling it, shows "Failed"
 
 } // namespace horizon

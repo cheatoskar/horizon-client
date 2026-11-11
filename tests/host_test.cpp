@@ -120,6 +120,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
         const wchar_t* path;
     };
     SetEnvironmentVariableW(L"HORIZON_TEST_MENU", L"1");
+    SetEnvironmentVariableW(L"HORIZON_TEST_SAVE_REPLAY", L"1"); // the sample calls save_replay once in Init
     HMODULE host = LoadLibraryW((dir + L"\\horizon\\host.dll").c_str());
     check(host != nullptr, "host.dll loads");
     if (!host) return 1;
@@ -191,6 +192,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
         if (uiState && setCapture && version) {
             check(version() == 0x000200u, "HorizonHost_Version = 0.2.0");
             check((uiState() & 1u) != 0, "UI state: menu open");
+            if (expectPlugin == 1) check((uiState() & 4u) != 0, "UI state: the sample's Clock window is on screen");
             setCapture(1);
             dev->Present(nullptr, nullptr, nullptr, nullptr);
             check(uiState() == 0, "UI state 0 while capturing");
@@ -206,6 +208,12 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
     check(has(log, "menu: open"), "menu drawn");
     check(has(log, "d3d: Reset -> 0x00000000"), "Reset seen by the host");
     check(!has(log, "exception while drawing"), "no exception while drawing");
+    if (expectPlugin == 1) {
+        check(has(log, "test: save_replay -> Not supported"), "save_replay: NOT_SUPPORTED outside ESWC");
+        check(has(log, "panel \"events\" (Events)"), "panel Events registered");
+        check(has(log, "panel \"clock\" (Clock), in its own window"), "HUD panel Clock starts in its own window");
+        check(!has(log, "crashed"), "no plugin crashed");
+    }
     dev->Release();
     d3d->Release();
     DestroyWindow(hwnd);

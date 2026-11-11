@@ -11,6 +11,7 @@
 
 #include "common/hotkeys.h"
 #include "common/util.h"
+#include "host/panels.h"
 #include "host/plugins.h"
 #include "host/ui/ui.h"
 #include "imgui.h"
@@ -195,6 +196,8 @@ ui::Model buildModel() {
         v.hasMenu = p->running && p->drawMenu != nullptr;
         v.liveToggle = p->live;
         v.soloOnly = p->soloOnly;
+        v.panels = panelViews(p->id);
+        for (auto& pv : v.panels) pv.label = panelTabLabel(pv);
         m.plugins.push_back(v);
     }
     for (const auto& r : hotkeyRows()) {
@@ -249,6 +252,7 @@ ui::Actions makeActions() {
         hostSetSettingInt("OnlineFix", on ? 1 : 0);
         HLOG("menu: online login fix %s from the next start", on ? "on" : "off");
     };
+    a.drawPanelTab = [](const std::string& pluginId, const std::string& key) { panelDrawTab(pluginId, key); };
     a.setBarEnabled = [](bool on) {
         g_barEnabled = on;
         hostSetSettingInt("bar", on ? 1 : 0);
@@ -444,13 +448,16 @@ void overlayFrame(void* device) {
         pluginsSaveSettings(false);
         return;
     }
-    const bool top = g_barEnabled && fg && mouseAtTop();
-    bool anyOverlay = false;
+    const bool pluginCapture = (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0; // a plugin takes a photo/video
+    const bool top = g_barEnabled && !pluginCapture && fg && mouseAtTop();
+    bool anyOverlay = panelsWantFrame(g_menu);
     for (auto& up : plugins())
         if (up->running && up->enabled && up->drawOverlay) anyOverlay = true;
     const bool need = g_menu || g_barShown || top || anyOverlay;
     if (game().usesDirectInputBlock()) dinputSetBlocked(g_menu);
     if (!need) {
+        panelsBeginFrame();
+        g_panelsShown = false;
         hostConfigSave(false);
         pluginsSaveSettings(false);
         return;
@@ -460,15 +467,18 @@ void overlayFrame(void* device) {
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = g_menu || g_barShown;
     pluginsDrawOverlays();
+    panelsBeginFrame();
+    if (!g_menu) g_panelsShown = panelsDrawWindows(false);
     const ui::Model model = buildModel();
     static ui::Actions actions = makeActions();
     bool openMenu = false;
-    g_barShown = g_barEnabled ? ui::drawBar(model, actions, top, g_menu, &openMenu) : false;
+    g_barShown = g_barEnabled && !pluginCapture ? ui::drawBar(model, actions, top, g_menu, &openMenu) : false;
     if (openMenu) setMenuOpen(true, "the bar");
     if (g_menu) {
         bool open = true;
         ui::drawMenu(model, actions, &open);
         if (!open) setMenuOpen(false, "the menu");
+        g_panelsShown = panelsDrawWindows(true); // above the menu, so they can be moved and set up
     }
     ImGui::EndFrame();
     ImGui::Render();

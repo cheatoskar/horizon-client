@@ -11,6 +11,7 @@
 // and the solo race end (RACE_END with the run's replay). Sunrise's matching functions are not verified
 // yet: Sunrise gets the polled events only.
 #include "host/host.h"
+#include "host/game/eswc_save.h"
 
 #include <cstdio>
 #include <cstring>
@@ -185,6 +186,7 @@ public:
     // Map starts and the menu exit: legacy-randomizer's gamectl module (src/gamectl, vendored).
     HorizonResult playMapFile(const char* path, uint32_t) override { return fromGamectl(gamectl::playMapFile(wide(path).c_str())); }
     HorizonResult returnToMenu() override { return fromGamectl(gamectl::returnToMenu()); }
+    HorizonResult saveReplay(const std::wstring& stem, std::string* pathOut, std::string* why) override;
     std::string status() const override { return status_; }
 
     // ---- ESWC hooks (public for the detours)
@@ -512,5 +514,34 @@ void LegacyAdapter::installEswcHooks() {
 
 GameAdapter* makeEswcAdapter() { return new LegacyAdapter(kEswc); }
 GameAdapter* makeSunriseAdapter() { return new LegacyAdapter(kSunrise); }
+
+// save_replay (ESWC only): the solo end-race screen saves the current run (as "Save replay" there);
+// elsewhere (menus, LAN/online after a race) the previous race's copy (as "Save previous replay").
+// A solo race still running has no finished replay yet.
+HorizonResult LegacyAdapter::saveReplay(const std::wstring& stem, std::string* pathOut, std::string* why) {
+    if (!eswc()) {
+        *why = "not supported on Sunrise yet";
+        return HORIZON_ERR_NOT_SUPPORTED;
+    }
+    Snapshot s;
+    read(s);
+    if (!s.app) {
+        *why = "game not ready";
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    if (state_ == HORIZON_STATE_SOLO_RACE || state_ == HORIZON_STATE_LOADING || state_ == HORIZON_STATE_EDITOR) {
+        *why = "no finished run (race running, loading or editor)";
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    const bool solo = state_ == HORIZON_STATE_END_RACE;
+    EswcSaveResult r = {};
+    eswcSaveReplay(s.app, solo, stem.empty() ? nullptr : stem.c_str(), &r);
+    if (r.ok == 1) {
+        *pathOut = utf8(std::wstring(r.folder) + r.name);
+        return HORIZON_OK;
+    }
+    *why = r.why ? r.why : "failed";
+    return r.ok == 0 ? HORIZON_ERR_FAILED : HORIZON_ERR_WRONG_STATE;
+}
 
 } // namespace horizon

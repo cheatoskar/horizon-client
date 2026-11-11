@@ -115,6 +115,45 @@ int32_t HORIZON_CALL f_menu_open(void) { return 1; }
 void HORIZON_CALL f_request_restart_note(HorizonPluginHandle, const char* why) { printf("  restart note: %s\n", why); }
 int32_t HORIZON_CALL f_reflect_offset(const char*, const char*) { return -1; }
 void* HORIZON_CALL f_reflect_method(const char*, const char*) { return nullptr; }
+// ABI minor 1
+uint64_t HORIZON_CALL f_create_texture_rgba(HorizonPluginHandle, uint32_t, uint32_t, const void*) { return 0; } // no device
+void HORIZON_CALL f_release_texture(HorizonPluginHandle, uint64_t) {}
+int g_saveCalls = 0;
+HorizonResult HORIZON_CALL f_save_replay(HorizonPluginHandle, const char* name) {
+    g_saveCalls++;
+    printf("  save_replay(\"%s\") -> NOT_SUPPORTED (no game)\n", name ? name : "");
+    return HORIZON_ERR_NOT_SUPPORTED;
+}
+// ABI minor 2: panels are kept and drawn in one window each, like the host's tab body
+struct FakePanel {
+    std::string key, title;
+    uint32_t flags;
+    HorizonPanelDrawFn draw;
+    void* user;
+};
+std::vector<FakePanel> g_panels;
+uint32_t g_hostFlags = 0;
+HorizonResult HORIZON_CALL f_register_panel(HorizonPluginHandle, const HorizonPanelDef* d) {
+    if (!d || d->size < sizeof(uint32_t) * 2 || !d->key || !*d->key || !d->title || !d->draw) return HORIZON_ERR_INVALID_ARG;
+    for (auto& p : g_panels)
+        if (p.key == d->key) {
+            p = {d->key, d->title, d->flags, d->draw, d->user};
+            return HORIZON_OK;
+        }
+    g_panels.push_back({d->key, d->title, d->flags, d->draw, d->user});
+    printf("  panel \"%s\" (%s)%s\n", d->key, d->title, (d->flags & HORIZON_PANEL_HUD) ? " HUD" : "");
+    return HORIZON_OK;
+}
+void HORIZON_CALL f_unregister_panel(HorizonPluginHandle, const char* key) {
+    for (size_t i = 0; i < g_panels.size(); i++)
+        if (key && g_panels[i].key == key) {
+            g_panels.erase(g_panels.begin() + static_cast<std::ptrdiff_t>(i));
+            return;
+        }
+}
+int32_t HORIZON_CALL f_panel_visible(HorizonPluginHandle, const char*) { return 1; }
+void HORIZON_CALL f_set_host_flag(HorizonPluginHandle, uint32_t flag, int32_t on) { g_hostFlags = on ? (g_hostFlags | flag) : (g_hostFlags & ~flag); }
+uint32_t HORIZON_CALL f_host_flags(void) { return g_hostFlags; }
 
 void flushQueue() {
     std::vector<std::pair<HorizonCallback, void*>> q;
@@ -143,6 +182,8 @@ HorizonEvent makeEvent(uint32_t type) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // before the plugin loads: its C runtime copies the environment at load time
+    SetEnvironmentVariableA("HORIZON_TEST_SAVE_REPLAY", "1"); // the sample calls save_replay once in Init
     const char* dll = nullptr;
     const char* gameName = "eswc";
     int expectInit = 0;
@@ -271,6 +312,14 @@ int main(int argc, char** argv) {
     host.request_restart_note = f_request_restart_note;
     host.reflect_offset = f_reflect_offset;
     host.reflect_method = f_reflect_method;
+    host.create_texture_rgba = f_create_texture_rgba;
+    host.release_texture = f_release_texture;
+    host.save_replay = f_save_replay;
+    host.register_panel = f_register_panel;
+    host.unregister_panel = f_unregister_panel;
+    host.panel_visible = f_panel_visible;
+    host.set_host_flag = f_set_host_flag;
+    host.host_flags = f_host_flags;
 
     const int32_t r = init(&host);
     printf("  Init returned %d (expected %d)\n", r, expectInit);
@@ -332,10 +381,17 @@ int main(int argc, char** argv) {
         if (drawMenu) drawMenu();
         ImGui::End();
         if (drawOverlay) drawOverlay();
+        for (auto& p : g_panels) {
+            ImGui::Begin((p.title + "###" + p.key).c_str());
+            p.draw(p.user);
+            ImGui::End();
+        }
         ImGui::Render();
         dd = ImGui::GetDrawData();
     }
     check(dd != nullptr, "frame rendered headless");
+    if (strcmp(pi->id, "sample") == 0) check(g_saveCalls == 1 && g_panels.size() == 2, "sample: save_replay called, two panels drawn");
+    printf("  panels drawn: %d, save_replay calls: %d\n", static_cast<int>(g_panels.size()), g_saveCalls);
     printf("  draw lists: %d, vertices: %d\n", dd ? dd->CmdListsCount : 0, dd ? dd->TotalVtxCount : 0);
 
     printf("hotkeys: %d\n", static_cast<int>(g_hotkeys.size()));

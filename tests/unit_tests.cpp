@@ -68,6 +68,11 @@ static void testManifest() {
     CHECK(parsePluginManifest(R"({"icon":"icon.png"})", "x").icon == "icon.png");
     CHECK(parsePluginManifest(R"({"icon":"..\\x.png"})", "x").icon.empty()); // icon must stay in the folder
     CHECK(parsePluginManifest(R"({"icon":"sub/x.png"})", "x").icon.empty());
+    // save_replay names
+    CHECK(replayStemFromName(L"My run.Replay.Gbx") == L"My run");
+    CHECK(replayStemFromName(L"a\\b/c:d*?.replay.gbx") == L"a_b_c_d__");
+    CHECK(replayStemFromName(L"trailing. . ") == L"trailing");
+    CHECK(replayStemFromName(std::wstring(300, L'x')).size() == 120);
     CHECK(gameBitFromName("TMUF") == HORIZON_GAME_TMUF && gameBitFromName("x") == 0);
 }
 
