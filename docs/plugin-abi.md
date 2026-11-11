@@ -217,6 +217,15 @@ host->register_panel(host->plugin, &d);
 
 Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 
+## Free plugin windows (host, no ABI change)
+
+Every plugin icon in the top bar has two clicks. Left click opens (or closes) the plugin's page as a free window: the plugin's Settings (`DrawMenu`) and one tab per panel, an "On" switch, no menu frame or sidebar. It can be moved and resized, has a close button, and several plugins' windows can be open at once. Right click opens the Horizon menu on that plugin's page (the settings). The icon tooltip says "Linksklick: Fenster Â· Rechtsklick: Einstellungen".
+
+- Position and size are saved per plugin in `settings\host.json` as `pwin.<plugin id>` (`x,y,w,h` in pixels). They are clamped to the screen when the window opens and again when the display size changes (Reset). Whether the window is open is not saved.
+- Plugins need no change: the window calls the same `DrawMenu` and panel draw functions as the menu page. A panel that was popped out into its own window shows its "in its own window" note in the tab, as in the menu.
+- Input rules: the windows are ordinary ImGui windows drawn after the menu, so they sit above the menu and its dim layer. With the menu closed, mouse clicks over a window (or the bar) are kept from the game, mouse moves are not; a focused text field also takes the keyboard (the game does not see those keys). The pointer is drawn while a window is open. The game's DirectInput is only blocked while the menu is open.
+- `HorizonHost_GetUiState` does not report these windows (bit 4 stays for detached panels).
+
 ## ABI 1.3
 
 Minor 3 has four new functions at the end of `HorizonHostApi` and one new callback at the end of `HorizonDeviceCallbacks`. They came from three branches (TMVS modules, client mods, Horizon Performance) and were merged into this one minor. The order is fixed and never changes:

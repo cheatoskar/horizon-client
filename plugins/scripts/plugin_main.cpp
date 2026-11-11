@@ -439,6 +439,10 @@ void HORIZON_CALL drawOptionsPanel(void*) {
     if (g_imgui && g_host) drawGeneralSettings();
 }
 
+void HORIZON_CALL onPeekHotkey(void*) {
+    if (g_enabled) g_mgr.peek();
+}
+
 } // namespace
 
 extern "C" {
@@ -502,6 +506,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         d.default_h = 0.3f;
         g_panels = host->register_panel(host->plugin, &d) == HORIZON_OK && g_panels;
     }
+    // one hotkey for all scripts: calls OnPeek(), e.g. Clock and Map Info show themselves again for a while
+    if (host->register_hotkey) host->register_hotkey(host->plugin, "peek", "Show script overlays", "Ctrl+F4", onPeekHotkey, nullptr);
     if (!g_panels) host->log(host->plugin, HORIZON_LOG_WARN, "this host has no panels (ABI 1.2): scripts run, but the Scripts page needs host 0.2.0 or newer");
     if (g_mgr.ready()) {
         updateGate();

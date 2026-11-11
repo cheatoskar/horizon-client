@@ -165,7 +165,7 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
         dl->AddCircleFilled(dc, 6.0f * s, U(t.bg2), 16);
         dl->AddCircleFilled(dc, 4.5f * s, U(dot), 16);
 
-        if (clicked && canToggle(p.status) && actions.setPluginEnabled) actions.setPluginEnabled(p.id, !p.enabled);
+        if (clicked) togglePluginWindow(p.id); // free window with the plugin's page; on/off is a switch inside it
         if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             showPluginPage(p.id);
             if (openMenu) *openMenu = true;
@@ -173,8 +173,7 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
         if (hov) {
             std::string tip = p.name + ": " + statusLabel(p.status, false);
             if (!p.statusText.empty() && p.status != PluginStatus::NeedsRestart) tip += "\n" + p.statusText;
-            if (!p.liveToggle && canToggle(p.status)) tip += "\nApplies after a restart.";
-            if (p.hasMenu) tip += "\nRight-click for settings.";
+            tip += "\nLinksklick: Fenster \xC2\xB7 Rechtsklick: Einstellungen";
             ImGui::SetTooltip("%s", tip.c_str());
         }
         ImGui::PopID();

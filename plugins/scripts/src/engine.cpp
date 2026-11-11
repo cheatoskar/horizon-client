@@ -52,6 +52,7 @@ const char* kDecls[CbCount][3] = {
     {"void OnRaceEnd()", nullptr, nullptr},
     {"void OnMenu()", nullptr, nullptr},
     {"void OnGameState(Game::State)", nullptr, nullptr},
+    {"void OnPeek()", nullptr, nullptr},
     {"void OnUnload()", nullptr, nullptr},
 };
 
@@ -72,6 +73,7 @@ const CbName kCbNames[] = {
     {"OnRaceEnd", "void OnRaceEnd()", PermReadGame},
     {"OnMenu", "void OnMenu()", PermReadGame},
     {"OnGameState", "void OnGameState(Game::State state)", PermReadGame},
+    {"OnPeek", "void OnPeek()", 0},
     {"OnUnload", "void OnUnload()", 0},
 };
 
@@ -723,6 +725,14 @@ void Manager::render() {
         Script& s = *sp;
         if (s.state != ScriptState::Running || !s.cb[CbRender] || !(s.manifest.perms & PermUi)) continue;
         call(s, s.cb[CbRender], "Render()", cfg.callLimitMs, true, nullptr, nullptr);
+    }
+}
+
+void Manager::peek() {
+    for (auto& sp : scripts_) {
+        Script& s = *sp;
+        if (s.state != ScriptState::Running || !s.cb[CbOnPeek]) continue;
+        call(s, s.cb[CbOnPeek], "OnPeek()", cfg.callLimitMs, false, nullptr, nullptr);
     }
 }
 

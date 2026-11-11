@@ -326,6 +326,14 @@ void Main() {
 )");
     addScript(game, "globalloop", toml("Global loop", ""), "int Forever() { while (true) {} return 1; }\nint x = Forever();\n");
     addScript(game, "wronggame", toml("Wrong game", "\"ui\"", "solo-only", "eswc"), "void Main() {}\n");
+    addScript(game, "peek", toml("Peek", ""), "int n = 0;\nvoid OnPeek() { n++; print(\"peeked \" + n); }\n");
+    {
+        // the real Clock example plus a global initialiser that prints its hide-timer function
+        std::string clock;
+        readFile(widen("plugins\\scripts\\examples\\clock\\main.as"), &clock, 64 * 1024);
+        clock += "\nint probe = Probe();\nint Probe() { print(\"alpha \" + TargetAlpha(0, 10) + \" \" + TargetAlpha(9700, 10) + \" \" + TargetAlpha(10000, 10) + \" \" + TargetAlpha(500000, 0)); return 0; }\n";
+        addScript(game, "hidetimer", toml("Hide timer", "\"ui\", \"settings\", \"read-game\""), clock);
+    }
     addScript(game, "badmanifest", "name = \"Bad\"\npermissions = [\"ui\", \"write-memory\"]\n", "void Main() {}\n");
     addScript(game, "nomanifest", "", "void Main() {}\n");
     addScript(game, "include", toml("Include", ""), "#include \"other.as\"\nvoid Main() {}\n");
@@ -362,7 +370,7 @@ void OnFinish(int t, bool pb) { Game::PlayMapFile("C:\\maps\\notamap.txt"); }
         m.tick(t);
         CHECK(imguiBalanced());
     }
-    CHECK(m.scripts().size() == 23);
+    CHECK(m.scripts().size() == 25);
 
     Script* s = get(m, "good");
     CHECK(s && s->state == ScriptState::Running);
@@ -446,6 +454,13 @@ void OnFinish(int t, bool pb) { Game::PlayMapFile("C:\\maps\\notamap.txt"); }
         ImGuiWindow* win = ImGui::FindWindowByName("Good##hs.good");
         CHECK(win != nullptr);
     }
+
+    CHECK(contains(testhost::logs(), "[hidetimer] alpha 1 0.75 0 1")); // Clock: visible, fading, hidden, "0 = always visible"
+    s = get(m, "hidetimer");
+    CHECK(s && s->state == ScriptState::Running);
+    m.peek(); // the "Show script overlays" hotkey
+    m.peek();
+    CHECK(contains(testhost::logs(), "[peek] peeked 2"));
 
     // events
     HorizonMapInfo mi = {};

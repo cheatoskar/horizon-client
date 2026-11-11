@@ -28,6 +28,8 @@ Model g_model;
 Actions g_actions;
 bool g_open = true;
 int g_barToggles = 0;
+int g_saved = 0;
+float g_savedRect[4] = {};
 
 void frames(int n, ImVec2 mouse, int clickAt = -1) {
     ImGuiIO& io = ImGui::GetIO();
@@ -88,6 +90,60 @@ int main() {
     frames(20, ImVec2(1314, 209), 10);
     check(g_open, "menu still open after the click");
     check(g_barToggles == 1, "a click on a menu switch lands (setBarEnabled called once)");
+
+    // free plugin windows (bar, left click): open, remember, clamp, close
+    std::printf("free plugin windows\n");
+    g_open = false;
+    PluginView pv;
+    pv.id = "demo";
+    pv.name = "Demo";
+    pv.status = PluginStatus::On;
+    pv.enabled = true;
+    pv.hasMenu = true;
+    pv.winX = 5000; // remembered off screen: must be clamped
+    pv.winY = 4000;
+    pv.winW = 400;
+    pv.winH = 300;
+    g_model.plugins.push_back(pv);
+    PluginView pv2 = pv;
+    pv2.id = "second";
+    pv2.name = "Second";
+    pv2.winX = pv2.winY = -1;
+    g_model.plugins.push_back(pv2);
+    g_actions.drawPluginPage = [](const std::string&) { ImGui::Button("Demo button"); };
+    g_actions.saveWindow = [](const std::string&, float x, float y, float w, float h) {
+        ++g_saved;
+        g_savedRect[0] = x; g_savedRect[1] = y; g_savedRect[2] = w; g_savedRect[3] = h;
+    };
+    auto drawWins = [&](int n, ImVec2 mouse) {
+        for (int f = 0; f < n; ++f) {
+            io.DeltaTime = 1.0f / 30.0f;
+            io.AddMousePosEvent(mouse.x, mouse.y);
+            ImGui::NewFrame();
+            drawPluginWindows(g_model, g_actions);
+            ImGui::EndFrame();
+        }
+    };
+    io.DisplaySize = ImVec2(1600, 900);
+    check(!anyPluginWindowOpen(), "no window open at the start");
+    togglePluginWindow("demo");
+    check(pluginWindowOpen("demo") && anyPluginWindowOpen(), "left click on the icon opens the window");
+    drawWins(5, ImVec2(10, 10));
+    check(g_saved >= 1 && g_savedRect[0] <= 1600 - 100 && g_savedRect[1] <= 900 - 40 && g_savedRect[0] >= 0, "remembered position off screen is clamped");
+    check(g_savedRect[2] == 400 && g_savedRect[3] == 300, "remembered size is kept");
+    togglePluginWindow("second");
+    drawWins(5, ImVec2(10, 10));
+    check(pluginWindowOpen("demo") && pluginWindowOpen("second"), "several windows can be open at once");
+    drawWins(5, ImVec2(g_savedRect[0] + 100, g_savedRect[1] + 100));
+    check(hoveredRoot().find("hzwin.") != std::string::npos, "pointer over a free window hits that window");
+    io.DisplaySize = ImVec2(640, 480); // Reset to a smaller display: windows are clamped again
+    g_saved = 0;
+    drawWins(5, ImVec2(10, 10));
+    check(g_saved >= 1 && g_savedRect[0] <= 640 - 100 && g_savedRect[2] <= 640, "after a Reset the windows are clamped to the screen");
+    togglePluginWindow("demo");
+    togglePluginWindow("second");
+    drawWins(3, ImVec2(10, 10));
+    check(!anyPluginWindowOpen(), "left click again closes them");
 
     ImGui::DestroyContext();
     std::printf(g_failed ? "FAILED\n" : "all ok\n");
