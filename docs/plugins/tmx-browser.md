@@ -1,6 +1,6 @@
 # TMX Browser
 
-Plugin id `tmx-browser`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, on by default. It searches the TrackMania Exchange from inside the game, shows map cards with thumbnails, and downloads or starts a map. It needs **TM Horizon** running on the same PC: the game never goes online, TM Horizon talks to TMX (`docs/client-bridge.md`).
+Plugin id `tmx-browser`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). It searches the TrackMania Exchange from inside the game, shows map cards with thumbnails, and downloads or starts a map. It needs **TM Horizon** running on the same PC: the game never goes online, TM Horizon talks to TMX (`docs/client-bridge.md`).
 
 It needs a host with ABI 1.3 (panels and the bridge). On an older host `Init` fails and the plugin shows as failed.
 

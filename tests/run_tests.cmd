@@ -38,11 +38,26 @@ copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 xcopy /e /i /q /y dist\legacy\horizon\plugins\eswc-autosave %T%\horizon\plugins\eswc-autosave >nul
-rem ABI layout: a plugin built against the 1.2 header loads in this 1.3 host
+rem ABI layout: a plugin built against the 1.2 header loads in this 1.4 host
 mkdir %T%\horizon\plugins\abi12
 copy /y build\test\abi12\abi12.dll %T%\horizon\plugins\abi12\ >nul
 copy /y build\test\abi12\plugin.json %T%\horizon\plugins\abi12\ >nul
 build\test\host_test.exe host "%CD%\%T%" expect-plugin expect-abi12 "%CD%\screens\host-test-menu.png" || set FAIL=1
+
+echo === modules switched on while the game runs (sample: loaded late, off/on cycles, Reset; abi12: startup_only)
+set "T=build\test\run-late"
+if exist %T% rmdir /s /q %T%
+mkdir %T%\horizon\plugins\sample
+copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0, "plugin.sample.enabled": 0, "plugin.abi12.enabled": 0}
+copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
+mkdir %T%\horizon\plugins\abi12
+copy /y build\test\abi12\abi12.dll %T%\horizon\plugins\abi12\ >nul
+> %T%\horizon\plugins\abi12\plugin.json echo {"id": "abi12", "name": "ABI 1.2 test", "version": "1.0.0", "dll": "abi12.dll", "online": "online-ok", "abi": 1, "startup_only": true}
+build\test\host_test.exe host "%CD%\%T%" runtime-load "%CD%\screens\host-test-late.png" || set FAIL=1
 
 echo === safe mode: no plugins
 set "T=build\test\run-safe"

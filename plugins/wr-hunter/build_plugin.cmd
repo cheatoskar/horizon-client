@@ -10,6 +10,7 @@ link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /N
   "%OD%\wr_hunter.obj" "%OD%\splits.obj" build\client\ckcommon.lib build\common.lib build\imgui_core.lib bcrypt.lib user32.lib kernel32.lib shell32.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 for %%f in (wr-hunter.dll plugin.json icon.png) do copy /y "%OD%\%%f" "%PK%\%%f" >nul || exit /b 1
 rem tests (run: plugins\wr-hunter\tests\run_tests.cmd)
 set "TD=build\client\test"

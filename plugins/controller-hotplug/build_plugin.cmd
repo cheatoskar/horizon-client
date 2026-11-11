@@ -16,6 +16,8 @@ rem the Horizon module
 %CXX% /Fo"%BD%\module\\" /Fd"%BD%\module\m.pdb" %PD%\hotplug_plugin.cpp || exit /b 1
 link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:"%OD%\controller-hotplug.dll" /PDB:"%BD%\controller-hotplug.pdb" /IMPLIB:"%BD%\controller-hotplug.lib" "%BD%\module\*.obj" "%BD%\core\*.obj" build\imgui_core.lib user32.lib kernel32.lib dxguid.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
+if exist %PD%\icon.png copy /y %PD%\icon.png "%OD%\icon.png" >nul
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 
 rem standalone: controller_hotplug.dll (same core) + its dinput8.dll loader (no C runtime)
 %CXX% /Fo"%BD%\standalone\\" /Fd"%BD%\standalone\s.pdb" %PD%\standalone\standalone.cpp || exit /b 1

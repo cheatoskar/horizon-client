@@ -1,5 +1,5 @@
-Horizon Host - in-game mod host of TM Horizon (test build)
-============================================================
+Horizon Client - in-game mod host of TM Horizon (test build)
+==============================================================
 
 DEUTSCH
 
@@ -16,7 +16,7 @@ Installieren (ESWC, Sunrise, Forever ohne TMLoader)
 
 Forever mit TMLoader
   Den Ordner "TMLoader\Horizon Host" nach
-  %LOCALAPPDATA%\TMLoader\database\TmForever\products kopieren und "Horizon Host"
+  %LOCALAPPDATA%\TMLoader\database\TmForever\products kopieren und "Horizon Client"
   im TMLoader anhaken. Experimentell: auf Forever nur Menue, Leiste und Plugins,
   keine Spiel-Hooks, die Eingabe wird nicht angefasst (Competition Patch).
 
@@ -35,7 +35,7 @@ Install (ESWC, Sunrise, Forever without TMLoader)
 
 Forever with TMLoader
   Copy the folder "TMLoader\Horizon Host" into
-  %LOCALAPPDATA%\TMLoader\database\TmForever\products and tick "Horizon Host" in
+  %LOCALAPPDATA%\TMLoader\database\TmForever\products and tick "Horizon Client" in
   TMLoader. Experimental: on Forever only the menu, the bar and plugins; no game
   hooks, input is never touched (Competition Patch).
 

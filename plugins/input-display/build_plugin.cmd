@@ -10,6 +10,7 @@ link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /N
   "%OD%\input_display.obj" build\client\ckcommon.lib build\imgui_core.lib user32.lib kernel32.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 for %%f in (input-display.dll plugin.json icon.png) do copy /y "%OD%\%%f" "%PK%\%%f" >nul || exit /b 1
 set "TD=build\client\test"
 %CXX% /Iplugins\client-common /Iplugins\client-common\tests /Fo"%TD%\\" /Fd"%TD%\inp.pdb" %PD%\tests\input_display_fakehost.cpp || exit /b 1

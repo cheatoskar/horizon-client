@@ -29,10 +29,11 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
+#define HORIZON_ABI_MINOR 4 /* 1: create_texture_rgba, release_texture, save_replay
                                2: panels (register_panel ...), host flags (capture)
                                3: open_page, toasts (notify), the TM Horizon bridge (bridge_request,
-                                  bridge_state), HorizonDeviceCallbacks.post_present */
+                                  bridge_state), HorizonDeviceCallbacks.post_present
+                               4: ui_metrics (menu size, content scale, room for a plugin page) */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -262,6 +263,20 @@ typedef struct HorizonStyle {
     void* font_mono;             /* ImFont* */
 } HorizonStyle;
 
+/* ------------------------------------------------------------------ UI metrics (ABI minor 4) --- */
+/* The player sets the menu size (share of the screen) and a content scale (80-125 %) in General ->
+ * Display, or with Ctrl + mouse wheel in the menu. The host then rebuilds its fonts inside the same
+ * ImFont objects (HorizonStyle's font pointers stay valid) and HorizonStyle.scale changes. Values change
+ * between frames: read them while drawing, don't keep copies. */
+typedef struct HorizonUiMetrics {
+    uint32_t size;               /* sizeof(HorizonUiMetrics) */
+    float scale;                 /* = HorizonStyle.scale: screen height / 1080 (1..2) x content scale */
+    float content_scale;         /* the player's content scale, 0.8 .. 1.25 */
+    float display_w, display_h;  /* the game's back buffer, pixels */
+    float menu_w, menu_h;        /* the Horizon menu window, pixels */
+    float page_w, page_h;        /* room for a plugin page inside the menu card, pixels (0 before a page was drawn) */
+} HorizonUiMetrics;
+
 /* ------------------------------------------------------------------ device access --------------- */
 /* For HORIZON_CAP_DEVICE plugins. All pointers are IDirect3DDevice9* / D3DPRESENT_PARAMETERS* passed
  * as void* so this header needs no d3d9.h. Order per frame: device plugins' pre_present -> host
@@ -412,6 +427,11 @@ typedef struct HorizonHostApi {
                                                  const void* body, uint32_t body_len, HorizonBridgeCallback callback,
                                                  void* user);
     int32_t (HORIZON_CALL* bridge_state)(void); /* HORIZON_BRIDGE_* */
+
+    /* ---- ABI minor 4 (check host->abi_minor >= 4 before use) ------------------------------------ */
+    /* Menu size, content scale and the room a plugin page has, so a wide page can pick fewer columns
+     * instead of clipping. The pointer stays valid for the whole start. Game thread. */
+    const HorizonUiMetrics* (HORIZON_CALL* ui_metrics)(void);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

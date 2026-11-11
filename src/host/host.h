@@ -166,6 +166,7 @@ bool keyCaptureActive();
 void d3dInstall();
 void overlayCreateContext();
 void texturesLoad(); // logo, plugin and other-mod icons (textures.cpp), after the device exists
+void texturesReloadPluginIcons(); // after the icon style changed (host.json "ui.icons"), between frames
 void* gameDevice();
 void overlayDeviceCreated(void* device, HWND window, void* params);
 void overlayBeforeReset();
@@ -178,6 +179,12 @@ HorizonResult menuOpenPluginPage(const std::string& pluginId, const std::string&
 void* imguiContext();
 void imguiAllocators(void** allocFn, void** freeFn, void** user);
 const HorizonStyle* hostStyle();
+const HorizonUiMetrics* hostUiMetrics(); // ABI minor 4
+// Layout mode ("Edit layout"): every widget gets a frame to move, resize, minimise and hide.
+bool layoutModeOn();
+// why: a short reason when it may not start now (TMNF/TMUF during a race).
+bool layoutAllowed(std::string* why);
+void setLayoutMode(bool on, const char* why);
 uint64_t createTextureRgba(uint32_t w, uint32_t h, const void* rgba); // game thread
 void releaseTexture(uint64_t id);
 

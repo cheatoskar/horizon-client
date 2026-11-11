@@ -14,5 +14,5 @@
   "description": "Split times against your best and the TMX record, with gold sectors and history.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": true
+  "enabled_by_default": false
 }

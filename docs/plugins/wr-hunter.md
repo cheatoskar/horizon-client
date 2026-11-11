@@ -1,10 +1,10 @@
 # WR Hunter
 
-Plugin id `wr-hunter`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, on by default. A LiveSplit-style split display: at every checkpoint it shows your time against your personal best and against a target, with gold sectors, a sum of best sectors and a history per map.
+Plugin id `wr-hunter`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A LiveSplit-style split display: at every checkpoint it shows your time against your personal best and against a target, with gold sectors, a sum of best sectors and a history per map.
 
 ## What it does
 
-- Shows the split at each checkpoint and the delta to your PB and to the chosen target. Colours work like LiveSplit: ahead or behind, gaining or losing, gold when you beat your best time for that sector.
+- Shows the split at each checkpoint and the delta to your PB and to the chosen target. Colours as in TrackMania: blue = faster, red = slower (lighter when the gap shrinks or grows back, like LiveSplit), gold when you beat your best time for that sector. The compact view has a line with the latest checkpoint deltas, each in its colour (against the target if there is one, else the PB). Lines have a fixed width and long map names are cut, so the widget no longer grows across the screen at the finish.
 - Keeps per map: personal best (with its splits), gold sectors (the best time of each sector over all your finished runs), sum of best, runs, resets, finishes, and the last 100 finished runs.
 - A run with another number of splits than your PB (another route, laps) goes into the history only. It does not change PB or golds.
 - After a new personal best (not the first finish) it can show a toast, "New personal best" with the time and the difference.

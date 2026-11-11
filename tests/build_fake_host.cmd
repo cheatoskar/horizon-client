@@ -37,6 +37,8 @@ echo ===== sample, game sunrise
 %FH% %SAMPLE% --game sunrise || set "FAIL=1"
 echo ===== sample, game tmnf
 %FH% %SAMPLE% --game tmnf || set "FAIL=1"
+echo ===== sample, game tmuf
+%FH% %SAMPLE% --game tmuf || set "FAIL=1"
 echo ===== eswc-autosave, game eswc (inits, no game pointer)
 %FH% %AUTOSAVE% --game eswc --standalone-dummy %SAMPLE% || set "FAIL=1"
 echo ===== eswc-autosave, game sunrise (refuses with 2)

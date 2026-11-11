@@ -39,8 +39,9 @@ horizon\plugins\<id>\
 | `games` | Any of `"eswc"`, `"sunrise"`, `"original"`, `"tmnf"`, `"tmuf"`. |
 | `online` | `"solo-only"` or `"online-ok"`, see Online gate. |
 | `abi` | `HORIZON_ABI` the plugin was built against (1 today). |
-| `enabled_by_default` | `false`: off until switched on in the menu when there is no profile.json (default `true`). |
-| `icon` | PNG file name in the plugin's folder, e.g. `"icon.png"` (no sub-folders, no `..`). Square, 64-256 px, transparent corners welcome; shown as a rounded square in the menu and the bar. Missing or unreadable: coloured initials. |
+| `enabled_by_default` | `false`: off until switched on in the menu when there is no profile.json (default `true`). Anything that draws on screen during a race or talks to the network should ship `false`. |
+| `startup_only` | `true`: the module must hook the game at start (before the Direct3D device exists, or game code that only runs once). Switching it on in a running game then says "Needs a restart" instead of loading it. Default `false`: the host loads it the moment the player switches it on. |
+| `icon` | PNG file name in the plugin's folder, e.g. `"icon.png"` (no sub-folders, no `..`). Square, 64-256 px, transparent corners welcome; shown as a rounded square in the menu and the bar. Missing or unreadable: coloured initials. A second set may lie next to it as `icon-alt.png`: the player picks "Saturn" (`icon`, default) or "Distinct" (`icon-alt.png`) in General -> Display (host.json `ui.icons`, independent of the launcher); the other file is the fallback, then the initials. Without `icon`, `icon.png` is tried. |
 
 The same facts are repeated inside the DLL (`HorizonPlugin_Info`). The JSON lets the launcher show the plugin without loading it. If they disagree, the DLL wins.
 
@@ -51,7 +52,7 @@ All exports are `__cdecl`, undecorated names.
 | Export | Required | When |
 |---|---|---|
 | `HorizonPlugin_Info` | yes | Before anything else. Returns a static `HorizonPluginInfo` (abi, id, name, version, games, caps, flags, author, description, abi_minor). |
-| `HorizonPlugin_Init(host)` | yes | Once, if abi and game match. Return 0 to load. Any other number shows the plugin as Failed with that number (I use 2 for "wrong exe"). |
+| `HorizonPlugin_Init(host)` | yes | Once, if abi and game match. Return 0 to load. Any other number shows the plugin as Failed with that number (I use 2 for "wrong exe"). Usually at game start; a module that was off at start runs `Init` later, in the middle of the game, when the player switches it on (see "Loading while the game runs"). |
 | `HorizonPlugin_Shutdown` | yes | Before the DLL is unloaded. Stop threads, free memory. `host` is invalid afterwards. |
 | `HorizonPlugin_DrawMenu` | with `CAP_MENU` | Every frame the plugin's page is visible, inside an ImGui child. |
 | `HorizonPlugin_DrawOverlay` | with `CAP_OVERLAY` | Every frame while the plugin is enabled and not gated. |
@@ -189,7 +190,7 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `bridge_request(...)`, `bridge_state()` (ABI 1.3) | ask the TM Horizon launcher on the same PC (TMX search, map files, record replays), see "ABI 1.3" |
 | `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
 
-ABI 1.1, 1.2 and 1.3 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1, >= 2 or >= 3) before calling them.
+ABI 1.1, 1.2, 1.3 and 1.4 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1, >= 2, >= 3 or >= 4) before calling them.
 
 ## Panels (ABI 1.2)
 
@@ -215,7 +216,15 @@ host->register_panel(host->plugin, &d);
 - Panels of a plugin that is off, failed or gated online are not drawn. `panel_visible(plugin, key)` says whether the body was drawn in the last frame (skip work otherwise).
 - The sample plugin shows both kinds: "Events" (a tab) and "Clock" (a HUD window).
 
-Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
+Fonts: `style()->font_*` keep the same `ImFont*` for the whole start. When the player changes the content scale the host rebuilds the glyphs inside those same objects between two frames, so a kept pointer stays valid; `style()->scale` changes at that moment. Read both from `style()` when drawing (the fonts are NULL until the first frame).
+
+### Widget places and layout mode (host 0.2.0, no ABI change)
+
+- A HUD panel that has no saved place yet goes to a fixed slot at a screen edge, never to a random spot. The slot comes from `default_x` / `default_y`: x below 0.34 = left, above 0.6 = right, else centre; y the same for top / middle / bottom. Input Display (0.44, 0.74) lands bottom centre, WR Hunter (0.70, 0.22) top right. Two widgets in one slot are stacked (top slots downwards, bottom slots upwards).
+- Moving a widget (with the menu open or in layout mode) snaps it to the screen edges, the centre lines and the edges of other widgets.
+- Layout mode ("Edit layout", Ctrl+Insert by default, also a button in the top bar and on General): every widget gets a frame. Drag to move, the corner to resize, the two buttons top right minimise it to a small icon at the nearest screen edge (click the icon to bring it back) or hide it (the bar at the top lists hidden widgets to show again). The same key, Esc or "Done" ends it. While it is on, the host draws its own pointer and keeps the mouse (ESWC and Sunrise: also DirectInput) from the game, as with the menu. On TMNF/TMUF (Competition Patch rules) it only starts in the game's menus, never during a race, and ends by itself when a race starts.
+- Resizing a widget whose window fits its content (w/h 0) scales it: the host sets `style()->scale` and the window font scale for that panel's draw call, so draw with `style()->scale` (read inside `draw`) and the widget grows and shrinks as a whole. A widget with a fixed size (w/h > 0) gets the new size.
+- Saved in `settings\host.json` as before (`panel.<plugin>.<key>`, two fields appended: minimised, scale). Older hosts ignore the extra fields.
 
 ## Free plugin windows (host, no ABI change)
 
@@ -244,6 +253,42 @@ Compatibility both ways:
 - A plugin built against 1.2 (or older) never sees the new fields. Its `HorizonDeviceCallbacks` is shorter; the host copies only `cb->size` bytes, so `post_present` stays NULL and is never called.
 - A plugin built against 1.3 checks `host->abi_minor >= 3` before calling `open_page`, `notify` or the bridge (the client mods use `ck::abiAtLeast(host, 3)`, which is the same test), and then a NULL check on the pointer. A plugin that cannot work without them (TMX Browser) returns non-zero from `Init` on an older host and shows as failed. A plugin that only wants a toast (WR Hunter) skips the call. An older host never calls `post_present`; Horizon Performance then measures frame times in `pre_present` only and the limiter stays off.
 - `HorizonHost_Version` (the host's own version, not the ABI) stays 0.2.0: ABI 1.3 is part of host 0.2.0.
+
+## ABI 1.4: `ui_metrics`
+
+One function at the end of `HorizonHostApi`, after `bridge_state`:
+
+```c
+const HorizonUiMetrics* (HORIZON_CALL* ui_metrics)(void);
+
+typedef struct HorizonUiMetrics {
+    uint32_t size;               /* sizeof(HorizonUiMetrics): check before reading fields added later */
+    float scale;                 /* = style()->scale: screen height / 1080 (1..2) x content scale */
+    float content_scale;         /* the player's content scale, 0.8 .. 1.25 */
+    float display_w, display_h;  /* the game's back buffer, pixels */
+    float menu_w, menu_h;        /* the Horizon menu window, pixels */
+    float page_w, page_h;        /* room for a plugin page inside the menu card, pixels (0 before a page was drawn) */
+} HorizonUiMetrics;
+```
+
+The player sets the menu size (Auto, 60, 70, 80 or 90 % of the screen; Auto is 80 % at 1440p and higher, 85 % below) and the content scale (80-125 %; Auto is 90 % at 1440p and higher, 100 % below) in General -> Display, or changes the content scale with Ctrl + mouse wheel while the menu is open. A plugin page with a wide layout (columns, tables) reads `page_w` to pick fewer columns instead of clipping, for example:
+
+```c
+const HorizonUiMetrics* m = host->abi_minor >= 4 && host->ui_metrics ? host->ui_metrics() : NULL;
+const float avail = m && m->page_w > 0 ? m->page_w : ImGui::GetContentRegionAvail().x;
+const int columns = avail > 1100.0f * scale ? 3 : avail > 700.0f * scale ? 2 : 1;
+```
+
+The pointer stays valid for the whole start; the values change between frames. `offsetof(HorizonHostApi, ui_metrics)` equals the size of the 1.3 table (unit test `static_assert`), so a plugin built against 1.3 never sees it, and one built against 1.4 checks `host->abi_minor >= 4` (or `host->size`) first.
+
+## Loading while the game runs
+
+A module that was off at game start is loaded the moment the player switches it on (menu switch, free window "On" box): `LoadLibrary`, `HorizonPlugin_Info`, `HorizonPlugin_Init`, then its page and panels appear. For plugins this means:
+
+- `Init` can run in the middle of a game: the device exists, a map may be running. `set_device_callbacks` calls `device_created` at once with the existing device (`present_params` is NULL then); `before_reset` / `after_reset` follow as usual. `adjust_present_params` only takes effect at the next `Reset`.
+- Right after `Init` the host sends the plugin a `GAME_STATE` event with the current state and, if a map runs, a `MAP_LOADED` event (only to that plugin, only if it subscribed).
+- Switching off: a plugin with `HORIZON_FLAG_LIVE_TOGGLE` gets `SetEnabled(0)` as before. The DLL stays loaded until the game ends (threads and hooks of a plugin may still point into it); switching on again is `SetEnabled(1)`, no second `Init`. A running plugin without `LIVE_TOGGLE` still turns off only after a restart.
+- A module that cannot work this way sets `"startup_only": true` in its `plugin.json`; the menu then says "Needs a restart: this module hooks the game at start".
 
 ### Opening the plugin's page: `open_page`
 
@@ -378,7 +423,7 @@ How they live together with the Legacy Loader:
 
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.
 - Changes are additive only: new fields go at the end, new events get new numbers, nothing is reordered or removed.
-- `HORIZON_ABI_MINOR` is 3 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = `open_page`, toasts (`notify`), the TM Horizon bridge (`bridge_request`, `bridge_state`) and `HorizonDeviceCallbacks.post_present`, see "ABI 1.3" above. It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
+- `HORIZON_ABI_MINOR` is 4 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = `open_page`, toasts (`notify`), the TM Horizon bridge (`bridge_request`, `bridge_state`) and `HorizonDeviceCallbacks.post_present`, see "ABI 1.3" above, 4 = `ui_metrics`, see "ABI 1.4". It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
 - `HORIZON_ABI` changes only if something cannot stay compatible. The host refuses a plugin with a different `abi`.
 
 ## Building

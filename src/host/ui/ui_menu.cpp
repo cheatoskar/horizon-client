@@ -27,8 +27,10 @@ struct MenuState {
     std::string tabPlugin;    // selectPanelTab: plugin whose page selects tabKey once
     std::string tabKey;       // "" = Settings
     bool tabPending = false;
+    int scaleDrag = 0;        // content scale slider value while it is dragged (0 = not dragged)
 };
 MenuState g;
+MenuMetrics g_metrics;
 
 float clamp01(float v) {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
@@ -48,6 +50,13 @@ const OtherModView* findOther(const Model& m, const std::string& file) {
 }
 bool startsWith(const std::string& s, const char* prefix) {
     return s.compare(0, std::strlen(prefix), prefix) == 0;
+}
+
+// The pointer is over a window that takes the mouse (a widget, a popped-out panel, a free plugin window, a
+// plugin's own window). ImGui finds it at the start of the frame from last frame's windows.
+bool pointerOverAnyWindow() {
+    return ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow | ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                                  ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 }
 
 // Pill-shaped segmented control. Returns the (new) selection.
@@ -163,16 +172,29 @@ void drawHeader(const Model& model, bool* open) {
         std::string text;
         Rgba colour;
         bool dot;
+        std::string tip;
     };
     std::vector<Chip> chips;
-    chips.push_back({model.online ? "Online" : "Offline", model.online ? t.ok : t.muted, true});
-    if (model.safeMode) chips.push_back({"Safe mode", t.warn, false});
-    if (model.runGate) chips.push_back({"Run check", t.warn, false});
+    if (model.safeMode) chips.push_back({"Safe mode", t.warn, false, "Mods are not loaded this start."});
+    if (model.runGate) chips.push_back({"Run check", t.warn, false, "A checked run is going: solo-only modules pause."});
+    {
+        // the launcher (TM Horizon) over the bridge: 3 = connected, 2 = waiting for Allow, 0 = switched off
+        const int b = model.bridgeState;
+        const char* text = b == 3 ? "Launcher connected" : b == 2 ? "Launcher: allow?" : b == 0 ? "Launcher off" : "Launcher not connected";
+        const Rgba& c = b == 3 ? t.ok : b == 2 ? t.warn : t.muted;
+        chips.push_back({text, c, true, model.bridgeText.empty() ? std::string("TM Horizon on this PC.") : "TM Horizon: " + model.bridgeText});
+    }
+    chips.push_back({model.online ? "Game: online" : "Game: offline", model.online ? t.ok : t.muted, true,
+                     "Whether the game is connected to an online server. Solo-only modules turn off online."});
     const float chipH = 28.0f * s;
     float x = rightX - closeD - 16.0f * s;
     for (size_t i = chips.size(); i-- > 0;) {
-        x -= chipWidth(f.small, chips[i].text, chips[i].dot);
-        drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, chips[i].text, chips[i].colour, chips[i].dot);
+        const float cw = chipWidth(f.small, chips[i].text, chips[i].dot);
+        x -= cw;
+        const ImVec2 cp(x, midY - chipH * 0.5f);
+        drawChip(dl, cp, chipH, f.small, chips[i].text, chips[i].colour, chips[i].dot);
+        if (!chips[i].tip.empty() && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(cp, ImVec2(cp.x + cw, cp.y + chipH)))
+            ImGui::SetTooltip("%s", chips[i].tip.c_str());
         x -= 8.0f * s;
     }
     ImGui::SetCursorScreenPos(p);
@@ -260,8 +282,8 @@ void pluginRow(const PluginView& p, const Actions& actions) {
     if (inlineSwitch("##sw", swPos, swSize, p.enabled, canToggle(p.status), &swHov) && actions.setPluginEnabled) {
         actions.setPluginEnabled(p.id, !p.enabled);
     }
-    if (swHov && canToggle(p.status) && !p.liveToggle) {
-        ImGui::SetTooltip("Applies after a restart.");
+    if (swHov && canToggle(p.status) && p.restartToSwitch) {
+        ImGui::SetTooltip("%s", p.restartText.empty() ? "Applies after a restart." : p.restartText.c_str());
     } else if (hov && !swHov && !p.statusText.empty()) {
         ImGui::SetTooltip("%s", p.statusText.c_str());
     }
@@ -440,6 +462,9 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
     }
     (void)f;
     if (beginCard("##plugin_page", 20.0f, 16.0f, false)) {
+        const ImVec2 room = ImGui::GetContentRegionAvail();
+        g_metrics.pageW = room.x;
+        g_metrics.pageH = room.y;
         ImGui::PushID(plugin.id.c_str());
         if (plugin.panels.empty()) {
             if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
@@ -532,6 +557,90 @@ void drawGeneral(const Model& model, const Actions& actions) {
             }
             ImGui::SetCursorScreenPos(p);
             ImGui::Dummy(ImVec2(w, 44.0f * s));
+        }
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+
+        // Display: menu size and text size
+        {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            drawText(dl, f.bodyBold, p, U(t.text), "Menu size");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Share of the screen.");
+            ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
+            const std::string autoLabel = "Auto (" + std::to_string(model.menuSizeAuto) + "%)";
+            const char* labels[5] = {autoLabel.c_str(), "60%", "70%", "80%", "90%"};
+            const int values[5] = {0, 60, 70, 80, 90};
+            int sel = 0;
+            for (int i = 0; i < 5; ++i)
+                if (values[i] == model.menuSizeSetting) sel = i;
+            ImGui::PushFont(F(f.body));
+            const int picked = segmented("menusize", labels, 5, sel, 34.0f * s, F(f.body));
+            ImGui::PopFont();
+            if (picked != sel && actions.setMenuSize) actions.setMenuSize(values[picked]);
+        }
+        {
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            drawText(dl, f.bodyBold, p, U(t.text), "Text and icons");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
+                     "Ctrl + mouse wheel in the menu.");
+            ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
+            // applied when the slider is let go: the fonts are rebuilt at the new size
+            int pct = g.scaleDrag > 0 ? g.scaleDrag : model.contentPct;
+            ImGui::SetNextItemWidth(320.0f * s);
+            ImGui::SliderInt("##contentscale", &pct, 80, 125, "%d%%");
+            if (ImGui::IsItemActive()) g.scaleDrag = pct;
+            if (ImGui::IsItemDeactivated()) {
+                if (g.scaleDrag > 0 && actions.setContentScale) actions.setContentScale((g.scaleDrag + 2) / 5 * 5);
+                g.scaleDrag = 0;
+            }
+            ImGui::SameLine();
+            const bool isAuto = model.contentSetting == 0;
+            ImGui::BeginDisabled(isAuto);
+            if (ImGui::Button(("Auto (" + std::to_string(model.contentAuto) + "%)").c_str()) && actions.setContentScale) actions.setContentScale(0);
+            ImGui::EndDisabled();
+        }
+        {
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            drawText(dl, f.bodyBold, p, U(t.text), "Module icons");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Only here in the game.");
+            ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
+            const char* styles[2] = {"Saturn", "Distinct"};
+            ImGui::PushFont(F(f.body));
+            const int picked = segmented("iconstyle", styles, 2, model.iconStyle, 34.0f * s, F(f.body));
+            ImGui::PopFont();
+            if (picked != model.iconStyle && actions.setIconStyle) actions.setIconStyle(picked);
+        }
+        ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+
+        // layout mode
+        {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            drawText(dl, f.bodyBold, p, U(t.text), "Widget layout");
+            std::string sub = "Move, resize, minimise and hide widgets.";
+            if (!model.layoutKey.empty()) sub += " Key: " + model.layoutKey + ".";
+            if (model.forever) sub += " TMNF/TMUF: not during a race.";
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), sub);
+            const char* label = "Edit layout";
+            const float bw = textSize(f.body, label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw, p.y + 4.0f * s));
+            ImGui::BeginDisabled(!model.layoutAllowed);
+            if (ImGui::Button(label) && actions.toggleLayout) actions.toggleLayout();
+            ImGui::EndDisabled();
+            if (!model.layoutAllowed && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", model.layoutWhy.c_str());
+            ImGui::SetCursorScreenPos(p);
+            ImGui::Dummy(ImVec2(w, 44.0f * s));
+            int op = model.widgetOpacity;
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Widget background");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(240.0f * s);
+            if (ImGui::SliderInt("##widgetbg", &op, 20, 100, "%d%%") && actions.setWidgetOpacity) actions.setWidgetOpacity(op);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower lets more of the game show through.");
         }
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
@@ -806,7 +915,7 @@ void drawAbout(const Model& model) {
     const float s = scale();
     const Tokens& t = tokens();
     if (beginCard("##about", 24.0f, 20.0f, true)) {
-        infoRow("Horizon Host", model.hostVersion);
+        infoRow("Horizon Client", model.hostVersion);
         infoRow("Game", model.gameName);
         infoRow("Game version", model.exeVersion);
         infoRow("Profile", model.profileName.empty() ? "none" : model.profileName);
@@ -840,8 +949,8 @@ void drawFooter(const Model& model, float height) {
     dl->AddLine(ImVec2(p.x, p.y), ImVec2(p.x + width, p.y), W(0.07f), 1.0f);
     const float ty = p.y + (height - F(f.small)->FontSize) * 0.5f + 2.0f * s;
     const std::string key = model.menuKey.empty() ? std::string("Esc") : model.menuKey + " or Esc";
-    drawText(dl, f.small, ImVec2(p.x, ty), U(t.muted), key + " closes");
-    const std::string right = "Horizon Host " + model.hostVersion;
+    drawText(dl, f.small, ImVec2(p.x, ty), U(t.muted), key + " closes  \xC2\xB7  Ctrl + wheel: text size " + std::to_string(model.contentPct) + "%");
+    const std::string right = "Horizon Client " + model.hostVersion;
     drawText(dl, f.small, ImVec2(p.x + width - textSize(f.small, right).x, ty), U(t.muted), right);
     ImGui::Dummy(ImVec2(width, height));
 }
@@ -927,8 +1036,12 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f * eased));
 
     // panel
-    const float pw = std::min(1200.0f * s, disp.x * 0.82f);
-    const float ph = std::min(780.0f * s, disp.y * 0.84f);
+    // the player's menu size: a share of the screen (General -> Display)
+    const float share = static_cast<float>(std::max(50, std::min(95, model.menuSizePct))) / 100.0f;
+    const float pw = std::floor(disp.x * share);
+    const float ph = std::floor(disp.y * share);
+    g_metrics.menuW = pw;
+    g_metrics.menuH = ph;
     const ImVec2 pos(std::floor((disp.x - pw) * 0.5f), std::floor((disp.y - ph) * 0.5f + (1.0f - eased) * 12.0f * s));
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(pw, ph));
@@ -967,11 +1080,15 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     // close: Esc (not while a key is being captured) or a click on the dim layer
     const bool captureBusy = captureAtStart || g.captureHandle > 0 || g.captureEnded;
     if (!captureBusy && !popupOpen && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) *open = false;
+    // Only a click on the dim layer itself closes: a widget, a popped-out panel, a free plugin window or a
+    // plugin's overlay window above it keeps the menu open (they are windows; the dim layer is not).
     if (!popupOpen && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-        !ImGui::IsMouseHoveringRect(wpos, ImVec2(wpos.x + wsize.x, wpos.y + wsize.y), false)) {
+        !ImGui::IsMouseHoveringRect(wpos, ImVec2(wpos.x + wsize.x, wpos.y + wsize.y), false) && !pointerOverAnyWindow()) {
         *open = false;
     }
 }
+
+const MenuMetrics& menuMetrics() { return g_metrics; }
 
 // ---- free plugin windows ---------------------------------------------------------------------------
 
@@ -1004,7 +1121,8 @@ void drawWindowBody(const PluginView& p, const Actions& actions) {
     if (canToggle(p.status) && actions.setPluginEnabled) {
         bool on = p.enabled;
         if (ImGui::Checkbox("On", &on)) actions.setPluginEnabled(p.id, on);
-        if (ImGui::IsItemHovered() && !p.liveToggle) ImGui::SetTooltip("Applies after a restart.");
+        if (ImGui::IsItemHovered() && p.restartToSwitch)
+            ImGui::SetTooltip("%s", p.restartText.empty() ? "Applies after a restart." : p.restartText.c_str());
     }
     ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
     if (p.panels.empty()) {

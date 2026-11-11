@@ -14,5 +14,5 @@
   "description": "Shows steering, gas, brake and speed as the car sees them.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": true
+  "enabled_by_default": false
 }

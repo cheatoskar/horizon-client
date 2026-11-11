@@ -42,6 +42,7 @@ struct PluginManifest {
     unsigned games = 0;      // HORIZON_GAME_* mask (0 = not stated)
     bool soloOnly = true;    // "online": "solo-only" (default) / "online-ok"
     bool enabledByDefault = true; // "enabled_by_default": false = off until switched on (no profile.json)
+    bool startupOnly = false;     // "startup_only": true = hooks the game at start: switching it on later needs a restart
     int abi = 0;
 };
 

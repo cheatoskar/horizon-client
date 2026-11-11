@@ -114,6 +114,9 @@ static bool savePng(IDirect3DDevice9* dev, const wchar_t* path) {
     return ok;
 }
 
+static int g_w = 1600, g_h = 900; // size=WxH: back buffer (UI screens at other resolutions)
+static bool g_runtimeLoad = false; // runtime-load: switch modules on after the device exists
+
 static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
     struct Info {
         unsigned api, size, flags;
@@ -129,7 +132,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
     Info info = {1, sizeof(Info), (safe ? 1u : 0u) | 2u, L""};
     check(init && init(&info) == 1, "HorizonHostInit (test mode) starts the host");
     std::string log = hostLog(dir);
-    check(has(log, "Horizon Host"), "log file written in horizon\\logs");
+    check(has(log, "Horizon Client (host"), "log file written in horizon\\logs");
     if (safe) check(has(log, "safe mode"), "safe mode logged");
     if (expectPlugin == 1) check(has(log, "[sample] started"), "the sample plugin started");
     if (expectPlugin == 0) check(!has(log, "[sample] started"), "the sample plugin did not start");
@@ -140,7 +143,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"HorizonHostTest";
     RegisterClassW(&wc);
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"Horizon host test", WS_OVERLAPPEDWINDOW, 0, 0, 1600, 900, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"Horizon host test", WS_POPUP, 0, 0, g_w, g_h, nullptr, nullptr, wc.hInstance, nullptr);
     HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
     using Create9 = IDirect3D9*(WINAPI*)(UINT);
     auto create = reinterpret_cast<Create9>(GetProcAddress(d3d9, "Direct3DCreate9"));
@@ -151,8 +154,8 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
     pp.Windowed = TRUE;
     pp.SwapEffect = D3DSWAPEFFECT_COPY;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    pp.BackBufferWidth = 1600;
-    pp.BackBufferHeight = 900;
+    pp.BackBufferWidth = static_cast<UINT>(g_w);
+    pp.BackBufferHeight = static_cast<UINT>(g_h);
     pp.EnableAutoDepthStencil = TRUE;
     pp.AutoDepthStencilFormat = D3DFMT_D24S8;
     pp.hDeviceWindow = hwnd;
@@ -169,6 +172,45 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
         Sleep(15); // the menu fades in over ~0.2 s
+    }
+    auto frames = [&](int n) {
+        for (int i = 0; i < n; i++) {
+            dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_XRGB(24, 30, 52), 1.0f, 0);
+            dev->BeginScene();
+            dev->EndScene();
+            dev->Present(nullptr, nullptr, nullptr, nullptr);
+        }
+    };
+    if (g_runtimeLoad) {
+        // modules that were off at start: switched on while the "game" runs (host.json plugin.<id>.enabled 0)
+        using SetFn = int(__cdecl*)(const char*, int);
+        auto setEnabled = reinterpret_cast<SetFn>(GetProcAddress(host, "HorizonHost_TestSetPluginEnabled"));
+        check(setEnabled != nullptr, "test export HorizonHost_TestSetPluginEnabled");
+        if (setEnabled) {
+            check(!has(hostLog(dir), "[sample] started"), "runtime load: the sample is off at start");
+            check(setEnabled("sample", 1) == 1, "runtime load: switch the sample on");
+            frames(3);
+            std::string l = hostLog(dir);
+            check(has(l, "[sample] started"), "runtime load: the sample ran Init while the game runs");
+            check(has(l, "[sample] loaded while the game runs"), "runtime load: logged as loaded while running");
+            check(has(l, "panel \"clock\" (Clock), in its own window"), "runtime load: its HUD panel appeared");
+            for (int cycle = 0; cycle < 3; cycle++) { // off and on again: live toggle, no second Init
+                setEnabled("sample", 0);
+                frames(2);
+                setEnabled("sample", 1);
+                frames(2);
+            }
+            l = hostLog(dir);
+            size_t inits = 0;
+            for (size_t at = l.find("[sample] started"); at != std::string::npos; at = l.find("[sample] started", at + 1)) inits++;
+            check(inits == 1, "runtime load: three off/on cycles, Init ran once");
+            // a startup_only module (tests: abi12 with "startup_only": true) is not loaded, it asks for a restart
+            setEnabled("abi12", 1);
+            frames(2);
+            l = hostLog(dir);
+            check(has(l, "needs a restart: this module hooks the game at start"), "startup_only: switching on says needs a restart");
+            check(!has(l, "[abi12] started"), "startup_only: not loaded while running");
+        }
     }
     // Reset as the game does on a resolution change: the overlay must survive it
     const HRESULT rr = dev->Reset(&pp);
@@ -208,6 +250,10 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
     check(has(log, "menu: open"), "menu drawn");
     check(has(log, "d3d: Reset -> 0x00000000"), "Reset seen by the host");
     check(!has(log, "exception while drawing"), "no exception while drawing");
+    if (g_runtimeLoad) {
+        check(!has(log, "crashed"), "runtime load: no plugin crashed (also after the Reset)");
+        check(has(log, "d3d: Reset -> 0x00000000"), "runtime load: Reset after the late load");
+    }
     if (expectPlugin == 1) {
         check(has(log, "test: save_replay -> Not supported"), "save_replay: NOT_SUPPORTED outside ESWC");
         check(has(log, "panel \"events\" (Events)"), "panel Events registered");
@@ -245,6 +291,10 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"expect-plugin") expect = 1;
         else if (a == L"expect-no-plugin") expect = 0;
         else if (a == L"expect-abi12") abi12 = true;
+        else if (a == L"runtime-load") g_runtimeLoad = true;
+        else if (a == L"layout") SetEnvironmentVariableW(L"HORIZON_TEST_LAYOUT", L"1"); // screens of layout mode
+        else if (a.rfind(L"size=", 0) == 0) swscanf_s(a.c_str() + 5, L"%dx%d", &g_w, &g_h);
+        else if (a.rfind(L"page=", 0) == 0) SetEnvironmentVariableW(L"HORIZON_TEST_PAGE", a.c_str() + 5);
         else shot = a;
     }
     const int r = testHost(dir, safe, expect, abi12, shot);

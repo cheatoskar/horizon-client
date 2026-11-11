@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -199,7 +200,7 @@ void refreshTarget() {
             return;
         }
         if (!ck::abiAtLeast(g_host, 3) || !g_host->bridge_request) {
-            g_targetStatus = "This Horizon Host has no TM Horizon bridge.";
+            g_targetStatus = "This Horizon Client has no TM Horizon bridge.";
             return;
         }
         const std::string path = std::string("/v1/tmx/record?game=") + ck::siteCode(g_host) + "&uid=" + ck::urlEscape(g_stats.uid);
@@ -321,6 +322,46 @@ void pollForever() {
 }
 
 // ---------------------------------------------------------------- drawing
+// text cut with "..." to a pixel width (map names can be long)
+std::string fitText(const std::string& text, float maxW) {
+    if (maxW <= 0.0f || ImGui::CalcTextSize(text.c_str()).x <= maxW) return text;
+    std::string cut = text;
+    while (!cut.empty()) {
+        cut.pop_back();
+        while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0u) == 0x80u) cut.pop_back();
+        if (ImGui::CalcTextSize((cut + "...").c_str()).x <= maxW) return cut + "...";
+    }
+    return "...";
+}
+
+// One line of the latest checkpoint deltas, each in its colour (blue faster, red slower; target first, else PB).
+void drawCpStrip(const ck::Palette& p, const std::vector<wrh::Row>& rows, int done, float lineW) {
+    const float s = ck::uiScale(g_host);
+    std::vector<const wrh::Row*> shown;
+    for (int i = 0; i < done && i < static_cast<int>(rows.size()); ++i) {
+        const wrh::Row& r = rows[static_cast<size_t>(i)];
+        if (r.dTarget != kNoDelta || r.dPb != kNoDelta) shown.push_back(&r);
+    }
+    if (shown.empty()) return;
+    // as many of the latest as fit into the line
+    const float cellW = ImGui::CalcTextSize("+00.00").x + 10.0f * s;
+    const size_t fit = static_cast<size_t>(std::max(1.0f, std::floor(lineW / cellW)));
+    const size_t first = shown.size() > fit ? shown.size() - fit : 0;
+    const float x0 = ImGui::GetCursorPosX();
+    for (size_t i = first; i < shown.size(); ++i) {
+        const wrh::Row& r = *shown[i];
+        const bool target = r.dTarget != kNoDelta;
+        const int d = target ? r.dTarget : r.dPb;
+        const ImVec4 c = ck::deltaColour(p, d, target ? r.prevDTarget : r.prevDPb, !target && r.isGold);
+        if (i != first) ImGui::SameLine(x0 + cellW * static_cast<float>(i - first));
+        ImGui::PushStyleColor(ImGuiCol_Text, c);
+        ImGui::TextUnformatted(fmtDelta(d).c_str());
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s %d: %s vs %s", r.finish ? "Finish" : "CP", r.index + 1, fmtDelta(d).c_str(), target ? g_target.name.c_str() : "PB");
+    }
+}
+
 void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
     const float s = ck::uiScale(g_host);
     ImFont* mono = ck::font(g_host, 2);
@@ -354,14 +395,21 @@ void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
             gold = false;
         }
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-    ImGui::TextUnformatted(g_mapName.empty() ? "WR Hunter" : g_mapName.c_str());
-    ImGui::PopStyleColor();
+    // The widget fits its content (auto-resize). Right-aligning against GetContentRegionAvail() made the window
+    // as wide as the text's right edge, which moved the edge again next frame: the window grew every frame
+    // until it spanned the screen (seen at the finish). Lines now have a fixed width: kLineW, names cut to fit.
+    const float lineW = 300.0f * s;
+    char cp[32] = "";
     if (n > 0) {
-        char cp[32];
         if (done >= n) snprintf(cp, sizeof(cp), "Finish");
         else snprintf(cp, sizeof(cp), "CP %d/%d", done, n - 1);
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - ImGui::CalcTextSize(cp).x);
+    }
+    const float cpW = cp[0] ? ImGui::CalcTextSize(cp).x : 0.0f;
+    ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
+    ImGui::TextUnformatted(fitText(g_mapName.empty() ? std::string("WR Hunter") : g_mapName, lineW - cpW - 12.0f * s).c_str());
+    ImGui::PopStyleColor();
+    if (cp[0]) {
+        ImGui::SameLine(ImGui::GetCursorPosX() + lineW - cpW);
         ImGui::PushStyleColor(ImGuiCol_Text, p.text2);
         ImGui::TextUnformatted(cp);
         ImGui::PopStyleColor();
@@ -400,6 +448,7 @@ void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
         ImGui::TextUnformatted(g_runState == 1 ? "Go!" : "Waiting for the start");
         ImGui::PopStyleColor();
     }
+    if (setting("CpStrip", 1)) drawCpStrip(p, rows, std::min(done, n), lineW);
     ImGui::PopFont();
     ImGui::Separator();
     ImGui::PushFont(mono);
@@ -410,7 +459,7 @@ void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
         ImGui::Text("SoB %s", fmtTime(wrh::sumOfBest(g_stats)).c_str());
     }
     if (!g_target.splits.empty()) ImGui::Text("%s %s", g_target.name.c_str(), fmtTime(g_target.time).c_str());
-    else if (!g_targetStatus.empty() && setting("Target", kTargetTmx) != kTargetPb) ImGui::TextUnformatted(g_targetStatus.c_str());
+    else if (!g_targetStatus.empty() && setting("Target", kTargetTmx) != kTargetPb) ImGui::TextUnformatted(fitText(g_targetStatus, 300.0f * s).c_str());
     if (setting("ShowResets", 1)) ImGui::Text("Runs %d  Resets %d  Finishes %d", g_stats.attempts, g_stats.resets, g_stats.finishes);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -420,7 +469,7 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
     const float s = ck::uiScale(g_host);
     ImFont* mono = ck::font(g_host, 2);
     ImGui::PushStyleColor(ImGuiCol_Text, p.text);
-    ImGui::TextUnformatted(g_mapName.empty() ? "WR Hunter" : g_mapName.c_str());
+    ImGui::TextUnformatted(fitText(g_mapName.empty() ? std::string("WR Hunter") : g_mapName, 380.0f * s).c_str());
     ImGui::PopStyleColor();
     const bool haveTarget = !g_target.splits.empty();
     const int cols = haveTarget ? 5 : 4;
@@ -494,7 +543,7 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
         ImGui::Text("SoB %s", fmtTime(wrh::sumOfBest(g_stats)).c_str());
     }
     if (haveTarget) ImGui::Text("%s %s", g_target.name.c_str(), fmtTime(g_target.time).c_str());
-    else if (!g_targetStatus.empty() && setting("Target", kTargetTmx) != kTargetPb) ImGui::TextUnformatted(g_targetStatus.c_str());
+    else if (!g_targetStatus.empty() && setting("Target", kTargetTmx) != kTargetPb) ImGui::TextUnformatted(fitText(g_targetStatus, 300.0f * s).c_str());
     if (setting("ShowResets", 1)) ImGui::Text("Runs %d  Resets %d  Finishes %d", g_stats.attempts, g_stats.resets, g_stats.finishes);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -578,7 +627,7 @@ void HORIZON_CALL drawHistory(void*) {
                 ImGui::PopStyleColor();
                 ImGui::TableNextColumn();
                 const int d = r.time - g_stats.pbTime();
-                ImGui::PushStyleColor(ImGuiCol_Text, d <= 0 ? p.ok : p.text2);
+                ImGui::PushStyleColor(ImGuiCol_Text, d <= 0 ? p.aheadGain : p.text2);
                 ImGui::TextUnformatted(fmtDelta(d).c_str());
                 ImGui::PopStyleColor();
                 ImGui::TableNextColumn();

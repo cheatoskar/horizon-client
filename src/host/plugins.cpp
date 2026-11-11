@@ -372,6 +372,9 @@ HorizonResult HORIZON_CALL apiBridgeRequest(HorizonPluginHandle h, const char* m
 }
 int32_t HORIZON_CALL apiBridgeState() { return bridgeState(); }
 
+// ---- ABI minor 4: menu size and content scale
+const HorizonUiMetrics* HORIZON_CALL apiUiMetrics() { return hostUiMetrics(); }
+
 void fillApi(Plugin* p) {
     HorizonHostApi& a = p->api;
     a = HorizonHostApi{};
@@ -422,6 +425,7 @@ void fillApi(Plugin* p) {
     a.notify = &apiNotify;
     a.bridge_request = &apiBridgeRequest;
     a.bridge_state = &apiBridgeState;
+    a.ui_metrics = &apiUiMetrics;
 }
 
 // ---------------------------------------------------------------- loading
@@ -680,6 +684,7 @@ void pluginSetEnabled(const std::string& id, bool on) {
     }
     // not loaded this start
     p->wanted = on;
+    p->loadQueued = false;
     const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
     if (on && !inProfile) {
         p->status = ui::PluginStatus::Off;
@@ -687,11 +692,81 @@ void pluginSetEnabled(const std::string& id, bool on) {
     } else if (state().safeMode) {
         p->status = ui::PluginStatus::Off;
         p->statusText = "safe mode";
+    } else if (!on) {
+        p->status = ui::PluginStatus::Off;
+        p->statusText = "switched off in the menu";
+    } else if (p->manifest.startupOnly) {
+        p->status = ui::PluginStatus::NeedsRestart;
+        p->statusText = "needs a restart: this module hooks the game at start";
+    } else if (p->module) {
+        // loaded once and refused (Init failed or crashed): a second LoadLibrary would only hand back the same DLL
+        p->status = ui::PluginStatus::Failed;
+        if (p->statusText.empty()) p->statusText = "could not start: try after a restart";
     } else {
-        p->status = on ? ui::PluginStatus::NeedsRestart : ui::PluginStatus::Off;
-        p->statusText = on ? "applies after a restart" : "switched off in the menu";
+        // load it now: at the start of the next frame, outside the ImGui frame (Init may draw or register panels)
+        p->loadQueued = true;
+        p->status = ui::PluginStatus::Off;
+        p->statusText = "loading...";
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "switched on in the menu: loading it now");
+        return;
     }
     logLine(HORIZON_LOG_INFO, p->id.c_str(), "switched %s in the menu (not loaded now: %s)", on ? "on" : "off", p->statusText.c_str());
+}
+
+bool pluginSwitchNeedsRestart(const Plugin* p) {
+    if (p->running) return !p->live;
+    if (p->status == ui::PluginStatus::Failed || p->status == ui::PluginStatus::WrongGame) return false;
+    return p->manifest.startupOnly && !state().safeMode;
+}
+
+namespace {
+// The state a freshly loaded plugin would have seen from game start: the game state and the running map,
+// sent only to it and only if it subscribed.
+void catchUp(Plugin* p) {
+    if (!p->running || !p->enabled || !p->onEvent) return;
+    HorizonEvent e = {};
+    e.size = sizeof(e);
+    e.is_online = isOnlineNow() ? 1u : 0u;
+    e.map = currentMap();
+    e.engine_race = game().engine(HORIZON_ENGINE_RACE);
+    e.engine_challenge = game().engine(HORIZON_ENGINE_CHALLENGE);
+    const uint32_t types[2] = {HORIZON_EVENT_GAME_STATE, HORIZON_EVENT_MAP_LOADED};
+    for (uint32_t type : types) {
+        if (!(p->eventMask & HORIZON_EVENT_BIT(type))) continue;
+        if (type == HORIZON_EVENT_MAP_LOADED && !e.map) continue;
+        if (pluginGated(p)) continue;
+        e.type = type;
+        e.game_state = static_cast<uint32_t>(game().gameState());
+        if (!sehEvent(p->onEvent, &e)) {
+            crashed(p, "OnEvent");
+            return;
+        }
+    }
+}
+} // namespace
+
+void pluginsLoadPending() {
+    for (auto& up : g_plugins) {
+        Plugin* p = up.get();
+        if (!p->loadQueued) continue;
+        p->loadQueued = false;
+        if (p->running || p->module) continue;
+        p->enabled = true;
+        p->wanted = -1;
+        p->status = ui::PluginStatus::Off;
+        p->statusText.clear();
+        const DWORD t0 = GetTickCount();
+        loadOne(p);
+        if (p->running) {
+            p->loadedLate = true;
+            logLine(HORIZON_LOG_INFO, p->id.c_str(), "loaded while the game runs (%lu ms, device %s)", GetTickCount() - t0,
+                    gameDevice() ? (p->hasDev ? "handed over" : "not used") : "not there yet");
+            catchUp(p);
+        } else {
+            p->enabled = false;
+            logLine(HORIZON_LOG_WARN, p->id.c_str(), "could not be loaded while the game runs: %s", p->statusText.c_str());
+        }
+    }
 }
 
 bool pluginSwitchPosition(const Plugin* p) {
@@ -813,3 +888,12 @@ void pluginsPostPresent(void* device, long hr) {
 }
 
 } // namespace horizon
+
+// Test program only (tests\host_test.cpp): the menu switch of a plugin, as a click on it would move it.
+// Refused (0) in a game. Game thread.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestSetPluginEnabled(const char* id, int on) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test || !id || !findPlugin(id)) return 0;
+    pluginSetEnabled(id, on != 0);
+    return 1;
+}

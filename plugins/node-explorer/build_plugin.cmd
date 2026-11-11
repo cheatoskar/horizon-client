@@ -13,6 +13,7 @@ cl /nologo /c /O2 /MT /GS /Zi /W3 /EHsc /std:c++17 %DEFS% /Isrc /Fo"%OD%\reflect
 link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:"%OD%\node-explorer.dll" /PDB:"%OD%\node-explorer.pdb" /IMPLIB:"%OD%\node-explorer.lib" "%OD%\*.obj" build\imgui_core.lib user32.lib kernel32.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 
 rem package: this folder goes into <game>\horizon\plugins\node-explorer\ of a test copy
 copy /y "%OD%\node-explorer.dll" "%PK%\node-explorer.dll" >nul || exit /b 1

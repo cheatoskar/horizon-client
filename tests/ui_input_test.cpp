@@ -27,6 +27,7 @@ void check(bool ok, const char* what) {
 Model g_model;
 Actions g_actions;
 bool g_open = true;
+bool g_widget = false;
 int g_barToggles = 0;
 int g_saved = 0;
 float g_savedRect[4] = {};
@@ -40,6 +41,13 @@ void frames(int n, ImVec2 mouse, int clickAt = -1) {
         if (clickAt >= 0 && f == clickAt + 2) io.AddMouseButtonEvent(0, false);
         ImGui::NewFrame();
         if (g_open) drawMenu(g_model, g_actions, &g_open);
+        if (g_widget) { // a HUD widget outside the menu, drawn after it (as the host does)
+            ImGui::SetNextWindowPos(ImVec2(20, 20));
+            ImGui::SetNextWindowSize(ImVec2(120, 100));
+            ImGui::Begin("##widget", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::TextUnformatted("Inputs");
+            ImGui::End();
+        }
         ImGui::EndFrame();
     }
 }
@@ -83,13 +91,28 @@ int main() {
     check(hoveredRoot() == "##horizon_panel", "after the display change (2560x1440) the pointer still hits the panel");
 
     io.DisplaySize = ImVec2(1600, 900);
+    g_model.menuSizePct = 75; // 1200 x 675 px, centred
     frames(10, ImVec2(5, 5)); // outside the panel: dim only, the panel is not hovered
     check(hoveredRoot() != "##horizon_panel", "pointer outside the panel does not hit the panel");
     // click on the "Top bar" switch (right card, first row at 1600x900)
     g_barToggles = 0;
-    frames(20, ImVec2(1314, 209), 10);
+    frames(20, ImVec2(1314, 249), 10);
     check(g_open, "menu still open after the click");
     check(g_barToggles == 1, "a click on a menu switch lands (setBarEnabled called once)");
+    // the menu size follows the setting
+    {
+        ImGuiWindow* panel = ImGui::FindWindowByName("##horizon_panel");
+        check(panel && static_cast<int>(panel->Size.x) == 1200 && static_cast<int>(panel->Size.y) == 675, "menu size 75 % of 1600x900");
+    }
+    // a click on a widget (a window drawn above the dim layer) keeps the menu open; a click on the dim layer closes it
+    g_widget = true;
+    frames(10, ImVec2(60, 60));
+    frames(10, ImVec2(60, 60), 3);
+    check(g_open, "a click on a widget outside the menu keeps the menu open");
+    frames(10, ImVec2(60, 860), 3);
+    check(!g_open, "a click on the dim layer closes the menu");
+    g_widget = false;
+    g_open = true;
 
     // free plugin windows (bar, left click): open, remember, clamp, close
     std::printf("free plugin windows\n");

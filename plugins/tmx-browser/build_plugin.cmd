@@ -16,9 +16,11 @@ cl /nologo /c /O2 /MT /GS /Zi /W3 /EHsc /std:c++17 %DEFS% /I%PD%\src /Ithird_par
 link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:"%BD%\tmx-browser.dll" /PDB:"%BD%\tmx-browser.pdb" /IMPLIB:"%BD%\tmx-browser.lib" %BD%\*.obj build\imgui_core.lib user32.lib kernel32.lib shell32.lib || exit /b 1
 copy /y %PD%\plugin.json "%BD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%BD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%BD%\icon-alt.png" >nul
 copy /y "%BD%\tmx-browser.dll" "%OD%\tmx-browser.dll" >nul || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 rem unit tests of the logic
 %CXX% /I%CK% /I%PD%\src /Fo"%TD%\tmxb\\" /Fd"%TD%\tmxb\t.pdb" %PD%\tests\tmx_browser_test.cpp || exit /b 1
 link /nologo /DEBUG /MACHINE:X86 /OUT:"%TD%\tmx_browser_test.exe" /PDB:"%TD%\tmxb\tmx_browser_test.pdb" "%TD%\tmxb\tmx_browser_test.obj" "%BD%\tmx_logic.obj" "%BD%\thumb_decode.obj" user32.lib kernel32.lib || exit /b 1

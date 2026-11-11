@@ -1,6 +1,6 @@
 # Input Display
 
-Plugin id `input-display`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, on by default. A HUD window that shows steering, gas and brake as the car sees them, and where the game allows it the speed, gear and RPM.
+Plugin id `input-display`. ESWC, Sunrise, TMNF and TMUF, online-ok, live toggle, off by default (switch it on in the menu; it loads right away). A HUD window that shows steering, gas and brake as the car sees them, and where the game allows it the speed, gear and RPM.
 
 ## What it does
 

@@ -49,6 +49,9 @@ struct Fonts {
 // Adds the fonts to the current context's atlas (call once, before the backend builds the atlas).
 // scale: 1.0 at 1080p window height (host passes clamp(height/1080, 1, 2)).
 void loadFonts(float scale);
+// Builds the fonts again at a new scale between two frames. The ImFont objects stay the same (plugins keep
+// the pointers from HorizonStyle); the caller drops the backend's font texture so it is made again.
+void reloadFonts(float scale);
 // Where to read the icon font from when host.dll has no resource (the UI preview). Call before loadFonts.
 void setIconFontFile(const std::string& path);
 const Fonts& fonts();
@@ -81,6 +84,8 @@ struct PluginView {
     bool enabled = false;     // the switch position
     bool hasMenu = false;     // has a settings page (DrawMenu)
     bool liveToggle = false;  // switching applies now
+    bool restartToSwitch = false; // moving the switch only takes effect after a restart
+    std::string restartText;  // tooltip of the switch then, e.g. "Needs a restart: this module hooks the game at start."
     bool soloOnly = false;
     std::vector<PanelView> panels; // tabs after "Settings"
     float winX = -1, winY = -1, winW = 0, winH = 0; // remembered rect of its free window (px), winX < 0 = none
@@ -143,6 +148,17 @@ struct Model {
         bool missed = false;
     };
     std::vector<Recent> recentToasts;          // newest first
+    int bridgeState = 0;                       // HORIZON_BRIDGE_*: the "Launcher connected" chip
+    // Display (General): menu size in % of the screen and the content scale in %; *Setting 0 = Auto
+    int menuSizePct = 85, menuSizeSetting = 0, menuSizeAuto = 85;
+    int contentPct = 100, contentSetting = 0, contentAuto = 100;
+    // Layout mode ("Edit layout")
+    std::string layoutKey;                     // "Ctrl+Insert", "" none
+    bool layoutAllowed = true;                 // false on TMNF/TMUF during a race
+    std::string layoutWhy;                     // why not, short
+    bool forever = false;                      // TMNF/TMUF: say that layout mode is only for the menus
+    int widgetOpacity = 65;                    // widget background in % (host.json widgets.opacity)
+    int iconStyle = 0;                         // module icons: 0 Saturn (icon.png), 1 Distinct (icon-alt.png)
 };
 
 // One toast on screen (ABI minor 3), see drawToasts.
@@ -172,7 +188,18 @@ struct Actions {
     std::function<void(bool on)> setBridgeEnabled;
     std::function<void()> forgetBridge;
     std::function<void(const std::string& pluginId, float x, float y, float w, float h)> saveWindow; // free window moved/resized
+    std::function<void(int pct)> setMenuSize;     // 0 = Auto, else 60/70/80/90
+    std::function<void(int pct)> setContentScale; // 0 = Auto, else 80..125
+    std::function<void()> toggleLayout;           // "Edit layout" (closes the menu)
+    std::function<void(int pct)> setWidgetOpacity; // widget background 20..100 %
+    std::function<void(int style)> setIconStyle;  // 0 Saturn, 1 Distinct
 };
+
+// Where the last menu frame was: the window and the room inside a plugin page's card (for ui_metrics).
+struct MenuMetrics {
+    float menuW = 0, menuH = 0, pageW = 0, pageH = 0;
+};
+const MenuMetrics& menuMetrics();
 
 // Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",
 // the TM Horizon wordmark (with its width/height) and the round mark. 0 = none (initials / text).

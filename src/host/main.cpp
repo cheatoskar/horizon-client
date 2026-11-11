@@ -51,7 +51,7 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     }
     ensureDir(s.dataRoot);
     logOpen(s.dataRoot + L"logs\\", 20);
-    HLOG("---- Horizon Host %s (plugin ABI %d.%d, Dear ImGui %s) start via %s, thread %lu ----", kHostVersion, HORIZON_ABI,
+    HLOG("---- Horizon Client (host %s, plugin ABI %d.%d, Dear ImGui %s) start via %s, thread %lu ----", kHostVersion, HORIZON_ABI,
          HORIZON_ABI_MINOR, "1.91.5", loaderName(loader), GetCurrentThreadId());
     HLOG("folders: host %s, data %s", utf8(s.baseFolder).c_str(), utf8(s.dataRoot).c_str());
 

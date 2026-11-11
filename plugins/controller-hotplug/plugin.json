@@ -10,5 +10,6 @@
   "online": "online-ok",
   "abi": 1,
   "description": "Registers game controllers you plug in while the game runs.",
-  "author": "cheatoskar"
+  "author": "cheatoskar",
+  "icon": "icon.png"
 }

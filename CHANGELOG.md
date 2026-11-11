@@ -2,6 +2,16 @@
 
 ## 0.2.0 (in progress, branch next)
 
+- Shown to players as "Horizon Client" (menu footer, About, log header "Horizon Client (host 0.2.0 ...)", TMLoader name, README, installer). Folders, ids and exports keep "Horizon Host".
+- Menu size: General -> Display, Auto (80 % of the screen at 1440p and up, 85 % below) or 60/70/80/90 %. Text and icons 80-125 % (Auto 90 % at 1440p and up), also Ctrl + mouse wheel in the menu; the fonts are rebuilt inside the same `ImFont` objects, so plugins' font pointers stay valid. Plugin ABI 1.4: `ui_metrics()` (scale, content scale, display, menu and page size).
+- Modules switched on in the menu load right away (LoadLibrary, Init, the device handed over, a GAME_STATE and MAP_LOADED catch-up event). Only `"startup_only": true` in `plugin.json` still asks for a restart. Test: `host_test runtime-load` (late load, three off/on cycles, Reset, startup_only).
+- Without profile.json only the menu, Horizon Scripts, Autosave & Login-Fix and Controller hot-plug start; WR Hunter, Input Display, Node Explorer, TMX Browser, TMX Upload and Performance are off until switched on. Switches a player already set stay.
+- Widgets: a new HUD panel goes to a fixed slot at a screen edge (Input Display bottom centre, WR Hunter top right), stacked when two share a slot; moving snaps to the edges, the centre lines and other widgets. Layout mode ("Edit layout", Ctrl+Insert, the Layout button in the top bar, General): move, resize (scales widgets that fit their content), minimise to an edge icon, hide and show again, Reset, Done/Esc. Own pointer, mouse (ESWC/Sunrise: also DirectInput) kept from the game; on TMNF/TMUF only in the game's menus. Widget background setting (default 65 %). Widgets no longer get a title bar when the menu opens (they used to jump and change size).
+- A click on a widget or any other window outside the menu no longer closes the menu (only a click on the dim layer does). Test in `ui_input_test`.
+- Header: "Game: online/offline" with an explanation, and a "Launcher connected" chip from the bridge state. Pop-out on panel tabs is a normal-size icon button.
+- Module icons: two sets per module (`icon.png` "Saturn", `icon-alt.png` "Distinct"), chosen in General -> Display.
+- WR Hunter: TrackMania split colours (blue faster, red slower), a line with the latest checkpoint deltas, fixed line width (the compact view grew every frame at the finish until it spanned the screen).
+
 - Menu: the dim layer is drawn in the background draw list. It used to be a window that ended up above the menu panel, which darkened the menu and took every click (nothing in the open menu could be clicked on ESWC and Sunrise). The panel background is now slightly translucent (alpha 0.94). Test: `tests\ui_input_test.cpp` (fails on the old code).
 - Top bar: left click on a plugin icon opens its page as a free window (movable, resizable, position remembered per plugin in `host.json`), right click opens the menu on its page. The on/off switch moved into that window and the menu.
 - Horizon Scripts: callback `OnPeek()` and one rebindable hotkey "Show script overlays" (Ctrl+F4). Clock and Map Info got "Hide after" (default 10 s, 0 = always visible), fade out, and show again with the menu open or the hotkey.

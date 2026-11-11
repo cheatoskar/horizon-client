@@ -56,9 +56,9 @@ inline Palette palette(const HorizonHostApi* host) {
         p.text = ImVec4(0.933f, 0.941f, 0.953f, 1); p.text2 = ImVec4(0.765f, 0.788f, 0.820f, 1); p.muted = ImVec4(0.557f, 0.592f, 0.639f, 1);
         p.bg = ImVec4(0.039f, 0.047f, 0.067f, 0.97f); p.bg2 = ImVec4(0.063f, 0.075f, 0.102f, 1); p.surface = ImVec4(0.106f, 0.118f, 0.141f, 1);
     }
-    // LiveSplit's four states, in the TM Horizon colours
-    p.aheadGain = p.ok;
-    p.aheadLose = mix(p.ok, p.text, 0.45f);
+    // LiveSplit's four states in TrackMania's split colours: blue = faster, red = slower
+    p.aheadGain = ImVec4(0.30f, 0.60f, 1.0f, 1.0f); // #4d99ff
+    p.aheadLose = mix(p.aheadGain, p.text, 0.45f);
     p.behindLose = p.bad;
     p.behindGain = mix(p.bad, p.text, 0.45f);
     p.gold = ImVec4(1.0f, 0.80f, 0.25f, 1.0f);

@@ -42,6 +42,8 @@ struct Plugin {
     bool hasDev = false;
     std::string hotkeyTextBuf;
     uint32_t hostFlags = 0; // set_host_flag (ABI minor 2)
+    bool loadQueued = false; // switched on while the game runs: loaded at the start of the next frame
+    bool loadedLate = false; // Init ran while the game was already running
 };
 
 std::vector<std::unique_ptr<Plugin>>& plugins();
@@ -50,6 +52,12 @@ Plugin* findPlugin(const std::string& id);
 bool pluginGated(const Plugin* p);
 void pluginSetEnabled(const std::string& id, bool on);
 bool pluginSwitchPosition(const Plugin* p);
+// True when moving the switch now would only take effect after a restart (running without live toggle,
+// or not loaded and "startup_only" in plugin.json).
+bool pluginSwitchNeedsRestart(const Plugin* p);
+// Loads the plugins switched on since the last frame (LoadLibrary, Init, device handed over). Game thread,
+// outside the ImGui frame.
+void pluginsLoadPending();
 void pluginDrawMenu(const std::string& id);
 void pluginCrashed(Plugin* p, const char* where); // stops calling it, shows "Failed"
 

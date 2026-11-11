@@ -35,6 +35,7 @@ link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /N
   "%OD%\plugin_main.obj" "%OD%\scripts_core.lib" build\angelscript.lib build\imgui_core.lib user32.lib kernel32.lib shell32.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
 copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
+if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 
 rem --- package: dist-scripts\plugins\scripts\ goes into <game>\horizon\plugins\scripts\, dist-scripts\scripts\* into <game>\horizon\scripts\
 copy /y "%OD%\scripts.dll" "%PK%\plugins\scripts\scripts.dll" >nul || exit /b 1

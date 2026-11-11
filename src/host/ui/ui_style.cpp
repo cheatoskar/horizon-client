@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -172,6 +173,33 @@ void loadFonts(float scale) {
     g_fonts.small = small ? small : body;
     g_fonts.mono = mono ? mono : body;
     io.FontDefault = body;
+}
+
+void reloadFonts(float scale) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImFontAtlas* atlas = io.Fonts;
+    // keep the old ImFont objects: plugins may hold them (HorizonStyle::font_*), and io.FontDefault points at one
+    ImVector<ImFont*> keep = atlas->Fonts;
+    atlas->ClearInputData();
+    atlas->ClearTexData();
+    atlas->Fonts.clear(); // the objects stay alive in keep
+    loadFonts(scale);     // new fonts, g_fonts points at them
+    for (int i = 0; i < atlas->Fonts.Size; ++i) {
+        ImFont* fresh = atlas->Fonts[i];
+        if (i >= keep.Size) break; // more fonts than before (a font file appeared): the extra ones are new objects
+        ImFont* old = keep[i];
+        old->~ImFont();
+        new (old) ImFont(); // an empty font, filled by Build below
+        for (ImFontConfig& c : atlas->ConfigData)
+            if (c.DstFont == fresh) c.DstFont = old;
+        atlas->Fonts[i] = old;
+        ImFont** slots[] = {&g_fonts.body, &g_fonts.bodyBold, &g_fonts.title, &g_fonts.small, &g_fonts.mono, &io.FontDefault};
+        for (ImFont** s : slots)
+            if (*s == fresh) *s = old;
+        IM_DELETE(fresh);
+    }
+    // fewer fonts than before: the leftovers stay allocated (never freed while plugins may point at them)
+    atlas->Build();
 }
 
 void applyStyle(float s) {

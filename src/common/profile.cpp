@@ -146,6 +146,7 @@ PluginManifest parsePluginManifest(const std::string& text, const std::string& f
     }
     m.soloOnly = lower(getString(root, "online")) != "online-ok";
     m.enabledByDefault = getBool(root, "enabled_by_default", true);
+    m.startupOnly = getBool(root, "startup_only", false);
     const Json* abi = root.get("abi");
     m.abi = abi && abi->type == Json::Number ? static_cast<int>(abi->num) : 0;
     m.valid = true;

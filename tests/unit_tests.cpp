@@ -21,13 +21,15 @@
 // (open_page, notify, bridge_request, bridge_state; post_present at the end of the device callbacks).
 // ABI12_* are the sizes the 1.2 test plugin (tests/abi12) is built with.
 static_assert(sizeof(void*) == 4, "the plugin ABI is 32-bit x86");
-static_assert(HORIZON_ABI == 1 && HORIZON_ABI_MINOR == 3, "ABI 1.3");
+static_assert(HORIZON_ABI == 1 && HORIZON_ABI_MINOR == 4, "ABI 1.4");
 static_assert(offsetof(HorizonHostApi, host_flags) + sizeof(void*) == ABI12_HOST_API_SIZE, "1.2 table ends with host_flags");
 static_assert(offsetof(HorizonHostApi, open_page) == ABI12_HOST_API_SIZE, "open_page is the first 1.3 field");
 static_assert(offsetof(HorizonHostApi, notify) == ABI12_HOST_API_SIZE + 4, "notify follows open_page");
 static_assert(offsetof(HorizonHostApi, bridge_request) == ABI12_HOST_API_SIZE + 8, "bridge_request follows notify");
 static_assert(offsetof(HorizonHostApi, bridge_state) == ABI12_HOST_API_SIZE + 12, "bridge_state follows bridge_request");
-static_assert(sizeof(HorizonHostApi) == ABI12_HOST_API_SIZE + 16, "nothing else in 1.3");
+static_assert(offsetof(HorizonHostApi, ui_metrics) == ABI12_HOST_API_SIZE + 16, "ui_metrics (1.4) follows the 1.3 table");
+static_assert(sizeof(HorizonHostApi) == ABI12_HOST_API_SIZE + 20, "nothing else in 1.4");
+static_assert(offsetof(HorizonUiMetrics, page_h) == 32 && sizeof(HorizonUiMetrics) == 36, "HorizonUiMetrics layout");
 static_assert(offsetof(HorizonDeviceCallbacks, post_present) == ABI12_DEVICE_CALLBACKS_SIZE, "post_present appended");
 static_assert(sizeof(HorizonDeviceCallbacks) == ABI12_DEVICE_CALLBACKS_SIZE + 4, "nothing else in the 1.3 callbacks");
 static_assert(sizeof(HorizonPluginInfo) == ABI12_PLUGIN_INFO_SIZE, "HorizonPluginInfo unchanged");
@@ -85,7 +87,8 @@ static void testManifest() {
     CHECK(!parsePluginManifest(R"({"id":"other"})", "eswc-autosave").valid);  // id must match the folder
     CHECK(!parsePluginManifest(R"({"dll":"..\\x.dll"})", "a").valid);         // dll must stay in the folder
     PluginManifest d = parsePluginManifest(R"({"enabled_by_default":false})", "x");
-    CHECK(d.valid && d.soloOnly && !d.enabledByDefault && d.dll == "x.dll");
+    CHECK(d.valid && d.soloOnly && !d.enabledByDefault && d.dll == "x.dll" && !d.startupOnly);
+    CHECK(parsePluginManifest(R"({"startup_only":true})", "x").startupOnly);
     CHECK(parsePluginManifest(R"({"icon":"icon.png"})", "x").icon == "icon.png");
     CHECK(parsePluginManifest(R"({"icon":"..\\x.png"})", "x").icon.empty()); // icon must stay in the folder
     CHECK(parsePluginManifest(R"({"icon":"sub/x.png"})", "x").icon.empty());

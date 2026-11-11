@@ -89,12 +89,13 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     const bool hasOnline = model.online;
     const char* menuLabel = HZ_ICON_MENU_U8 "  Menu";
     const char* logLabel = HZ_ICON_SCROLL_TEXT_U8 "  Log";
+    const char* layoutLabel = HZ_ICON_LAYOUT_GRID_U8 "  Layout";
     const char* launcherLabel = "TM Horizon  " HZ_ICON_EXTERNAL_LINK_U8;
     const float chipH = 26.0f * s;
     float fixedW = pad + 28.0f * s + 12.0f * s;                       // logo
     float tail = 12.0f * s + 1.0f * s + 12.0f * s;                    // separator
-    tail += buttonWidth(bf, menuLabel) + gap + buttonWidth(bf, logLabel) + gap + buttonWidth(bf, launcherLabel);
-    if (hasOnline) tail += gap + chipWidth(f.small, "Online", true);
+    tail += buttonWidth(bf, menuLabel) + gap + buttonWidth(bf, layoutLabel) + gap + buttonWidth(bf, logLabel) + gap + buttonWidth(bf, launcherLabel);
+    if (hasOnline) tail += gap + chipWidth(f.small, "Game: online", true);
     tail += pad;
     size_t maxIcons = model.plugins.size();
     const float room = io.DisplaySize.x - 32.0f * s - fixedW - tail;
@@ -188,6 +189,15 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     const float by = midY - btnH * 0.5f;
     if (pillButton(dl, "##menu", ImVec2(x, by), btnH, bf, menuLabel, true) && openMenu) *openMenu = true;
     x += buttonWidth(bf, menuLabel) + gap;
+    if (pillButton(dl, "##layout", ImVec2(x, by), btnH, bf, layoutLabel, false) && model.layoutAllowed && actions.toggleLayout) actions.toggleLayout();
+    if (ImGui::IsItemHovered()) {
+        std::string tip = "Edit layout: move, resize and hide widgets.";
+        if (!model.layoutKey.empty()) tip += " Key: " + model.layoutKey + ".";
+        if (!model.layoutAllowed) tip += "\n" + model.layoutWhy;
+        else if (model.forever) tip += "\nTMNF/TMUF: not during a race.";
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
+    x += buttonWidth(bf, layoutLabel) + gap;
     if (pillButton(dl, "##log", ImVec2(x, by), btnH, bf, logLabel, false)) {
         showPage("log");
         if (openMenu) *openMenu = true;
@@ -197,7 +207,7 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
         actions.openLauncher();
     }
     x += buttonWidth(bf, launcherLabel) + gap;
-    if (hasOnline) drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, "Online", t.ok, true);
+    if (hasOnline) drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, "Game: online", t.ok, true);
 
     ImGui::End();
 
