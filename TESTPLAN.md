@@ -34,6 +34,18 @@ Im Log suchen:
 
 Im Log: `[eswc-autosave] started`, `hook: ... OnFinishLine ... installed`, `[eswc-autosave] [Solo] SAVED (finish): ...`, `online: fix active` (Login muss weiter klappen).
 
+## 2b. ESWC Entwicklerstand (Horizon 0.2.0 + TMVS mit Handshake + Node Explorer)
+
+Ordner: `C:\Users\osaro\Games\TMN-ESWC-horizon-next` (Kopie von TMN-ESWC-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (gleicher Build wie in TMSunrise-horizon-next), das alte Autosave weiter als `dinput8.chain.dll`, TM Vibrant Shaders vom Branch horizon-coop (8e2a099 + a3dcd02) als `d3d9.dll` (das bisherige liegt als `d3d9.dll.tmvs-1.5-test` daneben), Node Explorer 0.1.0, TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0. ESWC meldet sich beim Start online an wie sonst auch.
+
+1. Spiel starten. Horizon-Log (`horizon\logs\`, neueste Datei): `[node-explorer] started: Node Explorer 0.1.0 ...`, unter Other mods steht TM Vibrant Shaders. TMVS-Log (`tmvs.log`, Ordner über das TMVS-Menü): `horizon: Horizon Host 0.2.0 found (host.dll): our menu gives way to its menu, ...`.
+2. TMVS-Menü (F8) öffnen, dann Insert: das TMVS-Menü verschwindet, solange das Horizon-Menü offen ist (tmvs.log: `menu: hidden while the Horizon menu is open`), und kommt nach dem Schließen zurück. F7 (Effekte an/aus) geht weiter, auch bei offenem Horizon-Menü.
+3. Ein Rennen fahren und mit F3 einen Clip speichern, während die Horizon-Leiste oben zu sehen ist (Maus an den oberen Rand): im Clip ist keine Horizon-Leiste und kein Horizon-Fenster. F12-Foto: ebenso.
+4. Insert → Node Explorer → App: die Werte des Spiels erscheinen (z. B. die laufende Strecke), ändern sich beim Kartenwechsel, nichts lässt sich schreiben.
+5. Aussehen: Knöpfe sind heller als die Karten, General/Hotkeys/Log/About haben Symbole, Node Explorer und TMX Upload stehen unter Mods (TMX Upload aus).
+6. Altes Autosave: speichert nach dem Ziel wie bisher (`eswc_autosave.log`). Das Autosave-Plugin bleibt aus, solange `dinput8.chain.dll` da ist.
+7. Bei Problemen: neueste Horizon-Log-Datei und `tmvs.log` schicken. Zurück: wieder TMN-ESWC-horizon-test benutzen.
+
 ## 3. Sunrise
 
 Ordner `C:\Users\osaro\Games\TMSunrise-horizon-test`, Start `TmSunrise.exe` (hat seinen eigenen d3d9.dll-Wrapper, Horizon arbeitet damit).
