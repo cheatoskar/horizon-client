@@ -920,17 +920,11 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     const float eased = 1.0f - (1.0f - appear) * (1.0f - appear);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, eased);
 
-    // dim layer
+    // dim layer: only the game behind. It goes into the background draw list, which is under every window
+    // (a window for it ended up above the panel and darkened the menu itself). The style alpha does not
+    // reach a draw list, so the fade-in is applied by hand.
     const ImVec2 disp = io.DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(disp);
-    const ImGuiWindowFlags dimFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
-                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                                      ImGuiWindowFlags_NoScrollWithMouse;
-    ImGui::Begin("##horizon_dim", nullptr, dimFlags);
-    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f));
-    ImGui::End();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f * eased));
 
     // panel
     const float pw = std::min(1200.0f * s, disp.x * 0.82f);
@@ -938,7 +932,9 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     const ImVec2 pos(std::floor((disp.x - pw) * 0.5f), std::floor((disp.y - ph) * 0.5f + (1.0f - eased) * 12.0f * s));
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(pw, ph));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, toVec(t.bg));
+    ImVec4 panelBg = toVec(t.bg);
+    panelBg.w = 0.94f; // very slightly translucent; text and controls stay opaque
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, panelBg);
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.08f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.radiusLg * s);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
