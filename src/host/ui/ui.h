@@ -130,7 +130,29 @@ struct Model {
     int menuHotkey = 0;                        // handle of the menu key in hotkeys (for the key picker)
     std::vector<std::string> menuKeySuggestions; // quick picks for the menu key: "Insert", "F2", "#", "+", "Ctrl+Tab"
     int onlineFix = -1;                        // General: ESWC online login fix, -1 = not this game, 0 off, 1 on (next start)
+    // Notifications (toasts, ABI minor 3) and the TM Horizon bridge
+    bool dnd = false;                          // do not disturb: toasts only go to the list below
+    bool holdToasts = true;                    // keep toasts back while a run is going
+    bool bridgeEnabled = true;                 // the connection to TM Horizon on this PC
+    std::string bridgeText;                    // "Connected", "Waiting for Allow in TM Horizon", ...
+    bool bridgePaired = false;                 // a key is stored (Forget is offered)
+    struct Recent {
+        std::string owner, title, text;
+        unsigned kind = 0;
+        bool missed = false;
+    };
+    std::vector<Recent> recentToasts;          // newest first
 };
+
+// One toast on screen (ABI minor 3), see drawToasts.
+struct ToastView {
+    std::string owner, title, text;
+    unsigned kind = 0;   // HORIZON_TOAST_*
+    unsigned icon = 0;   // 0 = the kind's icon
+    float alpha = 1.0f;  // fade
+};
+// The toast stack, top right (foreground draw list, no input).
+void drawToasts(const std::vector<ToastView>& toasts);
 
 struct Actions {
     std::function<void(const std::string& id, bool enabled)> setPluginEnabled;
@@ -144,6 +166,10 @@ struct Actions {
     std::function<void(bool on)> setBarEnabled;
     std::function<void(bool on)> setOnlineFix;
     std::function<void(const std::string& pluginId, const std::string& key)> drawPanelTab; // body or window options
+    std::function<void(bool on)> setDnd;
+    std::function<void(bool on)> setHoldToasts;
+    std::function<void(bool on)> setBridgeEnabled;
+    std::function<void()> forgetBridge;
 };
 
 // Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",

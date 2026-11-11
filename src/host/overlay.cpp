@@ -11,7 +11,10 @@
 
 #include "common/hotkeys.h"
 #include "common/util.h"
+#include "host/bridge.h"
+#include "host/stats.h"
 #include "host/panels.h"
+#include "host/toasts.h"
 #include "host/plugins.h"
 #include "host/ui/ui.h"
 #include "imgui.h"
@@ -102,7 +105,9 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_DESTROY && !g_shutdownDone) {
         g_shutdownDone = true;
         HLOG("window: the game window closes: plugins shut down");
+        bridgeStop();
         pluginsShutdownAll();
+        statsStop();
         hostConfigSave(true);
     }
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) hotkeysKeyMessage(msg, w, l);
@@ -224,6 +229,13 @@ ui::Model buildModel() {
     m.menuHotkey = g_menuHotkey;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
     m.onlineFix = s.game.game == HORIZON_GAME_ESWC ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
+    m.dnd = toastsDnd();
+    m.holdToasts = toastsHold();
+    m.bridgeEnabled = bridgeState() != HORIZON_BRIDGE_OFF || hostSettingInt("bridge.enabled", 1) != 0;
+    m.bridgeText = bridgeStateText();
+    m.bridgePaired = bridgePaired();
+    if (g_menu)
+        for (const ToastHistoryEntry& h : toastsHistory()) m.recentToasts.push_back(ui::Model::Recent{h.owner, h.title, h.text, h.kind, h.missed});
     m.notes = s.notes;
     m.notes.push_back(std::string("Game: ") + game().status());
     if (s.tmvsLoaded) m.notes.push_back("TM Vibrant Shaders keeps its own Direct3D hook and menu.");
@@ -253,6 +265,10 @@ ui::Actions makeActions() {
         HLOG("menu: online login fix %s from the next start", on ? "on" : "off");
     };
     a.drawPanelTab = [](const std::string& pluginId, const std::string& key) { panelDrawTab(pluginId, key); };
+    a.setDnd = [](bool on) { toastsSetDnd(on); };
+    a.setHoldToasts = [](bool on) { toastsSetHold(on); };
+    a.setBridgeEnabled = [](bool on) { bridgeSetEnabled(on); };
+    a.forgetBridge = []() { bridgeForget(); };
     a.setBarEnabled = [](bool on) {
         g_barEnabled = on;
         hostSetSettingInt("bar", on ? 1 : 0);
@@ -427,6 +443,9 @@ void overlayFrame(void* device) {
     game().frame();
     eventsFrame();
     pluginsRunQueued();
+    bridgeDeliver();
+    const bool pluginCaptureNow = (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0;
+    toastsStep(captureActive() || pluginCaptureNow);
     if (!g_backends || g_lost || !g_ctx) return;
     ImGui::SetCurrentContext(g_ctx);
     const bool fg = foreground();
@@ -453,7 +472,8 @@ void overlayFrame(void* device) {
     bool anyOverlay = panelsWantFrame(g_menu);
     for (auto& up : plugins())
         if (up->running && up->enabled && up->drawOverlay) anyOverlay = true;
-    const bool need = g_menu || g_barShown || top || anyOverlay;
+    const bool toasts = !pluginCapture && toastsVisible();
+    const bool need = g_menu || g_barShown || top || anyOverlay || toasts;
     if (game().usesDirectInputBlock()) dinputSetBlocked(g_menu);
     if (!need) {
         panelsBeginFrame();
@@ -480,6 +500,7 @@ void overlayFrame(void* device) {
         if (!open) setMenuOpen(false, "the menu");
         g_panelsShown = panelsDrawWindows(true); // above the menu, so they can be moved and set up
     }
+    if (toasts) toastsDraw();
     ImGui::EndFrame();
     ImGui::Render();
     render(dev);

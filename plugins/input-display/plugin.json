@@ -1,0 +1,18 @@
+{
+  "id": "input-display",
+  "name": "Input Display",
+  "version": "0.1.0",
+  "dll": "input-display.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Shows steering, gas, brake and speed as the car sees them.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": true
+}

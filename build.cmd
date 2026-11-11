@@ -31,10 +31,12 @@ lib /nologo /OUT:build\common.lib build\common\*.obj || exit /b 1
 
 rem --- host
 %CXX% /Fo"build\host\\" /Fd"build\host\host.pdb" src\host\*.cpp src\host\ui\*.cpp src\host\game\*.cpp || exit /b 1
+rem the map uid from the engine's id table (shared with the client mods), for the statistics lines
+%CXX% /Iplugins\client-common /Fo"build\host\\" /Fd"build\host\host.pdb" plugins\client-common\mapident.cpp || exit /b 1
 rem vendored from legacy-randomizer (commit 7482627): reflection, game control, GBX header reader
 cl /nologo /c /O2 /MT /GS /Zi /W3 /EHsc /std:c++17 %DEFS% /Isrc /Fo"build\host\\" /Fd"build\host\host.pdb" src\reflect\reflect.cpp src\gamectl\gamectl.cpp src\core\gbx.cpp third_party\stb\stb_image_impl.cpp || exit /b 1
 rc /nologo /fo build\host\host.res src\host\host.rc || exit /b 1
-link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:dist\legacy\horizon\host.dll /PDB:build\host.pdb /IMPLIB:build\host_imp.lib build\host\*.obj build\host\host.res build\common.lib build\imgui.lib user32.lib kernel32.lib gdi32.lib shell32.lib ole32.lib bcrypt.lib wininet.lib dxguid.lib version.lib psapi.lib || exit /b 1
+link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:dist\legacy\horizon\host.dll /PDB:build\host.pdb /IMPLIB:build\host_imp.lib build\host\*.obj build\host\host.res build\common.lib build\imgui.lib user32.lib kernel32.lib gdi32.lib shell32.lib ole32.lib bcrypt.lib wininet.lib ws2_32.lib dxguid.lib version.lib psapi.lib || exit /b 1
 
 rem --- plugins: each folder under plugins\ with a build.cmd fragment
 for /d %%p in (plugins\*) do (

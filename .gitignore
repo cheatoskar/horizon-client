@@ -7,3 +7,5 @@ screens/
 *.ilk
 dist-explorer/
 dist-scripts/
+dist-client/
+build-log.txt

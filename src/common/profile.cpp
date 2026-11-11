@@ -75,6 +75,7 @@ Profile parseProfile(const std::string& text) {
     p.safeMode = getBool(root, "safe_mode", false);
     p.menuKey = trim(getString(root, "menu_key"));
     p.bar = getBool(root, "bar", true);
+    p.statsDir = trim(getString(root, "stats_dir"));
     p.writtenBy = getString(root, "written_by");
     p.writtenAt = getString(root, "written_at");
     const Json* plugins = root.get("plugins");

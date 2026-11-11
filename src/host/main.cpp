@@ -7,6 +7,8 @@
 #include <cstdio>
 
 #include "common/util.h"
+#include "host/bridge.h"
+#include "host/stats.h"
 #include "gamectl/gamectl.h"
 #include "reflect/reflect.h"
 
@@ -100,6 +102,7 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     hostConfigLoad();
     pluginsReadProfile();
     if (s.safeMode) HLOG("safe mode: %s", s.safeWhy.c_str());
+    statsStart();
 
     GameAdapter* adapter = nullptr;
     switch (s.game.game) {
@@ -120,6 +123,7 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     else HLOG("input: not blocked while the menu is open on this game (Competition Patch rule)");
     overlayCreateContext();
     d3dInstall();
+    bridgeStart();
     pluginsLoadAll();
     hostConfigSave(true);
     HLOG("ready: %zu plugin folder(s) found", pluginCount());

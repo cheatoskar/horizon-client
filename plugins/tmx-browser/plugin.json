@@ -1,0 +1,18 @@
+{
+  "id": "tmx-browser",
+  "name": "TMX Browser",
+  "version": "0.1.0",
+  "dll": "tmx-browser.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Search the TrackMania Exchange, preview maps and play them from the game.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": true
+}

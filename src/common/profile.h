@@ -23,6 +23,7 @@ struct Profile {
     bool safeMode = false;
     std::string menuKey;    // "" = host default
     bool bar = true;
+    std::string statsDir;   // "stats_dir": TM Horizon's folder for play events (host/stats.h), "" = none
     std::vector<ProfilePlugin> plugins;
     std::vector<std::string> warnings; // entries that were skipped and why
     std::string writtenBy, writtenAt;

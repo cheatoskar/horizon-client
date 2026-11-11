@@ -549,6 +549,54 @@ void drawGeneral(const Model& model, const Actions& actions) {
             ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
         }
 
+        // notifications and the TM Horizon connection (ABI minor 3)
+        auto switchRow = [&](const char* id, const char* title, const std::string& sub, bool on, const std::function<void(bool)>& set) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            drawText(dl, f.bodyBold, p, U(t.text), title);
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), sub);
+            const ImVec2 swSize(44.0f * s, 24.0f * s);
+            const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
+            if (inlineSwitch(id, swPos, swSize, on, set != nullptr, nullptr) && set) set(!on);
+            ImGui::SetCursorScreenPos(p);
+            ImGui::Dummy(ImVec2(w, 44.0f * s));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        };
+        switchRow("##dnd", "Do not disturb", "Notifications only go to the list below.", model.dnd, actions.setDnd);
+        switchRow("##holdtoasts", "Quiet while driving", "Notifications wait until the run ends.", model.holdToasts, actions.setHoldToasts);
+        switchRow("##bridge", "TM Horizon connection",
+                  model.bridgeEnabled ? (model.bridgeText.empty() ? std::string("On") : model.bridgeText)
+                                      : std::string("Off: no TMX search, no notifications from TM Horizon."),
+                  model.bridgeEnabled, actions.setBridgeEnabled);
+        if (model.bridgePaired && actions.forgetBridge) {
+            if (ImGui::Button("Forget pairing")) actions.forgetBridge();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("TM Horizon asks for Allow again.");
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        }
+        if (!model.recentToasts.empty()) {
+            dim("Recent notifications", true);
+            for (const Model::Recent& r : model.recentToasts) {
+                const Rgba& c = r.kind == 1 ? t.ok : r.kind == 2 ? t.warn : r.kind == 3 ? t.bad : t.accent;
+                ImGui::PushStyleColor(ImGuiCol_Text, toVec(c));
+                ImGui::TextUnformatted(r.kind == 3 ? HZ_ICON_CIRCLE_ALERT_U8 : r.kind == 2 ? HZ_ICON_TRIANGLE_ALERT_U8 : r.kind == 1 ? HZ_ICON_CHECK_U8 : HZ_ICON_INFO_U8);
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                std::string line = r.title;
+                if (!r.text.empty()) line += "  " + r.text;
+                ImGui::PushStyleColor(ImGuiCol_Text, toVec(r.missed ? t.text2 : t.muted));
+                ImGui::TextUnformatted(line.c_str());
+                ImGui::PopStyleColor();
+                if (!r.owner.empty()) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%s)", r.owner.c_str());
+                }
+            }
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        }
+
         // menu key
         {
             const ImVec2 p = ImGui::GetCursorScreenPos();
