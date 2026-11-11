@@ -9,6 +9,11 @@
 
 struct ImFont;
 
+// rpcndr.h (pulled in by shellapi.h / OLE headers) defines "small" as char.
+#ifdef small
+#undef small
+#endif
+
 namespace horizon {
 namespace ui {
 
@@ -82,6 +87,17 @@ struct LogLine {
     std::string text;         // "21:04:11.120  [eswc-autosave] SAVED ..."
 };
 
+// A mod in the game that is not a Horizon plugin (TMVS, TMInterface, CenterSpeed, Twinkie, another
+// TMLoader mod, the chained dinput8.dll): shown under "Other mods" for orientation, no control.
+struct OtherModView {
+    std::string name;     // "TM Vibrant Shaders"
+    std::string version;  // "1.5.0" or ""
+    std::string file;     // "d3d9.dll", "CenterSpeed.dll"
+    std::string kind;     // "d3d9 proxy", "TMLoader mod", "dinput8 chain", "loaded DLL"
+    std::string keys;     // its own hotkeys if known: "F5-F8, F12 (menu F8)"; "" unknown
+    std::string note;     // one short line, e.g. "Keeps its own Direct3D hook."
+};
+
 struct Model {
     std::string hostVersion;  // "0.1.0"
     std::string gameName;     // "TrackMania Nations ESWC"
@@ -97,6 +113,10 @@ struct Model {
     std::vector<HotkeyView> hotkeys;
     const std::vector<LogLine>* log = nullptr; // newest last, at most ~500
     std::vector<std::string> notes;            // e.g. "Changes apply after a restart: Clips"
+    std::vector<OtherModView> otherMods;       // "Other mods" section
+    bool barEnabled = true;                    // General: the top-edge bar on/off
+    int menuHotkey = 0;                        // handle of the menu key in hotkeys (for the key picker)
+    std::vector<std::string> menuKeySuggestions; // quick picks for the menu key: "Insert", "F2", "#", "+", "Ctrl+Tab"
 };
 
 struct Actions {
@@ -108,13 +128,16 @@ struct Actions {
     std::function<void()> openLogFolder;
     std::function<void()> openLauncher;                           // bring TM Horizon to the front
     std::function<void()> closeMenu;
+    std::function<void(bool on)> setBarEnabled;
 };
 
 // The big menu. Call every frame while it is open; sets *open = false when the user closes it.
 void drawMenu(const Model& model, const Actions& actions, bool* open);
 // Opens the menu on a plugin's page next time (bar: right-click / "Settings").
 void showPluginPage(const std::string& id);
-void showPage(const char* page); // "mods", "hotkeys", "log", "about"
+// Pages: "general", "hotkeys", "log", "about" (the Horizon section), "plugin:<id>", "other:<file>".
+// "mods" opens the first plugin (or general when there is none).
+void showPage(const char* page);
 
 // The Horizon bar. mouseAtTop: the pointer touches the top edge of the game window. Call every
 // frame (also while the menu is closed); it animates in/out on its own. Returns true while any part
