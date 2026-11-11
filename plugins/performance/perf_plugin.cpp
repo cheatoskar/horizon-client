@@ -333,6 +333,10 @@ void d3dLog(int level, const char* fmt, ...) {
 
 void ensureHooks(void* device) {
     if (!device || !callsAllowed() || (!S.count && !S.filter) || perf::d3d::attached()) return;
+    if (GetModuleHandleW(L"TMCompPatch.dll")) {
+        g_competitionPatch = true; // loaded after my Init: never hook
+        return;
+    }
     perf::d3d::attach(static_cast<IDirect3DDevice9*>(device), &d3dLog);
     perf::d3d::setMode(S.count != 0, S.filter != 0);
 }
@@ -420,7 +424,16 @@ void HORIZON_CALL cbPrePresent(void*, void* device) {
     ensureHooks(device);
     finishFrame(t);
     g_tPre = t;
-    if (++g_frameNo % 60 == 0 && perf::d3d::attached()) perf::d3d::recheck();
+    if (++g_frameNo % 60 == 0) {
+        // TMLoader may load Competition Patch after Horizon: from then on no method-table hooks of mine
+        if (!g_competitionPatch && GetModuleHandleW(L"TMCompPatch.dll")) {
+            g_competitionPatch = true;
+            perf::d3d::detach();
+            logf(HORIZON_LOG_INFO, "Competition Patch loaded later: call counter and state filter switched off");
+            perf::stall::note("Competition Patch loaded");
+        }
+        if (perf::d3d::attached()) perf::d3d::recheck();
+    }
     if (g_hasPostPresent && perf::d3d::attached()) perf::d3d::setOverlay(true); // Horizon's own drawing follows
     if (!g_hasPostPresent && S.limitFps > 0) {
         // older host: pace before Present (one frame more input delay than after it)
