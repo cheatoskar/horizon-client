@@ -17,12 +17,14 @@ if not exist build\imgui.lib (
 
 call plugins\eswc-autosave\build_plugin.cmd || exit /b 1
 call plugins\sample\build_plugin.cmd || exit /b 1
+call plugins\tmx-upload\build_plugin.cmd || exit /b 1
 
 %CXX% /Fo"build\test\fake_host.obj" /Fd"build\test\fake_host.pdb" tests\fake_host.cpp || exit /b 1
-link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\fake_host.exe build\test\fake_host.obj build\imgui.lib user32.lib kernel32.lib gdi32.lib shell32.lib || exit /b 1
+link /nologo /DEBUG /MACHINE:X86 /OUT:build\test\fake_host.exe build\test\fake_host.obj build\imgui.lib ws2_32.lib user32.lib kernel32.lib gdi32.lib shell32.lib || exit /b 1
 
 set "AUTOSAVE=dist\legacy\horizon\plugins\eswc-autosave\eswc-autosave.dll"
 set "SAMPLE=build\plugins\sample\sample.dll"
+set "TMXUP=dist\legacy\horizon\plugins\tmx-upload\tmx-upload.dll"
 set "FH=build\test\fake_host.exe"
 set "FAIL=0"
 echo.
@@ -36,6 +38,10 @@ echo ===== eswc-autosave, game eswc (inits, no game pointer)
 %FH% %AUTOSAVE% --game eswc || set "FAIL=1"
 echo ===== eswc-autosave, game sunrise (refuses with 2)
 %FH% %AUTOSAVE% --game sunrise --expect-init 2 || set "FAIL=1"
+echo ===== tmx-upload, game eswc (real HTTP on 127.0.0.1)
+%FH% %TMXUP% --game eswc || set "FAIL=1"
+echo ===== tmx-upload, game tmnf
+%FH% %TMXUP% --game tmnf || set "FAIL=1"
 echo.
 if "%FAIL%"=="1" (echo fake host tests FAILED & exit /b 1)
 echo fake host tests passed
