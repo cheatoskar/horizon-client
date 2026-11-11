@@ -37,6 +37,22 @@ std::vector<ui::LogLine> g_logLines;
 unsigned g_logSeen = 0;
 bool g_shutdownDone = false;
 bool g_swallowed[3] = {};
+bool g_panelsShown = false; // a detached panel window was drawn in the last frame
+
+// HorizonHost_SetCaptureActive (TMVS photos/clips): while set the host draws and takes nothing.
+// Heartbeat: without a new call it ends by itself after kCaptureTimeoutMs.
+constexpr ULONGLONG kCaptureTimeoutMs = 10000;
+volatile LONG g_captureOn = 0;
+volatile ULONGLONG g_captureLast = 0;
+
+bool captureActive() {
+    if (!g_captureOn) return false;
+    if (GetTickCount64() - g_captureLast > kCaptureTimeoutMs) {
+        if (InterlockedExchange(&g_captureOn, 0)) HWARN("capture: no call for 10 s, Horizon UI is back");
+        return false;
+    }
+    return true;
+}
 
 void* hostAlloc(size_t size, void*) { return malloc(size); }
 void hostFree(void* p, void*) { free(p); }
@@ -89,7 +105,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         hostConfigSave(true);
     }
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) hotkeysKeyMessage(msg, w, l);
-    if (g_backends && g_ctx) {
+    if (g_backends && g_ctx && !captureActive()) {
         ImGui::SetCurrentContext(g_ctx);
         bool take = false;
         if (g_menu) {
@@ -313,7 +329,7 @@ uint64_t createTextureRgba(uint32_t w, uint32_t h, const void* rgba) {
 void releaseTexture(uint64_t id) {
     if (id) reinterpret_cast<IDirect3DTexture9*>(static_cast<uintptr_t>(id))->Release();
 }
-bool menuOpen() { return g_menu; }
+bool menuOpen() { return g_menu && !captureActive(); }
 
 void setMenuOpen(bool open, const char* why) {
     if (open == g_menu) return;
@@ -420,6 +436,14 @@ void overlayFrame(void* device) {
     s_escPrev = esc;
     pluginsPrePresent(dev);
 
+    if (captureActive()) {
+        if (game().usesDirectInputBlock()) dinputSetBlocked(false);
+        g_barShown = false;
+        g_panelsShown = false;
+        hostConfigSave(false);
+        pluginsSaveSettings(false);
+        return;
+    }
     const bool top = g_barEnabled && fg && mouseAtTop();
     bool anyOverlay = false;
     for (auto& up : plugins())
@@ -454,3 +478,22 @@ void overlayFrame(void* device) {
 }
 
 } // namespace horizon
+
+// ---- for mods that are not plugins (TMVS): stable C exports, see docs/plugin-abi.md -------------
+// Bits: 1 = menu open, 2 = bar visible, 4 = a detached panel visible; 0 = nothing of Horizon on screen.
+extern "C" __declspec(dllexport) uint32_t __cdecl HorizonHost_GetUiState(void) {
+    using namespace horizon;
+    if (captureActive()) return 0;
+    return (g_menu ? 1u : 0u) | (g_barShown ? 2u : 0u) | (g_panelsShown ? 4u : 0u);
+}
+
+// active != 0: draw nothing, take no input. Last call wins; call it every frame while capturing
+// (it ends by itself 10 s after the last call with active != 0).
+extern "C" __declspec(dllexport) void __cdecl HorizonHost_SetCaptureActive(int active) {
+    using namespace horizon;
+    g_captureLast = GetTickCount64();
+    const LONG v = active ? 1 : 0;
+    if (InterlockedExchange(&g_captureOn, v) != v) HLOG("capture: %s (HorizonHost_SetCaptureActive)", v ? "on, Horizon UI hidden" : "off");
+}
+
+extern "C" __declspec(dllexport) uint32_t __cdecl HorizonHost_Version(void) { return horizon::kHostVersionNum; }

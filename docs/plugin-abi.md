@@ -169,6 +169,21 @@ ABI 1.1 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0
 
 Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 
+## For mods that are not plugins (TMVS and others)
+
+`host.dll` (TMLoader: `HorizonHost.dll`) exports three plain C functions (`__cdecl`, stable, no ABI
+struct needed). Find the module with `GetModuleHandleW(L"host.dll")` (or `L"HorizonHost.dll"`) and
+`GetProcAddress`; if it is not there, Horizon is not running.
+
+| Export | What it does |
+|---|---|
+| `uint32_t HorizonHost_GetUiState(void)` | What of Horizon is on screen: `1` menu open, `2` bar visible, `4` a detached panel window visible (OR-ed). `0`: nothing (also while a capture is active). |
+| `void HorizonHost_SetCaptureActive(int active)` | `active != 0`: the host draws nothing (menu, bar, panels, plugin overlays) and takes no keyboard or mouse input until it is called with `0`. Last call wins (no counting per caller). Heartbeat: 10 s after the last call the capture ends by itself, so a crashed capture cannot hide Horizon for good. **TMVS calls it with 1 every frame while it takes a photo or records a clip**, and once with 0 afterwards. Plugins' hotkeys keep working. |
+| `uint32_t HorizonHost_Version(void)` | `(major << 16) \| (minor << 8) \| patch`, e.g. `0x000200` for 0.2.0. |
+
+Plugins use `set_host_flag(HORIZON_HOST_FLAG_CAPTURE)` instead (ABI minor 2), which hides only the bar and the
+windows with "Hide in photos and videos".
+
 ## ABI versioning
 
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.

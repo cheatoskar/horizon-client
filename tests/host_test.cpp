@@ -181,6 +181,23 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
     if (!shot.empty()) {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         check(savePng(dev, shot.c_str()), "frame saved as PNG");
+        // handshake for mods that are not plugins (TMVS): UI state, capture, version
+        using U32Fn = uint32_t(__cdecl*)(void);
+        using SetFn = void(__cdecl*)(int);
+        auto uiState = reinterpret_cast<U32Fn>(GetProcAddress(host, "HorizonHost_GetUiState"));
+        auto setCapture = reinterpret_cast<SetFn>(GetProcAddress(host, "HorizonHost_SetCaptureActive"));
+        auto version = reinterpret_cast<U32Fn>(GetProcAddress(host, "HorizonHost_Version"));
+        check(uiState && setCapture && version, "handshake exports present");
+        if (uiState && setCapture && version) {
+            check(version() == 0x000200u, "HorizonHost_Version = 0.2.0");
+            check((uiState() & 1u) != 0, "UI state: menu open");
+            setCapture(1);
+            dev->Present(nullptr, nullptr, nullptr, nullptr);
+            check(uiState() == 0, "UI state 0 while capturing");
+            setCapture(0);
+            dev->Present(nullptr, nullptr, nullptr, nullptr);
+            check((uiState() & 1u) != 0, "menu back after capture");
+        }
     }
     log = hostLog(dir);
     check(has(log, "CreateDevice hooked in the factory table"), "factory CreateDevice slot hooked");

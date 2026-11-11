@@ -29,7 +29,8 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 1 /* 1: create_texture_rgba, release_texture, save_replay */
+#define HORIZON_ABI_MINOR 2 /* 1: create_texture_rgba, release_texture, save_replay
+                               2: panels (register_panel ...), host flags (capture) */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -114,6 +115,33 @@ typedef enum HorizonEventType {
     HORIZON_EVENT_ONLINE_CHANGED = 9,/* is_online changed; sent to every plugin, gated or not */
     HORIZON_EVENT_GAME_STATE = 10    /* game_state changed (HorizonGameState) */
 } HorizonEventType;
+
+/* ------------------------------------------------------------------ panels (ABI minor 2) ------- */
+/* A panel is a piece of a plugin's UI the host places: a tab on the plugin's page in the menu, which
+ * the player can pop out into its own window (and keep on screen with the menu closed). The host owns
+ * the tab list, the windows, their options (keep open, opacity, lock layout, click-through, hide in
+ * photos and videos) and saves them per plugin id + panel key. The plugin only draws the body. */
+#define HORIZON_PANEL_MENU_PAGE 0x01u /* a tab on the plugin's page in the menu */
+#define HORIZON_PANEL_HUD       0x02u /* starts in its own window that stays on screen with the menu closed
+                                         (e.g. a timer); the player can still bring it into the menu */
+
+typedef void (HORIZON_CALL* HorizonPanelDrawFn)(void* user);
+
+typedef struct HorizonPanelDef {
+    uint32_t size;               /* sizeof(HorizonPanelDef) */
+    const char* key;             /* stable within the plugin, [a-z0-9-], saved with the layout; never change it */
+    const char* title;           /* tab and window title, one or two words */
+    uint32_t icon;               /* HZ_ICON_* codepoint from horizon_imgui.h (Lucide), 0 = none */
+    uint32_t flags;              /* HORIZON_PANEL_* (neither: MENU_PAGE) */
+    HorizonPanelDrawFn draw;     /* draws the body: no ImGui::Begin/End of its own, no heading */
+    void* user;                  /* passed to draw */
+    /* first place of its window, as fractions of the screen (0..1); w/h 0 = fit the content */
+    float default_x, default_y, default_w, default_h;
+} HorizonPanelDef;
+
+/* Host flags (HorizonHostApi.set_host_flag / host_flags) */
+#define HORIZON_HOST_FLAG_CAPTURE 0x01u /* a photo or video is being taken (set by e.g. TMVS): windows with
+                                           "Hide in photos and videos" and the Horizon bar are hidden */
 
 /* Bit for HorizonHostApi.subscribe: HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) | ... */
 #define HORIZON_EVENT_BIT(type) (1u << (type))
@@ -301,6 +329,17 @@ typedef struct HorizonHostApi {
      * name_utf8: file name without extension ("" = the game's default name). HORIZON_ERR_NOT_SUPPORTED
      * where the host does not do it yet (host 0.1.0: everywhere; the ESWC Autosave plugin saves on ESWC). */
     HorizonResult (HORIZON_CALL* save_replay)(HorizonPluginHandle plugin, const char* name_utf8);
+
+    /* ---- ABI minor 2 (check host->abi_minor >= 2 before use) ------------------------------------ */
+    /* Adds a panel, or replaces the one with the same key. def and its strings are copied. Game thread
+     * (Init is fine). HORIZON_ERR_INVALID_ARG: no key/title/draw or a bad key. */
+    HorizonResult (HORIZON_CALL* register_panel)(HorizonPluginHandle plugin, const HorizonPanelDef* def);
+    void (HORIZON_CALL* unregister_panel)(HorizonPluginHandle plugin, const char* key);
+    /* 1 while the panel is drawn this frame (its tab is the open one, or its window is on screen). */
+    int32_t (HORIZON_CALL* panel_visible)(HorizonPluginHandle plugin, const char* key);
+    /* Host flags (HORIZON_HOST_FLAG_*): each plugin sets its own; host_flags() is the OR of all. */
+    void (HORIZON_CALL* set_host_flag)(HorizonPluginHandle plugin, uint32_t flag, int32_t on);
+    uint32_t (HORIZON_CALL* host_flags)(void);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

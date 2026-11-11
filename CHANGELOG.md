@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 (in progress, branch next)
+
+- Handshake for mods that are not plugins (TMVS): `HorizonHost_GetUiState`, `HorizonHost_SetCaptureActive` (heartbeat, 10 s), `HorizonHost_Version`. While a capture is active Horizon draws nothing and takes no input.
+- Plugin ABI 1.2 (header): panels (`register_panel`), host flags (`HORIZON_HOST_FLAG_CAPTURE`).
+
 ## 0.1.0 (2026-11-11, first test build, not released)
 
 - Legacy Loader `dinput8.dll` for ESWC, Sunrise and Forever without TMLoader: loads `horizon\host.dll`, Shift = safe mode, Ctrl+Shift = no host, chains an earlier `dinput8.dll` kept as `dinput8.chain.dll`.
