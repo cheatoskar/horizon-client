@@ -509,6 +509,41 @@ static void testBridgeLogic() {
                                   {"id":7,"kind":"mod","level":"info","title":""}]})", &ev, &last));
     CHECK(ev.size() == 1 && ev[0].title == "Upload done" && last == 7);
     CHECK(!bridge::parseEvents("{oops", &ev, &last));
+    // play_map: extra fields, kept without a title, other games ignored
+    ev.clear();
+    CHECK(bridge::parseEvents(R"({"ok":true,"last":9,"events":[{"id":8,"kind":"play_map","level":"info","title":"A01-Race","text":"",
+                                  "at":1794000000000,"game":"tmn","path":"Challenges/Downloaded/12345.Challenge.Gbx"},
+                                  {"id":9,"kind":"play_map","title":"","game":"tms","path":"x.Challenge.Gbx"}]})", &ev, &last));
+    CHECK(ev.size() == 2 && last == 9);
+    CHECK(ev[0].game == "tmn" && ev[0].path == "Challenges/Downloaded/12345.Challenge.Gbx" && ev[0].at == 1794000000000ll && ev[0].title == "A01-Race");
+    CHECK(bridge::playMapFor(ev[0], "tmn") && !bridge::playMapFor(ev[0], "tms") && !bridge::playMapFor(ev[0], ""));
+    CHECK(bridge::playMapFor(ev[1], "tms") && !bridge::playMapFor(ev[1], "tmnf"));
+    bridge::Event up;
+    up.kind = "upload";
+    up.game = "tmn";
+    CHECK(!bridge::playMapFor(up, "tmn"));
+    CHECK(bridge::playMapGame(HORIZON_GAME_ESWC) && bridge::playMapGame(HORIZON_GAME_SUNRISE));
+    CHECK(!bridge::playMapGame(HORIZON_GAME_TMNF) && !bridge::playMapGame(HORIZON_GAME_TMUF) && !bridge::playMapGame(HORIZON_GAME_ORIGINAL));
+    CHECK(bridge::playMapFresh(0, 5000000) && bridge::playMapFresh(4000000, 4100000) && !bridge::playMapFresh(1000000, 1000000 + 120001));
+    CHECK(bridge::eventsPath(false, -1, true) == "/v1/client/events?caps=play_map");
+    CHECK(bridge::eventsPath(true, 12, true) == "/v1/client/events?since=12&wait=20&caps=play_map");
+    CHECK(bridge::eventsPath(true, 12, false) == "/v1/client/events?since=12&wait=20" && bridge::eventsPath(false, 0, false) == "/v1/client/events");
+    // map paths: relative to Tracks, '/' or '\', .Challenge.Gbx in any case
+    CHECK(bridge::mapRelPath("Challenges/Downloaded/12345.Challenge.Gbx") == "Challenges\\Downloaded\\12345.Challenge.Gbx");
+    CHECK(bridge::mapRelPath("Challenges\\Downloaded\\A01 Race (1).challenge.gbx") == "Challenges\\Downloaded\\A01 Race (1).challenge.gbx");
+    CHECK(bridge::mapRelPath("x.CHALLENGE.GBX") == "x.CHALLENGE.GBX");
+    CHECK(bridge::mapRelPath("Challenges/Downloaded/\xc3\xa9t\xc3\xa9.Challenge.Gbx") != ""); // UTF-8 names
+    CHECK(bridge::mapRelPath("") == "" && bridge::mapRelPath(".Challenge.Gbx") == "" && bridge::mapRelPath("a/.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("../x.Challenge.Gbx") == "" && bridge::mapRelPath("a/../../x.Challenge.Gbx") == "" && bridge::mapRelPath("a\\..\\x.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("./x.Challenge.Gbx") == "" && bridge::mapRelPath("a//x.Challenge.Gbx") == "" && bridge::mapRelPath("a./x.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("C:/x.Challenge.Gbx") == "" && bridge::mapRelPath("C:x.Challenge.Gbx") == "" && bridge::mapRelPath("/x.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("\\x.Challenge.Gbx") == "" && bridge::mapRelPath("\\\\server\\share\\x.Challenge.Gbx") == "" && bridge::mapRelPath("//server/x.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("x.Challenge.Gbx:stream") == "" && bridge::mapRelPath("x.Challenge.Gbx::$DATA") == "");
+    CHECK(bridge::mapRelPath("x.Replay.Gbx") == "" && bridge::mapRelPath("x.Challenge.Gbx.exe") == "" && bridge::mapRelPath("x.Challenge.Gbx ") == "");
+    CHECK(bridge::mapRelPath("a\x01/x.Challenge.Gbx") == "" && bridge::mapRelPath("a?/x.Challenge.Gbx") == "" && bridge::mapRelPath("a\"b.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("CON.Challenge.Gbx") == "" && bridge::mapRelPath("nul/x.Challenge.Gbx") == "" && bridge::mapRelPath("Com1.Challenge.Gbx") == "");
+    CHECK(bridge::mapRelPath("Console.Challenge.Gbx") != "" && bridge::mapRelPath("COM10.Challenge.Gbx") != "");
+    CHECK(bridge::mapRelPath(std::string(390, 'a') + ".Challenge.Gbx") == "");
     std::string key;
     CHECK(bridge::parsePair(R"({"ok":true,"key":"0123456789abcdef0123"})", &key) == "ok" && key.size() == 20);
     CHECK(bridge::parsePair(R"({"ok":false,"status":"pending"})", &key) == "pending");

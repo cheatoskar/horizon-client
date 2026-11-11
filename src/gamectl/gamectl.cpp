@@ -348,12 +348,20 @@ Result playMapFile(const wchar_t* path) {
         logf("gamectl: cannot create the tracks folder");
         return Result::FileError;
     }
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+        logf("gamectl: map file not found (%lu)", GetLastError());
+        return Result::FileError;
+    }
+    // Rescan once before the copy: maps saved into the Tracks folder since the game's last scan (TM Horizon's
+    // downloads, the TMX browser's file next to the copy) would otherwise count as new too.
+    void* info = nullptr;
+    if (refreshAndFindNew(app, &info) < 0) return Result::GameError;
+    info = nullptr;
     swprintf_s(dst, L"%sHZ_%010lu.Challenge.Gbx", dir, GetTickCount());
     if (!CopyFileW(path, dst, FALSE)) {
         logf("gamectl: copy failed (%lu)", GetLastError());
         return Result::FileError;
     }
-    void* info = nullptr;
     int added = refreshAndFindNew(app, &info);
     if (added < 0) return Result::GameError;
     if (added != 1 || !info) {

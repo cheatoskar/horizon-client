@@ -45,7 +45,7 @@ The side that holds the data asks the player. Here that is TM Horizon:
 | `GET /v1/client/ping` | `{"ok":true,"app":"tm-horizon","version":"0.3.0","api":1}` |
 | `POST /v1/client/pair` | see above |
 | `GET /v1/client/hello` | `{"ok":true,"app":"tm-horizon","version":"..."}` |
-| `GET /v1/client/events?since=N&wait=W` | long poll, W up to 25 s: `{"ok":true,"last":M,"events":[{"id":..,"kind":"upload","level":"ok","title":"..","text":"..","at":<ms>}]}`. Without `since` the answer has no events, only `last` (start after it). `kind`: `upload`, `mod`, `server`, `info`; `level`: `info`, `ok`, `warn`, `error`. |
+| `GET /v1/client/events?since=N&wait=W&caps=C` | long poll, W up to 25 s: `{"ok":true,"last":M,"events":[{"id":..,"kind":"upload","level":"ok","title":"..","text":"..","at":<ms>}]}`. Without `since` the answer has no events, only `last` (start after it). `kind`: `upload`, `mod`, `server`, `info`, `play_map`; `level`: `info`, `ok`, `warn`, `error`. `caps` (optional, comma-separated): what this host can do, see "Play a map". |
 | `GET /v1/tmx/search?game=&name=&author=&tags=&difficulty=&lengthmax=&lengthmin=&awards=&page=` | `{"ok":true,"site":"tmnf.exchange","page":1,"more":true,"results":[Track]}` (20 per page) |
 | `GET /v1/tmx/random?game=&tags=&difficulty=&lengthmax=&lengthmin=&awards=` | `{"ok":true,"result":Track}` or `{"ok":true,"result":null}` |
 | `GET /v1/tmx/thumb?game=&id=` | the map's thumbnail (`image/jpeg` or `image/png`, at most 1 MB), 404 none |
@@ -86,3 +86,32 @@ drops the rest of each page). Unlimiter maps (`inunlimiter=0`) are always left o
 TM Horizon adds an event when a replay upload finished (ok or failed), when updates for installed mods
 were found, and when the launcher's frontend calls `client_notify` (server events). Events are kept
 for 10 minutes (at most 50).
+
+## Play a map (`play_map`)
+
+TM Horizon can ask a running game to open a map file that is already in the game's Tracks folder.
+
+- Capability: a host that can do it adds `caps=play_map` to every events long poll, the first call too
+  (`/v1/client/events?caps=play_map`, then `/v1/client/events?since=N&wait=20&caps=play_map`). Hosts
+  0.2.0 and older send no `caps`; launchers that do not know it ignore it. Only the ESWC and Sunrise
+  hosts send it. Forever (TMNF/TMUF) and Original never do and ignore `play_map` (log line only).
+- Event: `{"id":..,"kind":"play_map","level":"info","title":"<map name>","text":"","at":<ms>,"game":"tmn","path":"Challenges/Downloaded/12345.Challenge.Gbx"}`
+  - `game`: the site code of the target game (`tmn`, `tms`, ...). Several games can be paired at once;
+    a host ignores events for another code.
+  - `path`: the map file relative to the game's Tracks folder, `/` or `\`. The host refuses it when it
+    is empty or longer than 400 bytes, starts with `/` or `\` (absolute, UNC), has a `:` (drive, stream),
+    a `.`, `..` or empty part, a part ending in `.` or space, a device name (`CON`, `NUL`, `COM1`, ...),
+    a control character or one of `*?"<>|`, or does not end in `.Challenge.Gbx` (any case). The file must
+    exist under the Tracks folder after the path is resolved.
+  - Tracks folder: `<game folder>\GameData\Tracks\` for ESWC and Sunrise (the folder of the exe; TM
+    Horizon saves downloads to `GameData\Tracks\Challenges\Downloaded\`).
+  - `title`: shown in the result toast (plain text; strip TM format codes). May be empty.
+  - `at`: a request older than 120 s (by this PC's clock) is dropped, e.g. one still queued when the
+    host reconnects.
+- On the game thread the host does what `play_map_file` does: refused while online or in a network
+  race ("Leave the online game first."), only from the main menu ("Go to the main menu first." during a
+  race, in the editor or while loading). The game gets a copy of the file in
+  `Tracks\Challenges\Downloaded\_Horizon\` and starts it in solo. Several requests in one poll: only the
+  newest runs.
+- Result: a toast with the map name ("Loading map." or the reason) and a log line. Nothing goes back
+  to TM Horizon.

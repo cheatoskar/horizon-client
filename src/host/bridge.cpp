@@ -3,8 +3,9 @@
 //   - control: finds the launcher (ports 27331-27335), pairs (the player presses Allow in TM Horizon),
 //     then long-polls /v1/client/events and turns them into toasts;
 //   - requests: sends the plugins' bridge_request calls one after the other.
-// Answers go back to the plugins on the game thread (bridgeDeliver, end of a frame). Nothing here
-// touches the game. The key is kept in host.json ("bridge.key"), written from the game thread.
+// Answers go back to the plugins on the game thread (bridgeDeliver, end of a frame). The only thing that
+// touches the game is a play_map event (ESWC/Sunrise): checked here, started from bridgeDeliver with the same
+// rules as the plugins' play_map_file. The key is kept in host.json ("bridge.key"), written from the game thread.
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -20,6 +21,7 @@
 
 #include "imgui.h"
 #include "horizon_imgui.h"
+#include "common/util.h"
 #include "host/bridge_logic.h"
 #include "host/plugins.h"
 #include "host/toasts.h"
@@ -51,6 +53,87 @@ std::string g_pairBody;
 bool g_started = false;
 std::atomic<SOCKET> g_longPoll{INVALID_SOCKET};
 std::vector<std::pair<Plugin*, bridge::RateLimit>> g_limits; // game thread only
+std::string g_site;         // this game's site code ("tmn", ...)
+bool g_playMap = false;     // play_map advertised and run (ESWC, Sunrise)
+struct PlayRequest {
+    long long id = 0;
+    std::string title, rel; // rel: checked, relative to GameData\Tracks, backslashes
+};
+std::deque<PlayRequest> g_play; // under g_lock; only the newest is kept
+
+long long nowEpochMs() {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    const unsigned long long t = (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    return static_cast<long long>(t / 10000ull) - 11644473600000ll;
+}
+
+void toastPlay(uint32_t kind, const std::string& title, const char* text) {
+    HorizonToast t = {};
+    t.size = sizeof(t);
+    t.kind = kind;
+    t.title = title.c_str();
+    t.text = text;
+    t.icon = HZ_ICON_PLAY;
+    toastsPush("TM Horizon", t);
+}
+
+// Control thread: a play_map event. Checks what needs no game, queues the rest for the game thread.
+void onPlayMap(const bridge::Event& e) {
+    if (!bridge::playMapFor(e, g_site.c_str())) {
+        logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld for \"%s\" ignored (this game is \"%s\")", e.id, e.game.c_str(), g_site.c_str());
+        return;
+    }
+    if (!g_playMap) {
+        logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld ignored: not run on this game", e.id);
+        return;
+    }
+    if (!bridge::playMapFresh(e.at, nowEpochMs())) {
+        logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld ignored: older than %lld s", e.id, bridge::kPlayMapMaxAgeMs / 1000);
+        return;
+    }
+    const std::string rel = bridge::mapRelPath(e.path);
+    const std::string title = e.title.empty() ? std::string("Map") : e.title;
+    if (rel.empty()) {
+        logLine(HORIZON_LOG_WARN, "host", "bridge: play_map %lld refused: bad path \"%s\"", e.id, e.path.c_str());
+        toastPlay(HORIZON_TOAST_WARN, title, "Could not open: bad map path.");
+        return;
+    }
+    logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld \"%s\" (%s) queued", e.id, title.c_str(), rel.c_str());
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_play.clear();
+    g_play.push_back(PlayRequest{e.id, title, rel});
+}
+
+// Game thread: the queued play_map, same rules as play_map_file (main menu, not online).
+void runPlayMap(const PlayRequest& r) {
+    const char* why = nullptr;
+    HorizonResult res = HORIZON_ERR_FAILED;
+    const std::wstring root = state().game.exeFolder + L"GameData\\Tracks\\";
+    wchar_t rootFull[MAX_PATH] = {}, full[MAX_PATH] = {};
+    const std::wstring joined = root + wide(r.rel);
+    const DWORD nr = GetFullPathNameW(root.c_str(), MAX_PATH, rootFull, nullptr);
+    const DWORD nf = GetFullPathNameW(joined.c_str(), MAX_PATH, full, nullptr);
+    const DWORD attr = nf && nf < MAX_PATH ? GetFileAttributesW(full) : INVALID_FILE_ATTRIBUTES;
+    if (!nr || nr >= MAX_PATH || !nf || nf >= MAX_PATH || _wcsnicmp(full, rootFull, wcslen(rootFull)) != 0) {
+        why = "Could not open: bad map path.";
+    } else if (attr == INVALID_FILE_ATTRIBUTES || (attr & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+        why = "Could not open: map file not found.";
+    } else if (isOnlineNow() || runGate()) {
+        res = HORIZON_ERR_BLOCKED_ONLINE;
+        why = "Leave the online game first.";
+    } else {
+        res = game().playMapFile(utf8(full).c_str(), 0);
+        if (res == HORIZON_ERR_WRONG_STATE) why = "Go to the main menu first.";
+        else if (res == HORIZON_ERR_BLOCKED_ONLINE) why = "Leave the online game first.";
+        else if (res == HORIZON_ERR_NOT_SUPPORTED) why = "Not supported in this game.";
+        else if (res != HORIZON_OK) why = "Could not open the map.";
+    }
+    logLine(why ? HORIZON_LOG_WARN : HORIZON_LOG_INFO, "host", "bridge: play_map %lld %s -> %d%s%s", r.id, utf8(full).c_str(), res,
+            why ? ", " : "", why ? why : "");
+    if (why) toastPlay(HORIZON_TOAST_WARN, r.title, why);
+    else toastPlay(HORIZON_TOAST_OK, r.title, "Loading map.");
+}
 
 std::string currentKey() {
     std::lock_guard<std::mutex> lock(g_lock);
@@ -180,7 +263,7 @@ void controlLoop() {
             announced = true;
             logLine(HORIZON_LOG_INFO, "host", "bridge: connected");
         }
-        const std::string path = haveCursor ? "/v1/client/events?since=" + std::to_string(last) + "&wait=20" : std::string("/v1/client/events");
+        const std::string path = bridge::eventsPath(haveCursor, last, g_playMap);
         const bridge::HttpAnswer a = call(g_port, "GET", path, key, "", 30000, true);
         if (g_stop) break;
         if (a.status == 401) {
@@ -204,6 +287,11 @@ void controlLoop() {
         }
         if (haveCursor) {
             for (const bridge::Event& e : events) {
+                if (e.kind == "play_map") {
+                    onPlayMap(e);
+                    continue;
+                }
+                if (e.title.empty()) continue;
                 HorizonToast t = {};
                 t.size = sizeof(t);
                 t.kind = bridge::toastKind(e.level);
@@ -281,12 +369,14 @@ void bridgeStart() {
     const HostState& s = state();
     g_pairBody = std::string("{\"client\":\"horizon-host\",\"version\":\"") + kHostVersion + "\",\"game\":\"" + bridge::siteCode(s.game.game) +
                  "\",\"gameName\":\"" + s.game.name + "\",\"instance\":\"" + g_instance + "\"}";
+    g_site = bridge::siteCode(s.game.game);
+    g_playMap = bridge::playMapGame(s.game.game);
     g_stop = false;
     g_control = std::thread(controlLoop);
     g_worker = std::thread(workerLoop);
     g_started = true;
-    HLOG("bridge: %s (TM Horizon on 127.0.0.1:%u-%u)%s", g_enabled ? "on" : "off (host.json bridge.enabled=0)", bridge::kFirstPort,
-         bridge::kFirstPort + bridge::kPortCount - 1, g_key.empty() ? "" : ", paired before");
+    HLOG("bridge: %s (TM Horizon on 127.0.0.1:%u-%u)%s%s", g_enabled ? "on" : "off (host.json bridge.enabled=0)", bridge::kFirstPort,
+         bridge::kFirstPort + bridge::kPortCount - 1, g_key.empty() ? "" : ", paired before", g_playMap ? ", play_map on" : "");
 }
 
 void bridgeStop() {
@@ -300,6 +390,7 @@ void bridgeStop() {
     std::lock_guard<std::mutex> lock(g_lock);
     g_queue.clear();
     g_done.clear();
+    g_play.clear();
     g_started = false;
 }
 
@@ -370,11 +461,13 @@ HorizonResult bridgeRequest(Plugin* p, const char* method, const char* path, con
 
 void bridgeDeliver() {
     std::deque<Job> done;
+    std::deque<PlayRequest> play;
     bool persist = false;
     std::string key;
     {
         std::lock_guard<std::mutex> lock(g_lock);
         done.swap(g_done);
+        play.swap(g_play);
         if (g_keyDirty) {
             g_keyDirty = false;
             persist = true;
@@ -382,6 +475,7 @@ void bridgeDeliver() {
         }
     }
     if (persist) hostSetSetting("bridge.key", key);
+    for (const PlayRequest& r : play) runPlayMap(r);
     for (Job& j : done) {
         Plugin* p = j.plugin;
         if (!p || !p->running) continue;
