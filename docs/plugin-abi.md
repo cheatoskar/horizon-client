@@ -166,10 +166,36 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `request_restart_note(plugin, why)` | "applies after restart" note in the menu |
 | `reflect_offset`, `reflect_method` | read-only engine reflection by class and member name |
 | `create_texture_rgba`, `release_texture` (ABI 1.1) | an ImGui texture from RGBA8 pixels (map thumbnails), game thread; release it before Shutdown returns |
-| `save_replay` (ABI 1.1) | reserved: returns `HORIZON_ERR_NOT_SUPPORTED` in host 0.1.0 |
+| `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise and Forever. Game thread. |
+| `register_panel`, `unregister_panel`, `panel_visible` (ABI 1.2) | see Panels |
+| `set_host_flag(plugin, flag, on)`, `host_flags()` (ABI 1.2) | `HORIZON_HOST_FLAG_CAPTURE`: a photo or video is being taken; the bar and windows with "Hide in photos and videos" disappear. Each plugin sets its own bits; `host_flags()` is the OR. |
 | `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
 
-ABI 1.1 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against 1.1 checks `host->abi_minor >= 1` before calling them.
+ABI 1.1 and 1.2 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1 or >= 2) before calling them.
+
+## Panels (ABI 1.2)
+
+A panel is a piece of a plugin's UI that the host places. Register it once (Init is fine):
+
+```c
+HorizonPanelDef d = {0};
+d.size = sizeof(d);
+d.key = "events";            /* [a-z0-9-], stable: the saved layout uses plugin id + key */
+d.title = "Events";          /* tab and window title, one or two words */
+d.icon = HZ_ICON_SCROLL_TEXT; /* horizon_imgui.h, 0 = none */
+d.flags = HORIZON_PANEL_MENU_PAGE; /* or HORIZON_PANEL_HUD */
+d.draw = drawEvents;         /* void draw(void* user): the body only, no Begin/End, no heading */
+d.default_x = 0.05f; d.default_y = 0.2f; d.default_w = 0.22f; d.default_h = 0.3f; /* fractions; w/h 0 = fit */
+host->register_panel(host->plugin, &d);
+```
+
+- Every panel is a tab on the plugin's page in the menu, after "Settings" (the plugin's `DrawMenu`, if it has one). A plugin without panels keeps the plain page.
+- "Pop out" (top right of the tab) puts the panel into its own window. With the menu open the window sits above the menu and can be moved and resized; its close button and "Back to the menu" bring it back. Right-click in the window, or the tab of a popped-out panel, shows its options: **Keep open when the menu closes**, **Lock layout** (no moving or resizing), **Click-through** (with the menu closed, clicks go to the game), **Hide in photos and videos** (on by default, see `HORIZON_HOST_FLAG_CAPTURE`), **Opacity** 30-100 %.
+- With the menu closed, kept windows have no title bar and can't be moved; they take mouse clicks unless they are click-through.
+- `HORIZON_PANEL_HUD`: starts popped out and kept open (a timer, a split display). The player can still bring it into the menu.
+- The host saves the layout per plugin id + key in `horizon\settings\host.json` (`panel.<plugin>.<key>`).
+- Panels of a plugin that is off, failed or gated online are not drawn. `panel_visible(plugin, key)` says whether the body was drawn in the last frame (skip work otherwise).
+- The sample plugin shows both kinds: "Events" (a tab) and "Clock" (a HUD window).
 
 Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 

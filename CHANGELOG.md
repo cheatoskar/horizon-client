@@ -3,7 +3,10 @@
 ## 0.2.0 (in progress, branch next)
 
 - Handshake for mods that are not plugins (TMVS): `HorizonHost_GetUiState`, `HorizonHost_SetCaptureActive` (heartbeat, 10 s), `HorizonHost_Version`. While a capture is active Horizon draws nothing and takes no input.
-- Plugin ABI 1.2 (header): panels (`register_panel`), host flags (`HORIZON_HOST_FLAG_CAPTURE`).
+- Plugin ABI 1.2: panels (`register_panel`: tabs on the plugin's page, pop out into windows with keep open, lock layout, click-through, hide in photos and videos, opacity; saved per plugin + key), host flags (`HORIZON_HOST_FLAG_CAPTURE`). The sample plugin has an Events tab and a Clock HUD window.
+- `save_replay` works on ESWC (the game's save without dialogs; current run on the end-race screen, else the previous race).
+- Sunrise: start, checkpoint, finish and solo race end from the game (static addresses, hooked only when the bytes match; first test).
+- Buttons and tabs are one step lighter than the cards.
 - Icon font: 53 Lucide icons (ISC, 20 KB subset) merged into every host font; `HZ_ICON_*` codepoints in `horizon_imgui.h`, used in the sidebar and the bar.
 - TMX Upload plugin (`tmx-upload`, off by default, all games): offers new replays to TM Horizon or the browser extension over the local bridge protocol of the 100% TMX mod (127.0.0.1:27311-27315, pairing with Allow in the game); stays passive when the Bingo mod already runs the bridge.
 
