@@ -167,7 +167,7 @@ I do not work around this. Read-only plugins (overlays, loggers) are fine.
 
 ## Device access (renderers)
 
-A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` and calls `set_device_callbacks` with a `HorizonDeviceCallbacks` table: `device_created`, `adjust_present_params`, `before_reset`, `after_reset`, `pre_present`. `host->device()` returns the `IDirect3DDevice9*` (NULL before creation). Per frame the order is: device plugins' `pre_present`, then the host's ImGui (menu and overlays), then `Present`. I never hook `Present`, `EndScene`, `Reset` or DirectInput myself.
+A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` and calls `set_device_callbacks` with a `HorizonDeviceCallbacks` table: `device_created`, `adjust_present_params`, `before_reset`, `after_reset`, `pre_present`. `host->device()` returns the `IDirect3DDevice9*` (NULL before creation). Per frame the order is: device plugins' `pre_present`, then the host's ImGui (menu and overlays), then `Present`, then `post_present(user, device, hresult)` (ABI minor 3: the field sits at the end of the table, an older host never calls it; check `host->abi_minor >= 3`). `post_present` is for frame timing and frame pacing (Horizon Performance waits there, so the game reads input right after the wait). I never hook `Present`, `EndScene`, `Reset` or DirectInput myself.
 
 ## Other host functions
 

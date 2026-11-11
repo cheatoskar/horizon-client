@@ -86,6 +86,50 @@ Im Log (`...\products\Horizon Host\logs\`, neueste Datei) prüfen:
 6. Mit Competition Patch geladen: gleiches Verhalten erwartet, Log kontrollieren (keine Hooks, keine Eingabesperre).
 7. Randomizer: `play_map_file` startet eine Datei aus dem Hauptmenü (zum ersten Mal auf Forever getestet), `return_to_menu` beendet das Solo-Rennen.
 
+## Horizon Performance (Branch `perf`, Plugin `performance`)
+
+Nur Testkopien (`C:\Users\osaro\Games\TMNF-test`, `TMN-ESWC-test`, `TMS-test`; TMUF optional). Horizon-Build aus `horizon-host-wt-perf\dist` über TM Horizon installieren (Quelle: lokaler Build-Ordner), dann im Horizon-Menü „Horizon Performance“ einschalten (ist neu und daher aus). Was alles bedeutet: `docs/performance.md`. Ergebnisse liegen in `horizon\data\performance\bench\` (Forever: `...\products\Horizon Host\data\performance\bench\`), der Hänger-Log in `...\performance\hangs.log`.
+
+### A. Messen (pro Spiel einmal, ca. 5 min)
+
+1. Spiel starten, Strecke fahren. Fenster „Frame times“ oben rechts: FPS, 1 %/0,1 % low, Ruckler, Grafik.
+2. Auf der Plugin-Seite „Count Direct3D calls“ an, eine Minute fahren, wieder aus. Im Horizon-Log stehen alle 30 s `stats:`-Zeilen (Draws, States und wie viele doppelt, Locks, GPU wait, Software-VP-Draws). **Diese Zeilen und die Zeile `d3d: device flags ...` brauche ich von jedem Spiel**, daran entscheide ich, ob der State-Filter überhaupt Sinn hat.
+
+### B. Benchmark: Basis gegen jede Option (pro Spiel, je 3 Läufe)
+
+Gleiche Strecke, gleiche Auflösung, Zählung aus, TMVS aus (oder bei allen Läufen gleich), sonst nichts im Hintergrund.
+
+1. In TM Horizon: Spiel wählen → Leistung → Reiter „Benchmark“ → „Karte wählen“ (eine `.Challenge.Gbx` aus `Tracks\Challenges`, für jedes Spiel eine eigene), Name `baseline`, Läufe 3, „Benchmark starten“. Login wie immer; ab dem Hauptmenü läuft es allein (Karte lädt, Auto steht am Start, 5 s Aufwärmen, 3 × 30 s, zurück ins Menü). Nichts drücken.
+2. Spiel beenden. Im Horizon-Menü genau **eine** Option einschalten, Name = Name der Option, wieder 3 Läufe:
+   - `limit` – Frame limit auf 10 % unter deinen Basis-FPS (z. B. 300 → 270)
+   - `vsync-off` – V-Sync „off“ (nur sinnvoll, wenn das Spiel sonst V-Sync an hat)
+   - `filter` – „Skip repeated states“ (nur ohne TMVS-d3d9.dll und ohne Competition Patch wählbar)
+   - `finetimer` – Fine timer
+   - `nothrottle` – No power throttling
+   - `prio` – Priority „above normal“
+   - `cores` – CPU cores „performance cores“ (nur bei Intel 12. Gen. oder neuer sinnvoll)
+   Danach die Option wieder aus, nächste.
+3. Die Vergleichstabelle in TM Horizon zeigt pro Label den Mittelwert und den Unterschied zu `baseline`. Ein Unterschied unter ±3 % ist Rauschen. Mir die Tabelle (Screenshot) und den Ordner `bench` schicken.
+
+Der Benchmark per Hand geht auch: Seite „Benchmark“ → Label, Sekunden, „Start“ (oder Strg+F10).
+
+### C. Hänger beim Start (TMUF über TMLoader, TMNF/TMUF standalone)
+
+1. In TM Horizon bei TMNF und TMUF: Leistung → Reiter „Start“ → „Nächste Starts aufzeichnen“ an (kein Horizon nötig, nur Beobachtung von außen). Wenn Horizon läuft: „Hang log“ ist standardmäßig an.
+2. Normal spielen und abwechselnd TMNF und TMUF starten. Wenn ein Start hängt: warten bis es weitergeht (oder 3 min), dann **beide** Dateien schicken: die neueste `startwatch\…txt` aus TM Horizon und `hangs.log`. Zum Vergleich auch einen normalen Start.
+3. Gegenprobe, nur wenn es oft hängt: einmal mit `/noscancache` starten (schaltet den Datei-Cache ab, jeder Start liest dann alle Kopfdaten: wird es dann jedes Mal langsam, ist es der Cache).
+
+### D. Replay-Liste „Refresh“
+
+1. Hang log an. Im Spiel Replays → Refresh drücken, warten. `hangs.log` schicken (Dauer, gelesene MB, Funktion).
+2. In TM Horizon: Leistung → Reiter „Replays“ (Replay-Archiv): erst nur ansehen, was verschoben würde; wenn ok, archivieren, im Spiel wieder Refresh. Rückgängig geht mit „Letztes Archivieren rückgängig“.
+
+### E. DXVK (optional, experimentell)
+
+Nur TMNF-test ohne TMVS-d3d9.dll im Ordner: in TM Horizon DXVK an, Benchmark `dxvk` 3 Läufe, wieder aus. Competition Patch und Online: nicht geklärt, nur offline testen.
+
+Zurück: alle Optionen aus (Standard), DXVK aus, Replay-Archiv rückgängig, „Optimieren“ hat für jede Änderung „Rückgängig“.
+
 ## Entfernen
 
 `Horizon-Uninstall.cmd` im Spielordner (macht aus `dinput8.chain.dll` wieder `dinput8.dll`), danach den Ordner `horizon` löschen. Oder einfach die Testkopie löschen.
