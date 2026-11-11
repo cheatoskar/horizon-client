@@ -44,6 +44,9 @@ constexpr size_t kEswcInfoCheckpoints = 0x244, kEswcInfoPassed = 0x284;
 constexpr size_t kEswcPlayerInfo = 0x34;
 constexpr size_t kEswcAppPrevReplay = 0x25c, kEswcAppCurReplay = 0x144;
 constexpr uintptr_t kEswcLocalPlayerInfo = 0x0071c730; // CTrackManiaRace::GetLocalPlayerInfo()
+// Sunrise (repack, PE 5cc8f0cf): tm-modding-knowledge games/tm-sunrise/race-events.md (static, matched from
+// the ESWC race vtables; hooked only behind the byte-exact prologue check). Player info members by reflection.
+constexpr uintptr_t kSunLocalPlayerInfo = 0x0082aeb0;
 
 enum RaceKind { kNone = 0, kSolo = 1, kNet = 2, kOther = 3 };
 
@@ -51,7 +54,14 @@ struct Offsets {
     int race = -1, challenge = -1, network = -1, editor = -1;
     int chName = -1, chParams = -1, chPlayMode = -1;
     int pAuthor = -1, pGold = -1, pSilver = -1, pBronze = -1, pAuthorScore = -1;
+    // CTrackManiaPlayerInfo (ESWC: 0x25c/0x1f4/0x1f8/0x1f0/0x258, Sunrise: 0x228/0x1c0/0x1c4/0x1bc/0x224)
+    int piState = -1, piTime = -1, piBest = -1, piStartTime = -1, piCurTime = -1;
 };
+
+// Sunrise: the local player's info and race, as the race hooks saw them; checkpoint counter of the run.
+void* g_sunRace = nullptr;
+void* g_sunInfo = nullptr;
+int g_sunCheckpoints = 0;
 
 struct Snapshot {
     void* app = nullptr;
@@ -60,7 +70,7 @@ struct Snapshot {
     void* editor = nullptr;
     int raceKind = kNone;
     bool editorIsReplay = false;
-    void* info = nullptr; // ESWC: local player info
+    void* info = nullptr; // local player info (ESWC: polled; Sunrise: from the race hooks)
     uint32_t starts = 0, respawns = 0, passed = 0;
     int infoState = 0;
 };
@@ -162,11 +172,22 @@ public:
             o_.pSilver = reflect::offsetOf("CConstructionChallengeParameters", "SilverTime");
             o_.pBronze = reflect::offsetOf("CConstructionChallengeParameters", "BronzeTime");
             o_.pAuthorScore = reflect::offsetOf("CConstructionChallengeParameters", "AuthorScore");
+            o_.piState = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceState");
+            o_.piTime = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceTime");
+            o_.piBest = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceBestTime");
+            o_.piStartTime = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceStartTime");
+            o_.piCurTime = reflect::offsetOf("CTrackManiaPlayerInfo", "CurrentTime");
+            HLOG("game: CTrackManiaPlayerInfo RaceState +0x%x, RaceTime +0x%x, RaceBestTime +0x%x, RaceStartTime +0x%x, CurrentTime +0x%x",
+                 o_.piState, o_.piTime, o_.piBest, o_.piStartTime, o_.piCurTime);
             HLOG("game: CurrentRace +0x%x, Challenge +0x%x, Network +0x%x, Editor +0x%x, ChallengeName +0x%x, ChallengeParameters +0x%x",
                  o_.race, o_.challenge, o_.network, o_.editor, o_.chName, o_.chParams);
         }
+        // offsets the finish code reads: ESWC's verified constants, Sunrise by reflection
+        stateOff = eswc() ? static_cast<int>(kEswcInfoState) : o_.piState;
+        timeOff = eswc() ? static_cast<int>(kEswcInfoTime) : o_.piTime;
+        bestOff = eswc() ? static_cast<int>(kEswcInfoBest) : o_.piBest;
         if (eswc()) installEswcHooks();
-        else HLOG("game: Sunrise: finish/checkpoint/respawn events not available yet (functions not verified); map, state and online are");
+        else installSunriseHooks();
     }
 
     void frame() override;
@@ -198,6 +219,10 @@ public:
         for (const auto& x : d) onRaceEnd(x.race, x.replay, x.solo);
     }
     int finishDepth = 0;
+    int stateOff = -1, timeOff = -1, bestOff = -1;
+    void* localInfo(void* race);
+    void onSunStart(void* race, void* player);
+    void onSunCheckpoint(void* race, void* player);
 
 private:
     bool read(Snapshot& s);
@@ -212,6 +237,7 @@ private:
         return HORIZON_MODE_UNKNOWN;
     }
     void installEswcHooks();
+    void installSunriseHooks();
 
     Exe exe_;
     Offsets o_;
@@ -292,6 +318,10 @@ bool LegacyAdapter::read(Snapshot& s) {
             rd(info, kEswcInfoState, &s.infoState);
         }
     }
+    if (!eswc() && s.race && s.race == g_sunRace && g_sunInfo) {
+        s.info = g_sunInfo;
+        if (o_.piState >= 0) rd(g_sunInfo, static_cast<size_t>(o_.piState), &s.infoState);
+    }
     return true;
 }
 
@@ -347,6 +377,10 @@ void LegacyAdapter::emitMapLoaded(void* challenge) {
 void LegacyAdapter::frame() {
     Snapshot s;
     const bool ok = read(s);
+    if (!eswc() && s.race != g_sunRace) {
+        g_sunRace = nullptr;
+        g_sunInfo = nullptr;
+    }
     const Snapshot prev = snap_;
     const bool hadSnap = haveSnap_;
     snap_ = s;
@@ -413,21 +447,30 @@ void LegacyAdapter::frame() {
     }
 }
 
-void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t bestBefore) {
-    int after = 0;
-    if (!info || stateBefore != 1 || !rd(info, kEswcInfoState, &after) || after != 2) return;
+void* LegacyAdapter::localInfo(void* race) {
     using FnLocal = void*(__fastcall*)(void*, void*);
     void* local = nullptr;
     __try {
-        local = reinterpret_cast<FnLocal>(rebase(kEswcLocalPlayerInfo))(race, nullptr);
+        local = reinterpret_cast<FnLocal>(rebase(eswc() ? kEswcLocalPlayerInfo : kSunLocalPlayerInfo))(race, nullptr);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         local = nullptr;
     }
-    if (local != info) return;
-    uint32_t time = 0, best = 0xffffffffu, respawns = 0;
-    rd(info, kEswcInfoTime, &time);
-    rd(info, kEswcInfoBest, &best);
-    rd(race, kEswcRaceRespawns, &respawns);
+    return local;
+}
+
+void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t bestBefore) {
+    int after = 0;
+    if (!info || stateOff < 0 || stateBefore != 1 || !rd(info, static_cast<size_t>(stateOff), &after) || after != 2) return;
+    if (localInfo(race) != info) return;
+    if (!eswc()) {
+        g_sunRace = race;
+        g_sunInfo = info;
+    }
+    uint32_t time = 0, best = 0xffffffffu;
+    int32_t respawns = -1; // Sunrise: not known yet
+    if (timeOff >= 0) rd(info, static_cast<size_t>(timeOff), &time);
+    if (bestOff >= 0) rd(info, static_cast<size_t>(bestOff), &best);
+    if (eswc()) rd(race, kEswcRaceRespawns, &respawns);
     const bool pb = best != bestBefore || time < bestBefore;
     if (time < sessionBest_) sessionBest_ = time;
     HorizonEvent e = {};
@@ -437,7 +480,43 @@ void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t b
     e.time_ms = static_cast<int32_t>(time);
     e.is_local_player = 1;
     e.is_pb = pb ? 1u : 0u;
-    e.respawns = static_cast<int32_t>(respawns);
+    e.respawns = respawns;
+    e.engine_race = race;
+    dispatchEvent(e);
+}
+
+// Sunrise: OnStartLine / OnCheckpoint of the local player.
+void LegacyAdapter::onSunStart(void* race, void* player) {
+    void* info = nullptr;
+    if (!player || !rd(player, kEswcPlayerInfo, &info) || !info || localInfo(race) != info) return;
+    g_sunRace = race;
+    g_sunInfo = info;
+    g_sunCheckpoints = 0;
+    HorizonEvent e = {};
+    e.type = HORIZON_EVENT_RACE_START;
+    const int kind = raceKind(race);
+    e.play_mode = kind == kNet ? HORIZON_MODE_NET : kind == kSolo ? HORIZON_MODE_SOLO : static_cast<uint32_t>(playMode());
+    e.engine_race = race;
+    dispatchEvent(e);
+}
+
+void LegacyAdapter::onSunCheckpoint(void* race, void* player) {
+    void* info = nullptr;
+    if (!player || !rd(player, kEswcPlayerInfo, &info) || !info || localInfo(race) != info) return;
+    g_sunRace = race;
+    g_sunInfo = info;
+    // race time at the checkpoint: CurrentTime - RaceStartTime (not verified in game yet; -1 if implausible)
+    int32_t now = 0, start = 0, t = -1;
+    if (o_.piCurTime >= 0 && o_.piStartTime >= 0 && rd(info, static_cast<size_t>(o_.piCurTime), &now) &&
+        rd(info, static_cast<size_t>(o_.piStartTime), &start) && now >= start && now - start < 86400000)
+        t = now - start;
+    HorizonEvent e = {};
+    e.type = HORIZON_EVENT_CHECKPOINT;
+    const int kind = raceKind(race);
+    e.play_mode = kind == kNet ? HORIZON_MODE_NET : kind == kSolo ? HORIZON_MODE_SOLO : static_cast<uint32_t>(playMode());
+    e.time_ms = t;
+    e.checkpoint_index = g_sunCheckpoints++;
+    e.respawns = -1;
     e.engine_race = race;
     dispatchEvent(e);
 }
@@ -469,8 +548,8 @@ void __fastcall finishDetour(void* race, void* edx, void* player) {
     int stateBefore = 0;
     uint32_t bestBefore = 0xffffffffu;
     if (player && rd(player, kEswcPlayerInfo, &info) && info) {
-        rd(info, kEswcInfoState, &stateBefore);
-        rd(info, kEswcInfoBest, &bestBefore);
+        if (g_self->stateOff >= 0) rd(info, static_cast<size_t>(g_self->stateOff), &stateBefore);
+        if (g_self->bestOff >= 0) rd(info, static_cast<size_t>(g_self->bestOff), &bestBefore);
     }
     g_self->finishDepth++;
     reinterpret_cast<FnFinish>(g_finishHook.trampoline)(race, edx, player);
@@ -500,6 +579,56 @@ void __fastcall soloEndDetour(void* race, void* edx) {
     void* replay = nullptr;
     if (!app || !rd(app, kEswcAppCurReplay, &replay)) return;
     g_self->onRaceEnd(race, replay, true);
+}
+
+// ---------------------------------------------------------------- Sunrise inline hooks
+// Static addresses (race-events.md); each one only when its prologue matches byte for byte.
+InlineHook g_sunStartHook = {0x007ec550, {0x8b, 0x44, 0x24, 0x04, 0x56}, 5, "Sunrise CTrackManiaRace::OnStartLine", nullptr};
+InlineHook g_sunFinishHook = {0x007ec7a0, {0x8b, 0x44, 0x24, 0x04, 0x53, 0x55, 0x56, 0x33, 0xdb, 0x3b, 0xc3}, 11,
+                              "Sunrise CTrackManiaRace::OnFinishLine", nullptr};
+InlineHook g_sunCheckpointHook = {0x007ec5b0, {0x83, 0xec, 0x38, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x44, 0x56, 0x8b, 0xf1}, 12,
+                                  "Sunrise CTrackManiaRace::OnCheckpoint", nullptr};
+InlineHook g_sunSoloEndHook = {0x007dd7b0, {0x83, 0xec, 0x08, 0x53, 0x55, 0x56, 0x57, 0x8b, 0xf1}, 9, "Sunrise CTrackManiaRace1P race end", nullptr};
+
+void __fastcall sunStartDetour(void* race, void* edx, void* player) {
+    reinterpret_cast<FnFinish>(g_sunStartHook.trampoline)(race, edx, player);
+    g_self->onSunStart(race, player);
+}
+
+void __fastcall sunCheckpointDetour(void* race, void* edx, void* player) {
+    reinterpret_cast<FnFinish>(g_sunCheckpointHook.trampoline)(race, edx, player);
+    g_self->onSunCheckpoint(race, player);
+}
+
+void __fastcall sunFinishDetour(void* race, void* edx, void* player) {
+    void* info = nullptr;
+    int stateBefore = 0;
+    uint32_t bestBefore = 0xffffffffu;
+    if (player && rd(player, kEswcPlayerInfo, &info) && info) {
+        if (g_self->stateOff >= 0) rd(info, static_cast<size_t>(g_self->stateOff), &stateBefore);
+        if (g_self->bestOff >= 0) rd(info, static_cast<size_t>(g_self->bestOff), &bestBefore);
+    }
+    g_self->finishDepth++;
+    reinterpret_cast<FnFinish>(g_sunFinishHook.trampoline)(race, edx, player);
+    g_self->finishDepth--;
+    g_self->onFinish(race, info, stateBefore, bestBefore);
+    if (g_self->finishDepth == 0) g_self->flushDeferred();
+}
+
+void __fastcall sunSoloEndDetour(void* race, void* edx) {
+    reinterpret_cast<FnRaceVoid>(g_sunSoloEndHook.trampoline)(race, edx);
+    g_self->onRaceEnd(race, nullptr, true); // the replay's place in the app is not known on Sunrise yet
+}
+
+void LegacyAdapter::installSunriseHooks() {
+    const bool haveInfo = stateOff >= 0 && timeOff >= 0;
+    const bool a = installInlineHook(g_sunStartHook, reinterpret_cast<void*>(&sunStartDetour));
+    const bool b = haveInfo && installInlineHook(g_sunFinishHook, reinterpret_cast<void*>(&sunFinishDetour));
+    const bool c = installInlineHook(g_sunCheckpointHook, reinterpret_cast<void*>(&sunCheckpointDetour));
+    const bool d = installInlineHook(g_sunSoloEndHook, reinterpret_cast<void*>(&sunSoloEndDetour));
+    HLOG("game: Sunrise events (static addresses, first test): start %s, finish %s, checkpoint %s, solo race end %s; "
+         "respawn not available, network race end not available",
+         a ? "on" : "OFF", b ? "on" : (haveInfo ? "OFF" : "OFF (player info members not found)"), c ? "on" : "OFF", d ? "on" : "OFF");
 }
 
 void LegacyAdapter::installEswcHooks() {

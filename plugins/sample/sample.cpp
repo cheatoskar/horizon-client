@@ -145,6 +145,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         events.size = sizeof(events);
         events.key = "events";
         events.title = "Events";
+        events.icon = HZ_ICON_SCROLL_TEXT; // Lucide codepoints from horizon_imgui.h
         events.flags = HORIZON_PANEL_MENU_PAGE;
         events.draw = drawEvents;
         events.default_x = 0.05f;
@@ -156,6 +157,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         clock.size = sizeof(clock);
         clock.key = "clock";
         clock.title = "Clock";
+        clock.icon = HZ_ICON_TIMER;
         clock.flags = HORIZON_PANEL_HUD;
         clock.draw = drawClock;
         clock.default_x = 0.82f;

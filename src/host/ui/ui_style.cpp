@@ -210,7 +210,6 @@ void applyStyle(float s) {
     st.ButtonTextAlign = ImVec2(0.5f, 0.5f);
     st.SeparatorTextBorderSize = 1.0f;
 
-    const Rgba hover{0.153f, 0.169f, 0.204f, 1.0f};   // surface, one step lighter
     ImVec4* c = st.Colors;
     c[ImGuiCol_Text] = col(t.text);
     c[ImGuiCol_TextDisabled] = col(t.muted);
@@ -233,9 +232,13 @@ void applyStyle(float s) {
     c[ImGuiCol_CheckMark] = col(t.accent2);
     c[ImGuiCol_SliderGrab] = col(t.accent);
     c[ImGuiCol_SliderGrabActive] = col(t.accent2);
-    c[ImGuiCol_Button] = col(t.surface);
-    c[ImGuiCol_ButtonHovered] = col(hover);
-    c[ImGuiCol_ButtonActive] = col(t.accent, 0.35f);
+    // Buttons one step lighter than the card surface, so they show on cards (accent buttons push their own colours)
+    const Rgba button{0.165f, 0.184f, 0.220f, 1.0f};        // #2a2f38
+    const Rgba buttonHover{0.216f, 0.235f, 0.278f, 1.0f};   // #373c47
+    const Rgba buttonActive{0.259f, 0.282f, 0.329f, 1.0f};  // #424854
+    c[ImGuiCol_Button] = col(button);
+    c[ImGuiCol_ButtonHovered] = col(buttonHover);
+    c[ImGuiCol_ButtonActive] = col(buttonActive);
     c[ImGuiCol_Header] = col(t.accent, 0.16f);
     c[ImGuiCol_HeaderHovered] = col(t.accent, 0.28f);
     c[ImGuiCol_HeaderActive] = col(t.accent, 0.40f);
@@ -246,7 +249,7 @@ void applyStyle(float s) {
     c[ImGuiCol_ResizeGripHovered] = col(t.accent2, 0.6f);
     c[ImGuiCol_ResizeGripActive] = col(t.accent2);
     c[ImGuiCol_TabHovered] = col(t.accent, 0.4f);
-    c[ImGuiCol_Tab] = col(t.surface);
+    c[ImGuiCol_Tab] = col(button);
     c[ImGuiCol_TabSelected] = col(t.accent, 0.3f);
     c[ImGuiCol_TabSelectedOverline] = col(t.accent);
     c[ImGuiCol_TabDimmed] = col(t.bg2);
