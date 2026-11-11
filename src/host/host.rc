@@ -10,3 +10,6 @@
 115 RCDATA "assets/mods/competition-patch.png"
 116 RCDATA "assets/mods/kimmod.png"
 117 RCDATA "assets/mods/100-tmx-bingo.png"
+
+// Icon font (Lucide subset, ISC): merged into every host font, see src/host/ui/ui_style.cpp.
+120 RCDATA "assets/lucide-subset.ttf"

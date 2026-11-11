@@ -49,6 +49,8 @@ struct Fonts {
 // Adds the fonts to the current context's atlas (call once, before the backend builds the atlas).
 // scale: 1.0 at 1080p window height (host passes clamp(height/1080, 1, 2)).
 void loadFonts(float scale);
+// Where to read the icon font from when host.dll has no resource (the UI preview). Call before loadFonts.
+void setIconFontFile(const std::string& path);
 const Fonts& fonts();
 float scale();
 // Colours, rounding, spacing of the current context's ImGuiStyle from tokens(), scaled.

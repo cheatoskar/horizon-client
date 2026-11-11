@@ -3,6 +3,7 @@
 #include "ui_common.h"
 
 #include "imgui.h"
+#include "horizon_imgui.h" // HZ_ICON_*
 
 #include <cmath>
 
@@ -86,10 +87,13 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     const float btnH = 32.0f * s;
     ImFont* bf = F(f.bodyBold);
     const bool hasOnline = model.online;
+    const char* menuLabel = HZ_ICON_MENU_U8 "  Menu";
+    const char* logLabel = HZ_ICON_SCROLL_TEXT_U8 "  Log";
+    const char* launcherLabel = "TM Horizon  " HZ_ICON_EXTERNAL_LINK_U8;
     const float chipH = 26.0f * s;
     float fixedW = pad + 28.0f * s + 12.0f * s;                       // logo
     float tail = 12.0f * s + 1.0f * s + 12.0f * s;                    // separator
-    tail += buttonWidth(bf, "Menu") + gap + buttonWidth(bf, "Log") + gap + buttonWidth(bf, "TM Horizon");
+    tail += buttonWidth(bf, menuLabel) + gap + buttonWidth(bf, logLabel) + gap + buttonWidth(bf, launcherLabel);
     if (hasOnline) tail += gap + chipWidth(f.small, "Online", true);
     tail += pad;
     size_t maxIcons = model.plugins.size();
@@ -183,17 +187,17 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     x += 1.0f * s + 12.0f * s;
 
     const float by = midY - btnH * 0.5f;
-    if (pillButton(dl, "##menu", ImVec2(x, by), btnH, bf, "Menu", true) && openMenu) *openMenu = true;
-    x += buttonWidth(bf, "Menu") + gap;
-    if (pillButton(dl, "##log", ImVec2(x, by), btnH, bf, "Log", false)) {
+    if (pillButton(dl, "##menu", ImVec2(x, by), btnH, bf, menuLabel, true) && openMenu) *openMenu = true;
+    x += buttonWidth(bf, menuLabel) + gap;
+    if (pillButton(dl, "##log", ImVec2(x, by), btnH, bf, logLabel, false)) {
         showPage("log");
         if (openMenu) *openMenu = true;
     }
-    x += buttonWidth(bf, "Log") + gap;
-    if (pillButton(dl, "##launcher", ImVec2(x, by), btnH, bf, "TM Horizon", false) && actions.openLauncher) {
+    x += buttonWidth(bf, logLabel) + gap;
+    if (pillButton(dl, "##launcher", ImVec2(x, by), btnH, bf, launcherLabel, false) && actions.openLauncher) {
         actions.openLauncher();
     }
-    x += buttonWidth(bf, "TM Horizon") + gap;
+    x += buttonWidth(bf, launcherLabel) + gap;
     if (hasOnline) drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, "Online", t.ok, true);
 
     ImGui::End();

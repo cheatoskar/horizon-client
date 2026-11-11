@@ -3,6 +3,7 @@
 #include "ui_common.h"
 
 #include "imgui.h"
+#include "horizon_imgui.h" // HZ_ICON_*
 
 #include <cmath>
 #include <cstring>
@@ -207,7 +208,7 @@ bool rowButton(const char* id, ImVec2 size, bool selected, bool* hoveredOut) {
     return clicked;
 }
 
-void horizonRow(const char* label, const char* page) {
+void horizonRow(const char* label, const char* page, const char* icon) {
     const float s = scale();
     const Fonts& f = fonts();
     const Tokens& t = tokens();
@@ -218,7 +219,11 @@ void horizonRow(const char* label, const char* page) {
     bool hov = false;
     if (rowButton(label, size, selected, &hov)) g.sel = page;
     if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    drawText(dl, selected ? f.bodyBold : f.body, ImVec2(p.x + 16.0f * s, p.y + (size.y - F(f.body)->FontSize) * 0.5f),
+    const float iconW = textSize(f.body, icon).x;
+    drawText(dl, f.body, ImVec2(p.x + 16.0f * s, p.y + (size.y - F(f.body)->FontSize) * 0.5f), U(selected ? t.accent : t.muted),
+             icon);
+    drawText(dl, selected ? f.bodyBold : f.body,
+             ImVec2(p.x + 16.0f * s + iconW + 10.0f * s, p.y + (size.y - F(f.body)->FontSize) * 0.5f),
              U(selected ? t.text : t.text2), label);
 }
 
@@ -321,10 +326,10 @@ void drawSidebar(const Model& model, const Actions& actions, float height) {
         for (const PluginView& p : model.plugins) pluginRow(p, actions);
 
         sectionLabel("HORIZON");
-        horizonRow("General", "general");
-        horizonRow("Hotkeys", "hotkeys");
-        horizonRow("Log", "log");
-        horizonRow("About", "about");
+        horizonRow("General", "general", HZ_ICON_SETTINGS_U8);
+        horizonRow("Hotkeys", "hotkeys", HZ_ICON_KEYBOARD_U8);
+        horizonRow("Log", "log", HZ_ICON_SCROLL_TEXT_U8);
+        horizonRow("About", "about", HZ_ICON_INFO_U8);
 
         if (!model.otherMods.empty()) {
             sectionLabel("OTHER MODS");

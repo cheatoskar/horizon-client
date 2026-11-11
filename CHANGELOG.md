@@ -4,6 +4,7 @@
 
 - Handshake for mods that are not plugins (TMVS): `HorizonHost_GetUiState`, `HorizonHost_SetCaptureActive` (heartbeat, 10 s), `HorizonHost_Version`. While a capture is active Horizon draws nothing and takes no input.
 - Plugin ABI 1.2 (header): panels (`register_panel`), host flags (`HORIZON_HOST_FLAG_CAPTURE`).
+- Icon font: 53 Lucide icons (ISC, 20 KB subset) merged into every host font; `HZ_ICON_*` codepoints in `horizon_imgui.h`, used in the sidebar and the bar.
 
 ## 0.1.0 (2026-11-11, first test build, not released)
 
