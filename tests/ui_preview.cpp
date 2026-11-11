@@ -39,6 +39,7 @@ struct Preview {
 Preview P;
 
 void fillModel() {
+    P.model = Model();
     Model& m = P.model;
     m.hostVersion = "0.1.0";
     m.gameName = "TrackMania Nations ESWC";
@@ -49,6 +50,14 @@ void fillModel() {
     m.gameState = "Main menu";
     m.online = false;
     m.notes = {"Changes apply after a restart: TM Vibrant Shaders"};
+    m.menuHotkey = 1;
+    m.barEnabled = true;
+    m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
+    m.otherMods = {
+        {"TM Vibrant Shaders", "1.5.0", "d3d9.dll", "d3d9 proxy", "F5-F8, F12 (menu F8)", "Keeps its own Direct3D hook."},
+        {"CenterSpeed", "", "CenterSpeed.dll", "TMLoader mod", "", ""},
+        {"dinput8.chain.dll", "", "dinput8.chain.dll", "dinput8 chain", "", "ESWC Autosave loader 1.2"},
+    };
     auto add = [&](const char* id, const char* name, const char* ver, const char* author, const char* desc,
                    PluginStatus st, bool enabled, bool menu, bool live, const char* text) {
         PluginView p;
@@ -95,6 +104,7 @@ void fillModel() {
     hk(6, "tm-vibrant-shaders", "TM Vibrant Shaders", "Toggle shaders", "F5", "");
 
     static std::vector<LogLine> log;
+    log.clear();
     const char* msgs[] = {"host: started, profile tmnf-solo", "plugin eswc-autosave: init ok", "plugin clips: switched off",
                           "hooks: Present installed", "map loaded: A01-Race", "SAVED C:\\replays\\A01_0-23.456.Replay.Gbx",
                           "net: login ok", "shader preset 'Night' applied"};
@@ -219,12 +229,19 @@ void gameBackground() {
     dl->AddText(ImVec2(d.x - 220.0f, d.y - 70.0f), IM_COL32(255, 255, 255, 255), "287 km/h");
 }
 
-void setupMods() { showPage("mods"); }
-void setupPlugin() { showPluginPage("eswc-autosave"); }
-void setupHotkeys() { showPage("hotkeys"); }
-void setupLog() { showPage("log"); }
-void setupAbout() { showPage("about"); }
-void setupNone() {}
+void setupPlugin() { fillModel(); showPluginPage("eswc-autosave"); }
+void setupGeneral() { fillModel(); showPage("general"); }
+void setupHotkeys() { fillModel(); showPage("hotkeys"); }
+void setupLog() { fillModel(); showPage("log"); }
+void setupAbout() { fillModel(); showPage("about"); }
+void setupOther() { fillModel(); showPage("other:d3d9.dll"); }
+void setupEmpty() {
+    fillModel();
+    P.model.plugins.clear();
+    P.model.safeMode = true;
+    showPage("mods");
+}
+void setupNone() { fillModel(); }
 
 } // namespace
 
@@ -268,15 +285,16 @@ int main() {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX9_Init(dev);
 
-    fillModel();
     CreateDirectoryW(L"screens", nullptr);
 
     const Scene scenes[] = {
-        {"mods", true, false, {820, 330}, {-1, -1}, setupMods},
-        {"plugin", true, false, {10, 10}, {-1, -1}, setupPlugin},
+        {"plugin", true, false, {330, 330}, {-1, -1}, setupPlugin},
+        {"general", true, false, {10, 10}, {-1, -1}, setupGeneral},
         {"hotkeys", true, false, {900, 395}, {900, 395}, setupHotkeys},
         {"log", true, false, {10, 10}, {-1, -1}, setupLog},
         {"about", true, false, {10, 10}, {-1, -1}, setupAbout},
+        {"other", true, false, {10, 10}, {-1, -1}, setupOther},
+        {"empty", true, false, {10, 10}, {-1, -1}, setupEmpty},
         {"bar", false, true, {800, 6}, {-1, -1}, setupNone},
         {"bar-tooltip", false, true, {679, 26}, {-1, -1}, setupNone},
     };
