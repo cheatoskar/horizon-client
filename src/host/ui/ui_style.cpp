@@ -6,9 +6,41 @@
 #include <windows.h>
 
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace horizon {
 namespace ui {
+
+namespace {
+std::vector<std::pair<std::string, unsigned long long>> g_icons;
+unsigned long long g_wordmark = 0, g_mark = 0;
+float g_wordmarkAspect = 1.0f;
+} // namespace
+
+void setIcon(const std::string& key, unsigned long long texture) {
+    for (auto& kv : g_icons)
+        if (kv.first == key) {
+            kv.second = texture;
+            return;
+        }
+    g_icons.emplace_back(key, texture);
+}
+unsigned long long iconFor(const std::string& key) {
+    for (const auto& kv : g_icons)
+        if (kv.first == key) return kv.second;
+    return 0;
+}
+void setLogo(unsigned long long wordmark, float aspect, unsigned long long mark) {
+    g_wordmark = wordmark;
+    g_wordmarkAspect = aspect;
+    g_mark = mark;
+}
+unsigned long long logoWordmark(float* aspect) {
+    if (aspect) *aspect = g_wordmarkAspect;
+    return g_wordmark;
+}
+unsigned long long logoMark() { return g_mark; }
 
 namespace {
 

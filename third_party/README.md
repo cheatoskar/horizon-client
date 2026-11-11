@@ -3,6 +3,7 @@
 | Folder | What | Version | Licence |
 |---|---|---|---|
 | `imgui/` | Dear ImGui core + `backends/imgui_impl_dx9`, `imgui_impl_win32` | 1.91.5 (same as TM Vibrant Shaders) | MIT, `imgui/LICENSE.txt` |
+| `stb/` | `stb_image.h` (PNG only) for the logo and icons | 2.30 | public domain or MIT (licence at the end of the file) |
 
 Copied from my legacy-randomizer repo (MIT), commit 7482627, not edited here (update by copying again):
 

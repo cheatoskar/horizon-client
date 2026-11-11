@@ -24,6 +24,7 @@ mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 xcopy /e /i /q /y dist\legacy\horizon\plugins\eswc-autosave %T%\horizon\plugins\eswc-autosave >nul
 build\test\host_test.exe host "%CD%\%T%" expect-plugin "%CD%\screens\host-test-menu.png" || set FAIL=1
 
@@ -34,6 +35,7 @@ mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 build\test\host_test.exe host "%CD%\%T%" safe expect-no-plugin || set FAIL=1
 
 echo === profile.json without the sample: it stays off
@@ -43,6 +45,7 @@ mkdir %T%\horizon\plugins\sample
 copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
 copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 > %T%\horizon\profile.json echo {"format": 1, "profile": "Test", "plugins": [{"id": "eswc-autosave", "enabled": true}]}
 build\test\host_test.exe host "%CD%\%T%" expect-no-plugin || set FAIL=1
 

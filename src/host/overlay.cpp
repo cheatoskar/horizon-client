@@ -204,6 +204,7 @@ ui::Model buildModel() {
     m.barEnabled = g_barEnabled;
     m.menuHotkey = g_menuHotkey;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
+    m.onlineFix = s.game.game == HORIZON_GAME_ESWC ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
     m.notes = s.notes;
     m.notes.push_back(std::string("Game: ") + game().status());
     if (s.tmvsLoaded) m.notes.push_back("TM Vibrant Shaders keeps its own Direct3D hook and menu.");
@@ -228,6 +229,10 @@ ui::Actions makeActions() {
     a.openLogFolder = &openLogFolder;
     a.openLauncher = &openLauncher;
     a.closeMenu = []() { setMenuOpen(false, "the menu"); };
+    a.setOnlineFix = [](bool on) {
+        hostSetSettingInt("OnlineFix", on ? 1 : 0);
+        HLOG("menu: online login fix %s from the next start", on ? "on" : "off");
+    };
     a.setBarEnabled = [](bool on) {
         g_barEnabled = on;
         hostSetSettingInt("bar", on ? 1 : 0);
@@ -373,6 +378,11 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
     }
     g_backends = ImGui_ImplDX9_Init(dev);
     g_lost = false;
+    static bool s_textures = false;
+    if (!s_textures) {
+        s_textures = true;
+        texturesLoad();
+    }
 }
 
 void overlayBeforeReset() {

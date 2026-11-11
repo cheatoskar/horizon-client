@@ -1,0 +1,12 @@
+// Pictures built into host.dll (RCDATA, PNG): the TM Horizon logo and the icons of known other mods
+// (from the TM Horizon launcher, apps/launcher/public/mod-icons). Paths from the repo root (build.cmd's cwd).
+101 RCDATA "assets/wordmark.png"
+102 RCDATA "assets/mark.png"
+110 RCDATA "assets/mods/tm-vibrant-shaders.png"
+111 RCDATA "assets/mods/centerspeed.png"
+112 RCDATA "assets/mods/twinkie.png"
+113 RCDATA "assets/mods/tminterface.png"
+114 RCDATA "assets/mods/tmunlimiter.png"
+115 RCDATA "assets/mods/competition-patch.png"
+116 RCDATA "assets/mods/kimmod.png"
+117 RCDATA "assets/mods/100-tmx-bingo.png"

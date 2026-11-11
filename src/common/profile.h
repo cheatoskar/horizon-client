@@ -37,6 +37,7 @@ struct PluginManifest {
     bool valid = false;
     std::string error;
     std::string id, name, version, dll, description, author;
+    std::string icon;        // "icon": PNG file in the plugin's folder (shown in the menu and bar), "" = initials
     unsigned games = 0;      // HORIZON_GAME_* mask (0 = not stated)
     bool soloOnly = true;    // "online": "solo-only" (default) / "online-ok"
     bool enabledByDefault = true; // "enabled_by_default": false = off until switched on (no profile.json)

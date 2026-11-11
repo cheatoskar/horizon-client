@@ -3,9 +3,12 @@
   "name": "ESWC Autosave",
   "version": "2.0.0",
   "dll": "eswc-autosave.dll",
-  "games": ["eswc"],
+  "games": [
+    "eswc"
+  ],
   "online": "online-ok",
   "abi": 1,
   "description": "Saves your replay after each finish, without the dialogs.",
-  "author": "cheatoskar"
+  "author": "cheatoskar",
+  "icon": "icon.png"
 }

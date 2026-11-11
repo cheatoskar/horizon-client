@@ -52,6 +52,7 @@ void fillModel() {
     m.notes = {"Changes apply after a restart: TM Vibrant Shaders"};
     m.menuHotkey = 1;
     m.barEnabled = true;
+    m.onlineFix = 1;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
     m.otherMods = {
         {"TM Vibrant Shaders", "1.5.0", "d3d9.dll", "d3d9 proxy", "F5-F8, F12 (menu F8)", "Keeps its own Direct3D hook."},

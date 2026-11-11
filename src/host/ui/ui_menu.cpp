@@ -136,9 +136,16 @@ void drawHeader(const Model& model, bool* open) {
     const float smallH = F(f.small)->FontSize;
     const float height = titleH + smallH + 6.0f * s;
 
-    const std::string tm = "TM ";
-    drawText(dl, f.title, p, U(t.text), tm);
-    drawText(dl, f.title, ImVec2(p.x + textSize(f.title, tm).x, p.y), U(t.accent), "HORIZON");
+    float aspect = 1.0f;
+    if (const unsigned long long logo = logoWordmark(&aspect)) {
+        // the TM Horizon wordmark (planet + chrome TM + HORIZON), as tall as the title line
+        const float lh = titleH * 1.15f;
+        dl->AddImage(static_cast<ImTextureID>(logo), ImVec2(p.x, p.y - titleH * 0.08f), ImVec2(p.x + lh * aspect, p.y - titleH * 0.08f + lh));
+    } else {
+        const std::string tm = "TM ";
+        drawText(dl, f.title, p, U(t.text), tm);
+        drawText(dl, f.title, ImVec2(p.x + textSize(f.title, tm).x, p.y), U(t.accent), "HORIZON");
+    }
     std::string sub = model.gameName;
     if (!model.exeVersion.empty()) sub += (sub.empty() ? "" : "  \xC2\xB7  ") + model.exeVersion;
     drawText(dl, f.small, ImVec2(p.x + 1.0f * s, p.y + titleH + 4.0f * s), U(t.muted), sub);
@@ -271,8 +278,10 @@ void otherRow(const OtherModView& o) {
     if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     const float iconR = 13.0f * s;
     const ImVec2 c(pos.x + 14.0f * s + iconR, pos.y + size.y * 0.5f);
-    dl->AddCircleFilled(c, iconR, W(0.10f), 32);
-    drawTextCentred(dl, f.small, ImVec2(c.x, c.y - 0.5f), U(t.text2), initials(o.name));
+    if (!drawPictureIcon(dl, c, iconR, "other:" + o.name)) {
+        dl->AddCircleFilled(c, iconR, W(0.10f), 32);
+        drawTextCentred(dl, f.small, ImVec2(c.x, c.y - 0.5f), U(t.text2), initials(o.name));
+    }
     const float textX = pos.x + 14.0f * s + iconR * 2.0f + 10.0f * s;
     const float textW = pos.x + size.x - 12.0f * s - textX;
     const float bodyH = F(f.body)->FontSize, smallH = F(f.small)->FontSize;
@@ -382,8 +391,10 @@ void pageHeader(const std::string& id, const std::string& name, bool greyIcon, c
     const float iconR = 26.0f * s;
     const ImVec2 c(p.x + iconR, p.y + iconR);
     if (greyIcon) {
-        dl->AddCircleFilled(c, iconR, W(0.10f), 40);
-        drawTextCentred(dl, f.bodyBold, ImVec2(c.x, c.y - 0.5f), U(t.text2), initials(name));
+        if (!drawPictureIcon(dl, c, iconR, "other:" + name)) {
+            dl->AddCircleFilled(c, iconR, W(0.10f), 40);
+            drawTextCentred(dl, f.bodyBold, ImVec2(c.x, c.y - 0.5f), U(t.text2), initials(name));
+        }
     } else {
         drawIcon(dl, c, iconR, id, name, f.bodyBold);
     }
@@ -499,6 +510,24 @@ void drawGeneral(const Model& model, const Actions& actions) {
         }
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+
+        // ESWC online login fix (only on ESWC)
+        if (model.onlineFix >= 0) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            drawText(dl, f.bodyBold, p, U(t.text), "Online login fix");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
+                     "Lets the ESWC login reach the server on Windows 10/11. Applies on the next start.");
+            const ImVec2 swSize(44.0f * s, 24.0f * s);
+            const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
+            if (inlineSwitch("##onlinefix", swPos, swSize, model.onlineFix == 1, true, nullptr) && actions.setOnlineFix) {
+                actions.setOnlineFix(model.onlineFix != 1);
+            }
+            ImGui::SetCursorScreenPos(p);
+            ImGui::Dummy(ImVec2(w, 44.0f * s));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        }
 
         // menu key
         {

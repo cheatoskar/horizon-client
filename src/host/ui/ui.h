@@ -117,6 +117,7 @@ struct Model {
     bool barEnabled = true;                    // General: the top-edge bar on/off
     int menuHotkey = 0;                        // handle of the menu key in hotkeys (for the key picker)
     std::vector<std::string> menuKeySuggestions; // quick picks for the menu key: "Insert", "F2", "#", "+", "Ctrl+Tab"
+    int onlineFix = -1;                        // General: ESWC online login fix, -1 = not this game, 0 off, 1 on (next start)
 };
 
 struct Actions {
@@ -129,7 +130,16 @@ struct Actions {
     std::function<void()> openLauncher;                           // bring TM Horizon to the front
     std::function<void()> closeMenu;
     std::function<void(bool on)> setBarEnabled;
+    std::function<void(bool on)> setOnlineFix;
 };
+
+// Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",
+// the TM Horizon wordmark (with its width/height) and the round mark. 0 = none (initials / text).
+void setIcon(const std::string& key, unsigned long long texture);
+unsigned long long iconFor(const std::string& key);
+void setLogo(unsigned long long wordmark, float wordmarkAspect, unsigned long long mark);
+unsigned long long logoWordmark(float* aspect);
+unsigned long long logoMark();
 
 // The big menu. Call every frame while it is open; sets *open = false when the user closes it.
 void drawMenu(const Model& model, const Actions& actions, bool* open);

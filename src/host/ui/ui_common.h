@@ -136,8 +136,18 @@ inline std::string initials(const std::string& name) {
     return out;
 }
 
+// A picture icon (rounded square) if the host has one for key; true when drawn.
+inline bool drawPictureIcon(ImDrawList* dl, ImVec2 centre, float radius, const std::string& key) {
+    const unsigned long long tex = iconFor(key);
+    if (!tex) return false;
+    const ImVec2 a(centre.x - radius, centre.y - radius), b(centre.x + radius, centre.y + radius);
+    dl->AddImageRounded(static_cast<ImTextureID>(tex), a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, radius * 0.45f);
+    return true;
+}
+
 inline void drawIcon(ImDrawList* dl, ImVec2 centre, float radius, const std::string& id, const std::string& name,
                      ImFont* font) {
+    if (drawPictureIcon(dl, centre, radius, id)) return;
     const AccentColour a = accentFor(id);
     dl->AddCircleFilled(centre, radius, U(a.main), 40);
     dl->AddCircle(centre, radius, W(0.18f), 40, 1.0f);

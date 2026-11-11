@@ -65,6 +65,9 @@ static void testManifest() {
     CHECK(!parsePluginManifest(R"({"dll":"..\\x.dll"})", "a").valid);         // dll must stay in the folder
     PluginManifest d = parsePluginManifest(R"({"enabled_by_default":false})", "x");
     CHECK(d.valid && d.soloOnly && !d.enabledByDefault && d.dll == "x.dll");
+    CHECK(parsePluginManifest(R"({"icon":"icon.png"})", "x").icon == "icon.png");
+    CHECK(parsePluginManifest(R"({"icon":"..\\x.png"})", "x").icon.empty()); // icon must stay in the folder
+    CHECK(parsePluginManifest(R"({"icon":"sub/x.png"})", "x").icon.empty());
     CHECK(gameBitFromName("TMUF") == HORIZON_GAME_TMUF && gameBitFromName("x") == 0);
 }
 

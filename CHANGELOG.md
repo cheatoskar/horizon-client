@@ -9,3 +9,4 @@
 - ESWC Autosave 2.0 as the first plugin (the replay save of eswc-autosave on the host's finish/race-end events, settings in the menu).
 - Sunrise: menu, bar, plugins, map/state/online. Forever: experimental TMLoader product "Horizon Host", no game hooks.
 - `profile.json` from TM Horizon (optional), per-start logs, settings in `horizon\settings`.
+- TM Horizon logo in the menu header and the bar, plugin icons (`"icon"` in plugin.json, initials when missing), icons of known other mods (from the TM Horizon launcher), switch for the ESWC online login fix in General (applies on the next start). PNGs decoded with stb_image (public domain/MIT).

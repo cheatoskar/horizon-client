@@ -7,4 +7,5 @@ if not exist "%OD%" mkdir "%OD%"
 %CXX% /Fo"build\plugins\eswc-autosave\\" /Fd"build\plugins\eswc-autosave\p.pdb" %PD%\autosave_plugin.cpp %PD%\tmxcopy.cpp || exit /b 1
 link /nologo /DLL /DEBUG /OPT:REF /OPT:ICF /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:"%OD%\eswc-autosave.dll" /PDB:build\plugins\eswc-autosave\eswc-autosave.pdb /IMPLIB:build\plugins\eswc-autosave\eswc-autosave.lib build\plugins\eswc-autosave\*.obj build\imgui_core.lib user32.lib kernel32.lib gdi32.lib shell32.lib ole32.lib || exit /b 1
 copy /y %PD%\plugin.json "%OD%\plugin.json" >nul || exit /b 1
+copy /y %PD%\icon.png "%OD%\icon.png" >nul || exit /b 1
 exit /b 0

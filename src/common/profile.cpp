@@ -135,6 +135,8 @@ PluginManifest parsePluginManifest(const std::string& text, const std::string& f
         return m;
     }
     m.description = getString(root, "description");
+    m.icon = getString(root, "icon");
+    if (m.icon.find_first_of("\\/:") != std::string::npos || m.icon.find("..") != std::string::npos) m.icon.clear();
     m.author = getString(root, "author");
     const Json* games = root.get("games");
     if (games && games->type == Json::Array) {

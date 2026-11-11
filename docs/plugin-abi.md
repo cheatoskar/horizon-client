@@ -40,6 +40,7 @@ horizon\plugins\<id>\
 | `online` | `"solo-only"` or `"online-ok"`, see Online gate. |
 | `abi` | `HORIZON_ABI` the plugin was built against (1 today). |
 | `enabled_by_default` | `false`: off until switched on in the menu when there is no profile.json (default `true`). |
+| `icon` | PNG file name in the plugin's folder, e.g. `"icon.png"` (no sub-folders, no `..`). Square, 64-256 px, transparent corners welcome; shown as a rounded square in the menu and the bar. Missing or unreadable: coloured initials. |
 
 The same facts are repeated inside the DLL (`HorizonPlugin_Info`). The JSON lets the launcher show the plugin without loading it. If they disagree, the DLL wins.
 

@@ -123,8 +123,13 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     // logo mark
     {
         const float d = 28.0f * s;
-        dl->AddRectFilled(ImVec2(x, midY - d * 0.5f), ImVec2(x + d, midY + d * 0.5f), U(t.accent), 8.0f * s);
-        drawTextCentred(dl, f.bodyBold, ImVec2(x + d * 0.5f, midY - 0.5f), U(t.accentInk), "H");
+        if (const unsigned long long mark = logoMark()) {
+            dl->AddImageRounded(static_cast<ImTextureID>(mark), ImVec2(x, midY - d * 0.5f), ImVec2(x + d, midY + d * 0.5f), ImVec2(0, 0),
+                                ImVec2(1, 1), IM_COL32_WHITE, 7.0f * s);
+        } else {
+            dl->AddRectFilled(ImVec2(x, midY - d * 0.5f), ImVec2(x + d, midY + d * 0.5f), U(t.accent), 8.0f * s);
+            drawTextCentred(dl, f.bodyBold, ImVec2(x + d * 0.5f, midY - 0.5f), U(t.accentInk), "H");
+        }
         x += d + 12.0f * s;
     }
     // plugin icons

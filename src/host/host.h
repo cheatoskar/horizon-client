@@ -157,6 +157,7 @@ bool keyCaptureActive();
 // ------------------------------------------------------------------ D3D9 (d3dhook.cpp) and overlay (overlay.cpp)
 void d3dInstall();
 void overlayCreateContext();
+void texturesLoad(); // logo, plugin and other-mod icons (textures.cpp), after the device exists
 void* gameDevice();
 void overlayDeviceCreated(void* device, HWND window, void* params);
 void overlayBeforeReset();
