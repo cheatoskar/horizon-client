@@ -1,0 +1,11 @@
+{
+  "id": "sample",
+  "name": "Sample",
+  "version": "1.0.0",
+  "dll": "sample.dll",
+  "games": ["eswc", "sunrise", "original", "tmnf", "tmuf"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Example plugin: lists the last game events and draws a small overlay.",
+  "author": "cheatoskar"
+}
