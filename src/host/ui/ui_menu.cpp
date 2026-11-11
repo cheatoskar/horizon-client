@@ -806,7 +806,7 @@ void drawAbout(const Model& model) {
     const float s = scale();
     const Tokens& t = tokens();
     if (beginCard("##about", 24.0f, 20.0f, true)) {
-        infoRow("Horizon Host", model.hostVersion);
+        infoRow("Horizon Client", model.hostVersion);
         infoRow("Game", model.gameName);
         infoRow("Game version", model.exeVersion);
         infoRow("Profile", model.profileName.empty() ? "none" : model.profileName);
@@ -841,7 +841,7 @@ void drawFooter(const Model& model, float height) {
     const float ty = p.y + (height - F(f.small)->FontSize) * 0.5f + 2.0f * s;
     const std::string key = model.menuKey.empty() ? std::string("Esc") : model.menuKey + " or Esc";
     drawText(dl, f.small, ImVec2(p.x, ty), U(t.muted), key + " closes");
-    const std::string right = "Horizon Host " + model.hostVersion;
+    const std::string right = "Horizon Client " + model.hostVersion;
     drawText(dl, f.small, ImVec2(p.x + width - textSize(f.small, right).x, ty), U(t.muted), right);
     ImGui::Dummy(ImVec2(width, height));
 }

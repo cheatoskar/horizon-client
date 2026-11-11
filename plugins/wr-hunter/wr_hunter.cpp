@@ -199,7 +199,7 @@ void refreshTarget() {
             return;
         }
         if (!ck::abiAtLeast(g_host, 3) || !g_host->bridge_request) {
-            g_targetStatus = "This Horizon Host has no TM Horizon bridge.";
+            g_targetStatus = "This Horizon Client has no TM Horizon bridge.";
             return;
         }
         const std::string path = std::string("/v1/tmx/record?game=") + ck::siteCode(g_host) + "&uid=" + ck::urlEscape(g_stats.uid);

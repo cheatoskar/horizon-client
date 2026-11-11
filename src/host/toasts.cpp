@@ -20,7 +20,7 @@ uint64_t g_lastTick = 0;
 void toastsPush(const std::string& owner, const HorizonToast& t) {
     if (!t.title || !*t.title) return;
     ToastItem it;
-    it.owner = owner;
+    it.owner = owner == "host" ? std::string("Horizon Client") : owner; // shown; the log keeps "host"
     it.title = t.title;
     it.text = t.text ? t.text : "";
     it.kind = t.kind <= HORIZON_TOAST_ERROR ? t.kind : HORIZON_TOAST_INFO;

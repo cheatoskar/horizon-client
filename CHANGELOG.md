@@ -4,6 +4,7 @@
 
 - TM Horizon bridge: `play_map` event. TM Horizon can open a map from the game's Tracks folder in a running ESWC or Sunrise (main menu only, not online); the host advertises it with `caps=play_map` on the events poll. The path is checked (relative, no `..`, no drive or `:`, `.Challenge.Gbx`, inside `GameData\Tracks`), the result shows as a toast and in the log. Forever and Original ignore it. `docs/client-bridge.md`, "Play a map"; unit tests for the parsing, the path checks and the game filter.
 - Game control (`gamectl`): `playMapFile` rescans the track folders once before it copies the map, so a file saved there since the game's last scan (TM Horizon download, TMX Browser) no longer counts as a second new map ("expected 1 new map, got 2"). Not run in a game yet.
+- Display name "Horizon Client" (was "Horizon Host") where the player sees it: TMLoader product name and description, `README-Horizon.txt`, the install script's message, the menu footer and About page, the owner line of the host's toasts, the plugin ABI status line, WR Hunter's "no bridge" status. The TMLoader product folder stays `Horizon Host`; DLL names, code, log lines and docs file names are unchanged.
 
 ## 0.2.0 (in progress, branch next)
 
