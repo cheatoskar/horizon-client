@@ -42,6 +42,7 @@ unsigned g_logSeen = 0;
 bool g_shutdownDone = false;
 bool g_swallowed[3] = {};
 bool g_panelsShown = false; // a detached panel window was drawn in the last frame
+bool g_pluginWinShown = false; // a free plugin window (bar, left click) was drawn in the last frame
 
 // HorizonHost_SetCaptureActive (TMVS photos/clips): while set the host draws and takes nothing.
 // Heartbeat: without a new call it ends by itself after kCaptureTimeoutMs.
@@ -135,6 +136,17 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         } else {
             ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
             if (isMouseMsg(msg) && msg != WM_MOUSEMOVE && (ui::barHovered() || ImGui::GetIO().WantCaptureMouse)) take = true;
+            // a text field in a free plugin window has the keyboard (the menu is closed, the game must not see the keys)
+            if (g_pluginWinShown && isKeyMsg(msg) && ImGui::GetIO().WantTextInput) {
+                if (msg == WM_KEYDOWN) {
+                    MSG queued;
+                    if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
+                        MSG key{h, msg, w, l, 0, {}};
+                        TranslateMessage(&key);
+                    }
+                }
+                take = true;
+            }
         }
         bool up = false;
         const int b = buttonOf(msg, up);
@@ -202,6 +214,15 @@ ui::Model buildModel() {
         v.liveToggle = p->live;
         v.soloOnly = p->soloOnly;
         v.panels = panelViews(p->id);
+        {
+            float x = -1, y = -1, w = 0, h = 0;
+            if (sscanf_s(hostSetting("pwin." + p->id, "").c_str(), "%f,%f,%f,%f", &x, &y, &w, &h) == 4) {
+                v.winX = x;
+                v.winY = y;
+                v.winW = w;
+                v.winH = h;
+            }
+        }
         for (auto& pv : v.panels) pv.label = panelTabLabel(pv);
         m.plugins.push_back(v);
     }
@@ -266,6 +287,11 @@ ui::Actions makeActions() {
     a.setHoldToasts = [](bool on) { toastsSetHold(on); };
     a.setBridgeEnabled = [](bool on) { bridgeSetEnabled(on); };
     a.forgetBridge = []() { bridgeForget(); };
+    a.saveWindow = [](const std::string& id, float x, float y, float w, float h) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%.0f,%.0f,%.0f,%.0f", x, y, w, h);
+        hostSetSetting("pwin." + id, buf);
+    };
     a.setBarEnabled = [](bool on) {
         g_barEnabled = on;
         hostSetSettingInt("bar", on ? 1 : 0);
@@ -491,7 +517,7 @@ void overlayFrame(void* device) {
     }
     const bool pluginCapture = (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0; // a plugin takes a photo/video
     const bool top = g_barEnabled && !pluginCapture && fg && mouseAtTop();
-    bool anyOverlay = panelsWantFrame(g_menu);
+    bool anyOverlay = panelsWantFrame(g_menu) || ui::anyPluginWindowOpen();
     for (auto& up : plugins())
         if (up->running && up->enabled && up->drawOverlay) anyOverlay = true;
     const bool toasts = !pluginCapture && toastsVisible();
@@ -507,7 +533,7 @@ void overlayFrame(void* device) {
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    ImGui::GetIO().MouseDrawCursor = g_menu || g_barShown;
+    ImGui::GetIO().MouseDrawCursor = g_menu || g_barShown || g_pluginWinShown;
     pluginsDrawOverlays();
     panelsBeginFrame();
     if (!g_menu) g_panelsShown = panelsDrawWindows(false);
@@ -522,6 +548,7 @@ void overlayFrame(void* device) {
         if (!open) setMenuOpen(false, "the menu");
         g_panelsShown = panelsDrawWindows(true); // above the menu, so they can be moved and set up
     }
+    g_pluginWinShown = ui::drawPluginWindows(model, actions); // free plugin windows, above the menu and the dim layer
     if (toasts) toastsDraw();
     ImGui::EndFrame();
     ImGui::Render();

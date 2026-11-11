@@ -83,6 +83,7 @@ struct PluginView {
     bool liveToggle = false;  // switching applies now
     bool soloOnly = false;
     std::vector<PanelView> panels; // tabs after "Settings"
+    float winX = -1, winY = -1, winW = 0, winH = 0; // remembered rect of its free window (px), winX < 0 = none
 };
 
 struct HotkeyView {
@@ -170,6 +171,7 @@ struct Actions {
     std::function<void(bool on)> setHoldToasts;
     std::function<void(bool on)> setBridgeEnabled;
     std::function<void()> forgetBridge;
+    std::function<void(const std::string& pluginId, float x, float y, float w, float h)> saveWindow; // free window moved/resized
 };
 
 // Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",
@@ -192,6 +194,14 @@ void selectPanelTab(const std::string& pluginId, const std::string& key);
 // Pages: "general", "hotkeys", "log", "about" (the Horizon section), "plugin:<id>", "other:<file>".
 // "mods" opens the first plugin (or general when there is none).
 void showPage(const char* page);
+
+// Free plugin windows: a plugin's page (Settings + panels) in its own movable window, no menu frame.
+// Opened from the bar (left click). Several can be open; they sit above the dim layer and the bar.
+void togglePluginWindow(const std::string& pluginId);
+bool pluginWindowOpen(const std::string& pluginId);
+bool anyPluginWindowOpen();
+// Draws the open windows (call every frame, after drawMenu). Returns true if one was drawn.
+bool drawPluginWindows(const Model& model, const Actions& actions);
 
 // The Horizon bar. mouseAtTop: the pointer touches the top edge of the game window. Call every
 // frame (also while the menu is closed); it animates in/out on its own. Returns true while any part

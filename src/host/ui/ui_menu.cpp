@@ -920,17 +920,11 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     const float eased = 1.0f - (1.0f - appear) * (1.0f - appear);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, eased);
 
-    // dim layer
+    // dim layer: only the game behind. It goes into the background draw list, which is under every window
+    // (a window for it ended up above the panel and darkened the menu itself). The style alpha does not
+    // reach a draw list, so the fade-in is applied by hand.
     const ImVec2 disp = io.DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(disp);
-    const ImGuiWindowFlags dimFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
-                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                                      ImGuiWindowFlags_NoScrollWithMouse;
-    ImGui::Begin("##horizon_dim", nullptr, dimFlags);
-    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f));
-    ImGui::End();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f * eased));
 
     // panel
     const float pw = std::min(1200.0f * s, disp.x * 0.82f);
@@ -938,7 +932,9 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     const ImVec2 pos(std::floor((disp.x - pw) * 0.5f), std::floor((disp.y - ph) * 0.5f + (1.0f - eased) * 12.0f * s));
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(pw, ph));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, toVec(t.bg));
+    ImVec4 panelBg = toVec(t.bg);
+    panelBg.w = 0.94f; // very slightly translucent; text and controls stay opaque
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, panelBg);
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.08f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.radiusLg * s);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -975,6 +971,154 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
         !ImGui::IsMouseHoveringRect(wpos, ImVec2(wpos.x + wsize.x, wpos.y + wsize.y), false)) {
         *open = false;
     }
+}
+
+// ---- free plugin windows ---------------------------------------------------------------------------
+
+namespace {
+struct PluginWin {
+    bool open = false;
+    bool place = true;       // apply the rect when drawn next
+    bool known = false;      // rect loaded from the model once
+    float x = -1, y = -1, w = 0, h = 0;
+    float saveX = -1, saveY = -1, saveW = 0, saveH = 0;
+    ImVec2 screen = ImVec2(0, 0);
+};
+std::vector<std::pair<std::string, PluginWin>> g_pwins;
+
+PluginWin& pwin(const std::string& id) {
+    for (auto& e : g_pwins)
+        if (e.first == id) return e.second;
+    g_pwins.emplace_back(id, PluginWin());
+    return g_pwins.back().second;
+}
+
+// The plugin's page without the menu frame: switch, then Settings and one tab per panel.
+void drawWindowBody(const PluginView& p, const Actions& actions) {
+    const float s = scale();
+    if (!p.statusText.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, toVec(statusColour(p.status)));
+        ImGui::TextUnformatted(p.statusText.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (canToggle(p.status) && actions.setPluginEnabled) {
+        bool on = p.enabled;
+        if (ImGui::Checkbox("On", &on)) actions.setPluginEnabled(p.id, on);
+        if (ImGui::IsItemHovered() && !p.liveToggle) ImGui::SetTooltip("Applies after a restart.");
+    }
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+    if (p.panels.empty()) {
+        if (actions.drawPluginPage) actions.drawPluginPage(p.id);
+    } else if (ImGui::BeginTabBar("##panels")) {
+        if (p.hasMenu && ImGui::BeginTabItem("Settings")) {
+            if (actions.drawPluginPage) actions.drawPluginPage(p.id);
+            ImGui::EndTabItem();
+        }
+        for (const PanelView& pv : p.panels) {
+            const std::string label = pv.label + "###wtab_" + pv.key;
+            if (ImGui::BeginTabItem(label.c_str())) {
+                ImGui::Spacing();
+                if (actions.drawPanelTab) actions.drawPanelTab(p.id, pv.key);
+                ImGui::EndTabItem();
+            }
+        }
+        ImGui::EndTabBar();
+    }
+}
+} // namespace
+
+void togglePluginWindow(const std::string& pluginId) {
+    PluginWin& w = pwin(pluginId);
+    w.open = !w.open;
+    if (w.open) w.place = true;
+}
+
+bool pluginWindowOpen(const std::string& pluginId) {
+    for (auto& e : g_pwins)
+        if (e.first == pluginId) return e.second.open;
+    return false;
+}
+
+bool anyPluginWindowOpen() {
+    for (auto& e : g_pwins)
+        if (e.second.open) return true;
+    return false;
+}
+
+bool drawPluginWindows(const Model& model, const Actions& actions) {
+    const float s = scale();
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    bool any = false;
+    for (auto& e : g_pwins) {
+        PluginWin& w = e.second;
+        if (!w.open) continue;
+        const PluginView* pv = nullptr;
+        for (const PluginView& p : model.plugins)
+            if (p.id == e.first) pv = &p;
+        if (!pv) {
+            w.open = false;
+            continue;
+        }
+        if (!w.known) {
+            w.known = true;
+            if (pv->winX >= 0.0f && pv->winW > 0.0f) {
+                w.x = pv->winX;
+                w.y = pv->winY;
+                w.w = pv->winW;
+                w.h = pv->winH;
+            }
+        }
+        if (screen.x != w.screen.x || screen.y != w.screen.y) {
+            w.screen = screen;
+            w.place = true; // display size changed (Reset): clamp again
+        }
+        if (w.place) {
+            w.place = false;
+            float ww = w.w > 0.0f ? w.w : 560.0f * s;
+            float hh = w.h > 0.0f ? w.h : 440.0f * s;
+            ww = std::min(std::max(ww, 240.0f * s), screen.x);
+            hh = std::min(std::max(hh, 160.0f * s), screen.y);
+            float x = w.x >= 0.0f ? w.x : std::floor((screen.x - ww) * 0.5f + 24.0f * s * static_cast<float>(&e - &g_pwins[0]));
+            float y = w.y >= 0.0f ? w.y : std::floor((screen.y - hh) * 0.35f + 24.0f * s * static_cast<float>(&e - &g_pwins[0]));
+            x = std::min(std::max(x, 0.0f), std::max(0.0f, screen.x - std::min(ww, 120.0f * s)));
+            y = std::min(std::max(y, 0.0f), std::max(0.0f, screen.y - 48.0f * s));
+            w.x = x;
+            w.y = y;
+            w.w = ww;
+            w.h = hh;
+            ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(ww, hh), ImGuiCond_Always);
+        }
+        ImVec4 bg = toVec(tokens().bg);
+        bg.w = 0.94f;
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, bg);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, tokens().radius * s);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * s, 14.0f * s));
+        const std::string title = pv->name + "###hzwin." + e.first;
+        bool open = true;
+        ImGui::SetNextWindowSizeConstraints(ImVec2(240.0f * s, 160.0f * s), ImVec2(FLT_MAX, FLT_MAX));
+        if (ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::PushID(e.first.c_str());
+            drawWindowBody(*pv, actions);
+            ImGui::PopID();
+            const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                (std::fabs(pos.x - w.saveX) > 0.5f || std::fabs(pos.y - w.saveY) > 0.5f || std::fabs(size.x - w.saveW) > 0.5f ||
+                 std::fabs(size.y - w.saveH) > 0.5f)) {
+                w.x = w.saveX = pos.x;
+                w.y = w.saveY = pos.y;
+                w.w = w.saveW = size.x;
+                w.h = w.saveH = size.y;
+                if (actions.saveWindow) actions.saveWindow(e.first, pos.x, pos.y, size.x, size.y);
+            }
+            any = true;
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+        if (!open) w.open = false;
+    }
+    return any;
 }
 
 } // namespace ui

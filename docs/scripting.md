@@ -116,6 +116,7 @@ A callback is a global function with exactly this declaration. A function with a
 | `void OnRaceEnd()` | The race ended (end screen or replay stop). | `read-game` |
 | `void OnMenu()` | The game went back to the menu. | `read-game` |
 | `void OnGameState(Game::State state)` | The game state changed. | `read-game` |
+| `void OnPeek()` | The "Show script overlays" hotkey was pressed (Hotkeys page of the Horizon menu, default Ctrl+F4, rebindable; one hotkey for all scripts, it does nothing while the plugin is off or gated online). For overlays that hide themselves: show again for a while. | none |
 | `void OnUnload()` | Before the script is reloaded, switched off or the game quits. Not called after Stopped or Suspended. | none |
 
 `OnMapLoaded(const Game::Map@)` is accepted too. If a script has both forms, only the one with the map is called.
@@ -607,9 +608,10 @@ Both live in `plugins\scripts\examples\`. Copy a folder into `<game>\horizon\scr
 
 ### clock
 
-Real time and session time in a corner. Permissions `ui` and `settings`; no game access, so it runs everywhere, also online (`online = "online-ok"`).
+Real time and session time in a corner. Permissions `ui`, `settings` and `read-game` (only for the map event that restarts the hide timer; it reads nothing from the game), so it runs everywhere, also online (`online = "online-ok"`).
 
-- Settings: show, corner (`options` combo), 24 or 12 hours, seconds, session time, large text, background (`min=0 max=1` slider), margin.
+- Settings: show, corner (`options` combo), 24 or 12 hours, seconds, session time, "Hide after" (seconds, default 10, 0 = always visible), large text, background (`min=0 max=1` slider), margin.
+- Hiding: the clock is visible for "Hide after" seconds after the script starts or a map loads (`OnMapLoaded()`, so the permission `read-game` is asked for), then fades out over 0.4 s. It is shown again while the Horizon menu is open (`UI::IsMenuOpen()`) and for the same time after the "Show script overlays" hotkey (`OnPeek()`). `TargetAlpha(sinceMs, seconds)` is the pure function behind it; the fade is `UI::PushStyleVar(UI::StyleVar::Alpha, alpha)` around the window, the alpha follows the target by frame time.
 - `ClockText()` builds the format text and calls `Time::Format`:
 
 ```angelscript
@@ -645,6 +647,7 @@ void Main() {
 }
 ```
 
+- Same hiding as the clock ("Hide after", default 10 s after the map loaded; menu open and `OnPeek()` show it again). "Hide while driving" still works on top of it.
 - The author line is left out when `mapAuthor.isEmpty()`, because some games do not tell it for maps from their own menus.
 - Medal times are a two-column table (`UI::BeginTable("medals", 2, UI::TableFlags::SizingFixedFit)`), one `MedalRow` per medal; rows with `-1` are skipped. On a stunts map it shows `authorScore` instead.
 - "Hide while driving" uses `Game::InRace()`.

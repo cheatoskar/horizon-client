@@ -63,7 +63,7 @@ struct MapData {
 
 enum Callback {
     CbMain, CbRender, CbRenderMenu, CbOnMapLoaded, CbOnMapLoadedNoArg, CbOnRaceStart, CbOnCheckpoint, CbOnRespawn, CbOnFinish,
-    CbOnRaceEnd, CbOnMenu, CbOnGameState, CbOnUnload, CbCount
+    CbOnRaceEnd, CbOnMenu, CbOnGameState, CbOnPeek, CbOnUnload, CbCount
 };
 
 struct Script {
@@ -120,6 +120,7 @@ public:
     void render();                       // Render() of every running script with "ui" (inside an ImGui frame)
     void renderMenu(Script& s);          // RenderMenu() of one script (inside the Scripts tab)
     void dispatch(const HorizonEvent& e);
+    void peek();                         // the "show overlays" hotkey: OnPeek() of every running script
 
     void reload(Script& s);
     void reloadAll();

@@ -8,6 +8,9 @@ if not exist screens mkdir screens
 echo === unit tests
 build\test\unit_tests.exe || set FAIL=1
 
+echo === menu input (dim layer, display change)
+build\test\ui_input_test.exe || set FAIL=1
+
 echo === loader + chain + unknown exe
 set "T=build\test\run-loader"
 if exist %T% rmdir /s /q %T%

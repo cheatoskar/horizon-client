@@ -1,4 +1,6 @@
 // Map Info: name, author and medal times of the running map, from OnMapLoaded.
+// It fades out "Hide after" seconds after the map loads and comes back while the Horizon menu is open and
+// after the "Show script overlays" hotkey (default Ctrl+F4, the host calls OnPeek()).
 // Runs unchanged on ESWC, Sunrise, TMNF and TMUF. Some games leave the author empty for maps started
 // from their own menus; then the line is simply left out.
 
@@ -13,6 +15,9 @@ bool showMedals = true;
 
 [Setting name="Hide while driving" description="Only show it in menus, on the end screen and in replays"]
 bool hideWhileDriving = false;
+
+[Setting name="Hide after" description="Seconds the box stays visible after a map starts or the hotkey is pressed. 0 = always visible" min=0 max=120]
+int hideAfter = 10;
 
 [Setting name="Background" min=0 max=1]
 float background = 0.7f;
@@ -32,6 +37,24 @@ int authorTime = -1, goldTime = -1, silverTime = -1, bronzeTime = -1;
 int authorScore = -1;
 bool stunts = false;
 
+const float FADE_MS = 400.0f;
+uint64 shownAt = 0;
+float alpha = 1.0f;
+
+float TargetAlpha(int64 sinceMs, int hideAfterSeconds) {
+    if (hideAfterSeconds <= 0) return 1.0f;
+    float left = float(hideAfterSeconds) * 1000.0f - float(sinceMs);
+    if (left >= FADE_MS) return 1.0f;
+    if (left <= 0.0f) return 0.0f;
+    return left / FADE_MS;
+}
+
+void Wake() {
+    shownAt = Time::Now();
+}
+
+void OnPeek() { Wake(); }
+
 void Main() {
     // loaded (or reloaded) while a map is already running: pick it up
     Game::Map@ map = Game::CurrentMap();
@@ -41,6 +64,7 @@ void Main() {
 void OnMapLoaded(Game::Map@ map) {
     haveMap = map !is null;
     if (!haveMap) return;
+    Wake();
     mapName = map.name;
     mapAuthor = map.author;
     environment = map.environment;
@@ -69,6 +93,12 @@ void MedalRow(const string &in name, int ms, const vec4 &in color) {
 void Render() {
     if (!show || !haveMap) return;
     if (hideWhileDriving && Game::InRace()) return;
+    float target = UI::IsMenuOpen() ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
+    float step = Time::Delta() / FADE_MS;
+    if (alpha < target) alpha = alpha + step > target ? target : alpha + step;
+    else alpha = alpha - step < target ? target : alpha - step;
+    if (alpha <= 0.001f) return;
+    UI::PushStyleVar(UI::StyleVar::Alpha, alpha);
 
     vec2 screen = UI::GetScreenSize();
     float m = margin * UI::GetScale();
@@ -84,7 +114,7 @@ void Render() {
         UI::Text(mapName.isEmpty() ? "Unnamed map" : mapName);
         UI::PopFont();
         string sub = mapAuthor.isEmpty() ? "" : "by " + mapAuthor;
-        if (!environment.isEmpty()) sub += (sub.isEmpty() ? "" : "  ·  ") + environment;
+        if (!environment.isEmpty()) sub += (sub.isEmpty() ? "" : "  ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·  ") + environment;
         if (!sub.isEmpty()) UI::TextColored(UI::MutedColor(), sub);
 
         if (showMedals) {
@@ -100,4 +130,5 @@ void Render() {
         }
     }
     UI::End();
+    UI::PopStyleVar();
 }
