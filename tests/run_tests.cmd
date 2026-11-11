@@ -32,7 +32,11 @@ copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
 copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
 xcopy /e /i /q /y dist\legacy\horizon\plugins\eswc-autosave %T%\horizon\plugins\eswc-autosave >nul
-build\test\host_test.exe host "%CD%\%T%" expect-plugin "%CD%\screens\host-test-menu.png" || set FAIL=1
+rem ABI layout: a plugin built against the 1.2 header loads in this 1.3 host
+mkdir %T%\horizon\plugins\abi12
+copy /y build\test\abi12\abi12.dll %T%\horizon\plugins\abi12\ >nul
+copy /y build\test\abi12\plugin.json %T%\horizon\plugins\abi12\ >nul
+build\test\host_test.exe host "%CD%\%T%" expect-plugin expect-abi12 "%CD%\screens\host-test-menu.png" || set FAIL=1
 
 echo === safe mode: no plugins
 set "T=build\test\run-safe"

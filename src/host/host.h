@@ -173,6 +173,8 @@ void overlayAfterReset(bool ok);
 void overlayFrame(void* device); // in Present, before the call on
 bool menuOpen();
 void setMenuOpen(bool open, const char* why);
+// ABI minor 3 open_page: menu on the plugin's page (and panel tab), or closed again when it already shows it.
+HorizonResult menuOpenPluginPage(const std::string& pluginId, const std::string& panelKey);
 void* imguiContext();
 void imguiAllocators(void** allocFn, void** freeFn, void** user);
 const HorizonStyle* hostStyle();

@@ -163,6 +163,12 @@ void HORIZON_CALL f_unregister_panel(HorizonPluginHandle, const char* key) {
 int32_t HORIZON_CALL f_panel_visible(HorizonPluginHandle, const char*) { return 1; }
 void HORIZON_CALL f_set_host_flag(HorizonPluginHandle, uint32_t flag, int32_t on) { g_hostFlags = on ? (g_hostFlags | flag) : (g_hostFlags & ~flag); }
 uint32_t HORIZON_CALL f_host_flags(void) { return g_hostFlags; }
+int g_openPageCalls = 0;
+HorizonResult HORIZON_CALL f_open_page(HorizonPluginHandle, const char* panel_key) {
+    g_openPageCalls++;
+    printf("  open_page(\"%s\")\n", panel_key ? panel_key : "");
+    return HORIZON_OK;
+}
 
 void flushQueue() {
     std::vector<std::pair<HorizonCallback, void*>> q;
@@ -655,6 +661,7 @@ int main(int argc, char** argv) {
     host.panel_visible = f_panel_visible;
     host.set_host_flag = f_set_host_flag;
     host.host_flags = f_host_flags;
+    host.open_page = f_open_page;
 
     const int32_t r = init(&host);
     printf("  Init returned %d (expected %d)\n", r, expectInit);

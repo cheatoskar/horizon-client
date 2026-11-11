@@ -3,7 +3,7 @@
 //   host_test loader <dir>        dir\dinput8.dll (Legacy Loader) + dir\dinput8.chain.dll (test chain) +
 //                                 dir\horizon\host.dll: DirectInput8Create must work, go through the chain,
 //                                 and the host must stay OFF (this exe is not a known game) and say so.
-//   host_test host <dir> [safe] [expect-plugin|expect-no-plugin]
+//   host_test host <dir> [safe] [expect-plugin|expect-no-plugin] [expect-abi12]
 //                                 HorizonHostInit in test mode, then a D3D9 device on a hidden window, frames
 //                                 with the menu open (HORIZON_TEST_MENU=1), a PNG of the frame into screens\.
 // Exit code 0 = all checks passed. The host log of the run is checked for the expected lines.
@@ -114,7 +114,7 @@ static bool savePng(IDirect3DDevice9* dev, const wchar_t* path) {
     return ok;
 }
 
-static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const std::wstring& shot) {
+static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
     struct Info {
         unsigned api, size, flags;
         const wchar_t* path;
@@ -214,6 +214,13 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, const 
         check(has(log, "panel \"clock\" (Clock), in its own window"), "HUD panel Clock starts in its own window");
         check(!has(log, "crashed"), "no plugin crashed");
     }
+    if (expectAbi12) {
+        // tests/abi12: built against the 1.2 header, loaded by this 1.3 host
+        check(has(log, "[abi12] started"), "ABI 1.2 plugin started");
+        check(has(log, "1.2 layout ok"), "ABI 1.2 plugin: host table and host_flags as in 1.2");
+        check(has(log, "abi12: pre_present called"), "ABI 1.2 plugin: its pre_present runs");
+        check(!has(log, "abi12: FAIL"), "ABI 1.2 plugin: host reads only cb->size of its callbacks (no post_present)");
+    }
     dev->Release();
     d3d->Release();
     DestroyWindow(hwnd);
@@ -230,15 +237,17 @@ int wmain(int argc, wchar_t** argv) {
     if (mode == L"loader") return testLoader(dir);
     bool safe = false;
     int expect = -1;
+    bool abi12 = false;
     std::wstring shot;
     for (int i = 3; i < argc; i++) {
         const std::wstring a = argv[i];
         if (a == L"safe") safe = true;
         else if (a == L"expect-plugin") expect = 1;
         else if (a == L"expect-no-plugin") expect = 0;
+        else if (a == L"expect-abi12") abi12 = true;
         else shot = a;
     }
-    const int r = testHost(dir, safe, expect, shot);
+    const int r = testHost(dir, safe, expect, abi12, shot);
     printf("%s\n", r == 0 ? "host test: all passed" : "host test: FAILED");
     // exit without unloading: the host's threads keep running until the process ends, as in the game
     TerminateProcess(GetCurrentProcess(), static_cast<UINT>(r));

@@ -31,8 +31,8 @@ extern "C" {
 #define HORIZON_ABI 1
 #define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
                                2: panels (register_panel ...), host flags (capture)
-                               3: toasts (notify), the TM Horizon bridge (bridge_request, bridge_state),
-                                  HorizonDeviceCallbacks.post_present */
+                               3: open_page, toasts (notify), the TM Horizon bridge (bridge_request,
+                                  bridge_state), HorizonDeviceCallbacks.post_present */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -391,6 +391,14 @@ typedef struct HorizonHostApi {
     uint32_t (HORIZON_CALL* host_flags)(void);
 
     /* ---- ABI minor 3 (check host->abi_minor >= 3 before use) ------------------------------------ */
+    /* Order is fixed: open_page first (TMVS 2.0 reads it right after host_flags), then notify,
+     * bridge_request, bridge_state. A plugin built against 1.2 never sees these fields. */
+    /* Opens the Horizon menu on this plugin's page (for a "open my page" hotkey). panel_key NULL or ""
+     * = the plugin's Settings tab (or the plain page), else that panel's tab; a key the plugin has no
+     * panel for returns HORIZON_ERR_INVALID_ARG, the page still opens on Settings. If the menu is
+     * already open on this page it closes (toggle, like the menu key). Game thread only.
+     * HORIZON_ERR_WRONG_STATE while a capture (HorizonHost_SetCaptureActive) is active. */
+    HorizonResult (HORIZON_CALL* open_page)(HorizonPluginHandle plugin, const char* panel_key);
     /* Shows a toast (copied). Any thread. Toasts of a plugin that is off or gated online are dropped. */
     void (HORIZON_CALL* notify)(HorizonPluginHandle plugin, const HorizonToast* toast);
     /* Sends one request to TM Horizon over the bridge. method "GET" or "POST"; path starts with "/v1/"

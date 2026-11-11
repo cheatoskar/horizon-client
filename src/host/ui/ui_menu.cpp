@@ -24,6 +24,9 @@ struct MenuState {
     double noteUntil = 0.0;
     double openedAt = 0.0;
     int lastFrame = -10;
+    std::string tabPlugin;    // selectPanelTab: plugin whose page selects tabKey once
+    std::string tabKey;       // "" = Settings
+    bool tabPending = false;
 };
 MenuState g;
 
@@ -441,20 +444,22 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
         if (plugin.panels.empty()) {
             if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
         } else if (ImGui::BeginTabBar("##panels")) {
+            const bool pick = g.tabPending && g.tabPlugin == plugin.id;
             // Settings (the plugin's DrawMenu) first, then one tab per panel (ABI minor 2)
-            if (plugin.hasMenu && ImGui::BeginTabItem("Settings")) {
+            if (plugin.hasMenu && ImGui::BeginTabItem("Settings", nullptr, pick && g.tabKey.empty() ? ImGuiTabItemFlags_SetSelected : 0)) {
                 if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
                 ImGui::EndTabItem();
             }
             for (const PanelView& pv : plugin.panels) {
                 const std::string label = pv.label + (pv.detached ? " (window)" : "") + "###tab_" + pv.key;
-                if (ImGui::BeginTabItem(label.c_str())) {
+                if (ImGui::BeginTabItem(label.c_str(), nullptr, pick && g.tabKey == pv.key ? ImGuiTabItemFlags_SetSelected : 0)) {
                     ImGui::Spacing();
                     if (actions.drawPanelTab) actions.drawPanelTab(plugin.id, pv.key);
                     ImGui::EndTabItem();
                 }
             }
             ImGui::EndTabBar();
+            if (pick) g.tabPending = false;
         }
         ImGui::PopID();
     }
@@ -877,6 +882,16 @@ void drawPage(const Model& model, const Actions& actions, float height) {
 
 void showPluginPage(const std::string& id) {
     g.sel = "plugin:" + id;
+}
+
+bool pluginPageShown(const std::string& id) {
+    return g.sel == "plugin:" + id;
+}
+
+void selectPanelTab(const std::string& pluginId, const std::string& key) {
+    g.tabPlugin = pluginId;
+    g.tabKey = key;
+    g.tabPending = true;
 }
 
 void showPage(const char* page) {

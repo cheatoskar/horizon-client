@@ -184,8 +184,9 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `save_replay(plugin, name)` (ABI 1.1) | saves the run's replay like the game's "Save replay", without dialogs. ESWC (host 0.2.0): on the solo end-race screen the current run, elsewhere (menus, LAN/online after a race) the previous race's copy; `name` without extension, `""` = the game's default `<map>(mm'ss''cc)`; never overwrites (`name (2)` ...); sends `REPLAY_SAVED`. `HORIZON_ERR_WRONG_STATE` while a solo race runs or nothing is there to save, `HORIZON_ERR_NOT_SUPPORTED` on Sunrise and Forever. Game thread. |
 | `register_panel`, `unregister_panel`, `panel_visible` (ABI 1.2) | see Panels |
 | `set_host_flag(plugin, flag, on)`, `host_flags()` (ABI 1.2) | `HORIZON_HOST_FLAG_CAPTURE`: a photo or video is being taken; the bar and windows with "Hide in photos and videos" disappear. Each plugin sets its own bits; `host_flags()` is the OR. |
-| `notify(plugin, &toast)` (ABI 1.3) | a toast in the corner of the screen, see Notifications and the TM Horizon bridge |
-| `bridge_request(...)`, `bridge_state()` (ABI 1.3) | ask the TM Horizon launcher on the same PC (TMX search, map files, record replays), see Notifications and the TM Horizon bridge |
+| `open_page(plugin, panel_key)` (ABI 1.3) | opens the Horizon menu on this plugin's page, for an "open my page" hotkey. `panel_key` `NULL` or `""` = Settings tab (or the plain page), else that panel's tab (`HORIZON_ERR_INVALID_ARG` if there is no such panel, the page still opens on Settings). Called while the menu already shows this page it closes the menu (toggle). Game thread only; `HORIZON_ERR_WRONG_STATE` during a capture. |
+| `notify(plugin, &toast)` (ABI 1.3) | a toast in the corner of the screen, see "ABI 1.3" |
+| `bridge_request(...)`, `bridge_state()` (ABI 1.3) | ask the TM Horizon launcher on the same PC (TMX search, map files, record replays), see "ABI 1.3" |
 | `device()` | the game's `IDirect3DDevice9*` for every plugin (callbacks only with `CAP_DEVICE`) |
 
 ABI 1.1, 1.2 and 1.3 functions sit at the end of `HorizonHostApi`. A plugin built against 1.0 never sees them; one built against a newer minor checks `host->abi_minor` (>= 1, >= 2 or >= 3) before calling them.
@@ -216,9 +217,28 @@ host->register_panel(host->plugin, &d);
 
 Fonts: `style()->font_*` are built once per start; still, read them from `style()` when drawing instead of keeping the pointers from Init (they are NULL until the first frame).
 
-## Notifications and the TM Horizon bridge (ABI 1.3)
+## ABI 1.3
 
-Two additions at the end of `HorizonHostApi`: `notify` (toasts) and `bridge_request` / `bridge_state` (asking the TM Horizon launcher on the same PC). Check `host->abi_minor >= 3` before using them, see "ABI versioning".
+Minor 3 has four new functions at the end of `HorizonHostApi` and one new callback at the end of `HorizonDeviceCallbacks`. They came from three branches (TMVS modules, client mods, Horizon Performance) and were merged into this one minor. The order is fixed and never changes:
+
+| Struct | Field (in this order, after the 1.2 fields) | What for |
+|---|---|---|
+| `HorizonHostApi` | `open_page` | open the Horizon menu on the plugin's page (TMVS F8), see "Opening the plugin's page" |
+| `HorizonHostApi` | `notify` | toasts, see "Toasts" |
+| `HorizonHostApi` | `bridge_request`, `bridge_state` | ask TM Horizon (TMX search, map files, record replays), see "The TM Horizon bridge" |
+| `HorizonDeviceCallbacks` | `post_present` | frame timing and frame pacing after `Present`, see "Device access" |
+
+`open_page` comes first because TMVS 2.0 (built against the `tmvs-modules` header) reads it right after `host_flags`; that binary keeps working. `offsetof(HorizonHostApi, open_page)` equals the size of the 1.2 table; the unit tests check this with `static_assert`, and a test plugin built against the 1.2 header (`tests/abi12/`) is loaded by the 1.3 host in the test run.
+
+Compatibility both ways:
+
+- A plugin built against 1.2 (or older) never sees the new fields. Its `HorizonDeviceCallbacks` is shorter; the host copies only `cb->size` bytes, so `post_present` stays NULL and is never called.
+- A plugin built against 1.3 checks `host->abi_minor >= 3` before calling `open_page`, `notify` or the bridge (the client mods use `ck::abiAtLeast(host, 3)`, which is the same test), and then a NULL check on the pointer. A plugin that cannot work without them (TMX Browser) returns non-zero from `Init` on an older host and shows as failed. A plugin that only wants a toast (WR Hunter) skips the call. An older host never calls `post_present`; Horizon Performance then measures frame times in `pre_present` only and the limiter stays off.
+- `HorizonHost_Version` (the host's own version, not the ABI) stays 0.2.0: ABI 1.3 is part of host 0.2.0.
+
+### Opening the plugin's page: `open_page`
+
+`open_page(plugin, panel_key)` opens the Horizon menu on the plugin's page, for an "open my page" hotkey. `panel_key` `NULL` or `""` opens the Settings tab (or the plain page), otherwise that panel's tab; a key the plugin has no panel for returns `HORIZON_ERR_INVALID_ARG` and the page still opens on Settings. Called while the menu already shows this page, it closes the menu (toggle, like the menu key). Game thread only (`HORIZON_ERR_WRONG_STATE` outside it), and `HORIZON_ERR_WRONG_STATE` while a capture (`HorizonHost_SetCaptureActive`) is active. TMVS registers a hotkey `menu` (default F8) that calls it. Background: `docs/spec-open-page.md`.
 
 ### Toasts: `notify`
 
@@ -331,7 +351,7 @@ windows with "Hide in photos and videos".
 
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.
 - Changes are additive only: new fields go at the end, new events get new numbers, nothing is reordered or removed.
-- `HORIZON_ABI_MINOR` is 3 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = toasts (`notify`) and the TM Horizon bridge (`bridge_request`, `bridge_state`). It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing. For the 1.3 functions that is `host->abi_minor >= 3` (the client mods use `ck::abiAtLeast(host, 3)`, which is the same test), and then a NULL check on `host->notify` / `host->bridge_request`. A plugin that cannot work without them (TMX Browser) returns non-zero from `Init` on an older host and shows as failed. A plugin that only wants a toast (WR Hunter) skips the call.
+- `HORIZON_ABI_MINOR` is 3 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = `open_page`, toasts (`notify`), the TM Horizon bridge (`bridge_request`, `bridge_state`) and `HorizonDeviceCallbacks.post_present`, see "ABI 1.3" above. It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
 - `HORIZON_ABI` changes only if something cannot stay compatible. The host refuses a plugin with a different `abi`.
 
 ## Building
