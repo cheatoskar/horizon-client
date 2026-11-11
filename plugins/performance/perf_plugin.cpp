@@ -1017,7 +1017,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     host->set_device_callbacks(host->plugin, &cb);
     host->subscribe(host->plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_GAME_STATE) | HORIZON_EVENT_BIT(HORIZON_EVENT_MAP_LOADED) |
                                       HORIZON_EVENT_BIT(HORIZON_EVENT_MENU_ENTERED) | HORIZON_EVENT_BIT(HORIZON_EVENT_ONLINE_CHANGED));
-    g_benchHotkey = host->register_hotkey(host->plugin, "bench", "Benchmark start/stop", "Ctrl+F10", &onBenchHotkey, nullptr);
+    g_benchHotkey = host->register_hotkey(host->plugin, "bench", "Benchmark start/stop", "Ctrl+F12", &onBenchHotkey, nullptr);
     readLauncherRequest();
     registerOverlay();
     logf(HORIZON_LOG_INFO, "started: post_present %s, timer %.2f ms, %s", g_hasPostPresent ? "yes" : "no (older host: limiter before Present)",

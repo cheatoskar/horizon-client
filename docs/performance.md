@@ -22,7 +22,7 @@ Cost of measuring: the frame timer costs nothing measurable. The call counter go
 
 ## Benchmark
 
-- **By hand:** Seconds and Label on the page, then "Start" (or Ctrl+F10). Records from now on.
+- **By hand:** Seconds and Label on the page, then "Start" (or Ctrl+F12). Records from now on.
 - **From the launcher ("Benchmark starten"):** the launcher writes `<data>\bench-request.json` and starts the game. Mode `map`: as soon as the main menu is there (3 s settled), the plugin starts the chosen map in solo, waits for the race, warms up (default 5 s) and records `runs` windows of `seconds` one after another while the car stands at the start (a fixed camera on a known map), then goes back to the menu. Mode `replay`: I open a replay myself; recording starts when the game state is "replay". The request is renamed to `bench-request.taken.json` at once, so a crash never repeats it.
 - Results: `<data>\bench\<yyyymmdd-hhmmss>_<label>[_<run>].json` (summary) and `.csv` (one line per frame, all counters). `<data>` is `horizon\data\performance\` (ESWC/Sunrise) or `...\TMLoader\...\products\Horizon Host\data\performance\` (Forever). The summary holds every switch's state (`options`), so a result says what was on.
 
@@ -58,7 +58,7 @@ Default sets: `baseline` (all off), `limiter+vsync-off` (limit 120, V-Sync off),
 
 **Replay or map:** the host cannot open a replay (ABI 1.3 has `play_map_file` only), so in replay mode I open the replay once myself; the frame-time window says which one ("Benchmark: open the replay X.Replay.Gbx, the series starts by itself"). From then on it runs by itself; closing the replay pauses the series until a replay is open again. `-Map` (or `"map"` in the request) is fully unattended, but the car stands at the start. Picking a replay: `"replay": "C:\\path\\x.Replay.Gbx"`, or a name, looked up in `<user folder>\Tracks\Replays\` and `...\Autosaves\` (`.Replay.Gbx` is added). Without `replay`: the newest `*.Replay.Gbx` in `Tracks\Replays\Autosaves`, else in `Tracks\Replays`. The user folder is the game's own (`Documents\TrackMania...`).
 
-**Progress and safety:** the frame-time window shows "Benchmark 7/21: priority-high, Lauf 2/3" (warm-ups: "Benchmark Warmup 2/7: label"). Ctrl+F10 (the benchmark hotkey) stops the series. At the end, on a stop, when the race or replay ends, when the plugin is switched off or the game quits, my own settings are put back (the settings file is never written during a series, so a crash leaves them untouched too). Priority, affinity, timer and power throttling go back to what the game had.
+**Progress and safety:** the frame-time window shows "Benchmark 7/21: priority-high, Lauf 2/3" (warm-ups: "Benchmark Warmup 2/7: label"). Ctrl+F12 (the benchmark hotkey) stops the series. At the end, on a stop, when the race or replay ends, when the plugin is switched off or the game quits, my own settings are put back (the settings file is never written during a series, so a crash leaves them untouched too). Priority, affinity, timer and power throttling go back to what the game had.
 
 **Result files** in `<data>\bench\`: `<stamp>_series.json` (everything: sets, status, every run's numbers, GPU, CPU, resolution, game, replay or map, TM Vibrant Shaders yes/no, `completed`) and per window `<stamp>_series_<label>_r<N>.json/.csv` (measured) or `_w<N>` (warm-up), same format as a single benchmark with `"request": "series"`. TMVS is "yes" when `TMVibrantShaders.dll` is loaded or another `d3d9.dll` wraps the device (probably TMVS standalone).
 

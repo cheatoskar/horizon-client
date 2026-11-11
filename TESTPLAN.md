@@ -111,7 +111,7 @@ Gleiche Strecke, gleiche Auflösung, Zählung aus, TMVS aus (oder bei allen Läu
    Danach die Option wieder aus, nächste.
 3. Die Vergleichstabelle in TM Horizon zeigt pro Label den Mittelwert und den Unterschied zu `baseline`. Ein Unterschied unter ±3 % ist Rauschen. Mir die Tabelle (Screenshot) und den Ordner `bench` schicken.
 
-Der Benchmark per Hand geht auch: Seite „Benchmark“ → Label, Sekunden, „Start“ (oder Strg+F10).
+Der Benchmark per Hand geht auch: Seite „Benchmark“ → Label, Sekunden, „Start“ (oder Strg+F12).
 
 ### C. Hänger beim Start (TMUF über TMLoader, TMNF/TMUF standalone)
 
