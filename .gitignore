@@ -5,3 +5,4 @@ screens/
 *.obj
 *.pdb
 *.ilk
+dist-explorer/
