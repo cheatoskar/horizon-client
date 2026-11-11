@@ -1,0 +1,408 @@
+// Unit tests of controller-hotplug: the tracker against a game in memory (add, remove, re-add same GUID keeps the
+// slot, no registration storm, replug refresh once) and the game backend against a fake input port laid out like
+// ESWC's (enumeration callback appends a pad, binding tables get an empty range, refresh swaps the device).
+#define DIRECTINPUT_VERSION 0x0800
+#include <windows.h>
+
+#include <dinput.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "../hp_game.h"
+#include "../hp_tracker.h"
+
+using namespace hp;
+
+static int g_fail = 0, g_pass = 0;
+static void check(bool ok, const char* what) {
+    if (ok) {
+        g_pass++;
+    } else {
+        g_fail++;
+        printf("FAIL  %s\n", what);
+    }
+}
+
+static Guid G(unsigned id) {
+    Guid g;
+    memset(g.b, 0, 16);
+    memcpy(g.b, &id, 4);
+    g.b[15] = 0x55;
+    return g;
+}
+static Attached A(unsigned id, const wchar_t* name) { return Attached{G(id), G(1000 + id), name}; }
+static int countNote(const std::vector<Event>& ev, Note n) {
+    int c = 0;
+    for (const auto& e : ev)
+        if (e.what == n) c++;
+    return c;
+}
+
+// ------------------------------------------------------------------ tracker
+static void trackerTests() {
+    printf("tracker\n");
+    {
+        FakeGame game;
+        Tracker t;
+        std::vector<Event> ev;
+        check(!t.step(game, {}, 0, 0, ev) && ev.empty() && game.adds == 0, "no list yet: nothing");
+        game.readyFlag = false;
+        check(t.step(game, {A(1, L"Pad")}, 1, 0, ev) && game.adds == 0, "port not ready: wants another step, adds nothing");
+    }
+    {
+        // a pad present at start is the game's own; nothing happens
+        FakeGame game;
+        game.pads.push_back(Slot{2, G(1), true});
+        Tracker t;
+        std::vector<Event> ev;
+        t.step(game, {A(1, L"Start pad")}, 1, 0, ev);
+        check(ev.empty() && game.adds == 0, "pad present at start: no add, no note");
+        t.step(game, {A(1, L"Start pad")}, 1, 5000, ev);
+        check(ev.empty() && game.refreshes == 0, "first list never schedules a refresh of never-polled pads");
+
+        // plug in B
+        std::vector<Attached> both = {A(1, L"Start pad"), A(2, L"Pad B")};
+        t.step(game, both, 2, 6000, ev);
+        check(game.adds == 1 && countNote(ev, Note::Added) == 1 && ev.back().name == L"Pad B", "new pad: registered once, note Added");
+        check(game.pads.size() == 2 && game.pads[1].index == 3, "new pad got slot 3");
+        ev.clear();
+        for (int i = 0; i < 20; i++) t.step(game, both, 2, 6100 + i * 100, ev);
+        check(game.adds == 1 && ev.empty(), "same list again and again: no second registration (no storm)");
+
+        // unplug B
+        t.step(game, {A(1, L"Start pad")}, 3, 9000, ev);
+        check(countNote(ev, Note::Gone) == 1 && game.pads.size() == 2, "unplugged: note Gone, the game keeps the slot");
+        ev.clear();
+
+        // replug B: same slot, no new registration; the game gets it back by itself
+        game.pads[1].lost = false;
+        t.step(game, both, 4, 10000, ev);
+        check(countNote(ev, Note::Back) == 1 && ev[0].slot == 3 && game.adds == 1, "replug: note Back, same slot 3, no add");
+        t.step(game, both, 4, 13000, ev);
+        check(game.refreshes == 0, "replug, game reacquired by itself: no refresh");
+        ev.clear();
+
+        // unplug and replug again, this time the game cannot reacquire it
+        t.step(game, {A(1, L"Start pad")}, 5, 14000, ev);
+        game.pads[1].lost = true;
+        t.step(game, both, 6, 15000, ev);
+        bool more = t.step(game, both, 6, 16000, ev);
+        check(game.refreshes == 0 && more, "still lost 1 s after the replug: waits");
+        t.step(game, both, 6, 17100, ev);
+        check(game.refreshes == 1 && countNote(ev, Note::Refreshed) == 1, "still lost 2 s after the replug: one refresh");
+        game.pads[1].lost = true; // even if it stays lost
+        for (int i = 0; i < 10; i++) t.step(game, both, 6, 18000 + i * 1000, ev);
+        check(game.refreshes == 1, "refresh only once per replug");
+
+        // pulled and plugged in within a moment: same set, new list after a notification
+        ev.clear();
+        game.pads[0].lost = false; // the start pad is in use
+        t.step(game, both, 7, 30000, ev);
+        t.step(game, both, 7, 32100, ev);
+        check(game.refreshes == 2 && countNote(ev, Note::Back) == 0, "quick replug (same set, new list): one check, one refresh");
+        check(game.adds == 1, "after all that still one registration");
+    }
+    {
+        // failing registrations: 30 s apart, 3 at most, start over after a replug
+        FakeGame game;
+        game.failAdds = true;
+        Tracker t;
+        std::vector<Event> ev;
+        std::vector<Attached> l = {A(7, L"Bad pad")};
+        t.step(game, l, 1, 0, ev);
+        for (int i = 1; i < 290; i++) t.step(game, l, 1, i * 100, ev);
+        check(game.adds == 1 && countNote(ev, Note::AddFailed) == 1, "failed add: no retry within 30 s");
+        t.step(game, l, 1, 30000, ev);
+        check(game.adds == 2, "retry after 30 s");
+        t.step(game, l, 1, 60000, ev);
+        check(game.adds == 3 && countNote(ev, Note::AddGaveUp) == 1, "third failure: gives up");
+        for (int i = 0; i < 10; i++) t.step(game, l, 1, 100000 + i * 40000, ev);
+        check(game.adds == 3, "gave up: no more attempts while plugged in");
+        t.step(game, {}, 2, 600000, ev);
+        game.failAdds = false;
+        t.step(game, l, 3, 601000, ev);
+        check(game.adds == 4 && countNote(ev, Note::Added) == 1, "plugged in again: starts over and works");
+    }
+    {
+        FakeGame game;
+        Tracker t;
+        std::vector<Event> ev;
+        std::vector<Attached> l;
+        for (unsigned i = 0; i < 6; i++) l.push_back(A(20 + i, L"Many"));
+        const bool more = t.step(game, l, 1, 0, ev);
+        check(game.adds == 4 && more, "6 new pads: 4 in this step, wants another");
+        t.step(game, l, 1, 50, ev);
+        check(game.adds == 6 && game.pads.size() == 6, "the other 2 in the next step");
+        std::vector<Tracker::View> v;
+        t.view(v);
+        check(v.size() == 6 && v[0].present && v[0].inGame, "view lists them as present and in game");
+    }
+}
+
+// ------------------------------------------------------------------ fake input port (ESWC layout)
+struct FakeDev { // IDirectInputDevice8W stand-in
+    void** vtbl;
+    GUID g;
+    LONG refs;
+    int unacquired;
+    const DIDATAFORMAT* fmt;
+    DWORD coop;
+    DWORD buffer;
+};
+static ULONG STDMETHODCALLTYPE devRelease(FakeDev* d) { return static_cast<ULONG>(--d->refs); }
+static HRESULT STDMETHODCALLTYPE devSetProperty(FakeDev* d, REFGUID, LPCDIPROPHEADER h) {
+    d->buffer = reinterpret_cast<const DIPROPDWORD*>(h)->dwData;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE devUnacquire(FakeDev* d) {
+    d->unacquired++;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE devSetDataFormat(FakeDev* d, LPCDIDATAFORMAT f) {
+    d->fmt = f;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE devSetCoop(FakeDev* d, HWND, DWORD c) {
+    d->coop = c;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE devGetInfo(FakeDev* d, LPDIDEVICEINSTANCEW inst) {
+    if (inst->dwSize != sizeof(DIDEVICEINSTANCEW)) return E_INVALIDARG;
+    inst->guidInstance = d->g;
+    return S_OK;
+}
+static void* g_devVtbl[32];
+static FakeDev* newDev(const GUID& g) {
+    FakeDev* d = static_cast<FakeDev*>(calloc(1, sizeof(FakeDev)));
+    d->vtbl = g_devVtbl;
+    d->g = g;
+    d->refs = 1;
+    return d;
+}
+
+struct FakeDI {
+    void** vtbl;
+    int creates;
+};
+static HRESULT STDMETHODCALLTYPE diCreateDevice(FakeDI* di, REFGUID g, LPDIRECTINPUTDEVICE8W* out, LPUNKNOWN) {
+    di->creates++;
+    *out = reinterpret_cast<LPDIRECTINPUTDEVICE8W>(newDev(g));
+    return S_OK;
+}
+static void* g_diVtbl[16];
+static FakeDI g_di;
+
+static uintptr_t g_portVtbl[64];
+static uintptr_t g_padVtbl[64];
+static uintptr_t g_otherVtbl[64];
+static DIDATAFORMAT g_fmt;
+static uint8_t* g_port = nullptr;
+static uint8_t g_cfg[0x100];
+static bool g_enumFails = false;
+static const uint8_t kSig[] = {0x11, 0x22, 0x33, 0x44};
+
+static uint32_t& U32(uint8_t* p, size_t off) { return *reinterpret_cast<uint32_t*>(p + off); }
+static void appendDevice(uint8_t* port, uint8_t* dev) {
+    uint32_t n = U32(port, 0x2c);
+    void** arr = static_cast<void**>(malloc((n + 1) * sizeof(void*)));
+    if (n) memcpy(arr, reinterpret_cast<void*>(static_cast<uintptr_t>(U32(port, 0x30))), n * sizeof(void*));
+    free(reinterpret_cast<void*>(static_cast<uintptr_t>(U32(port, 0x30))));
+    arr[n] = dev;
+    U32(port, 0x30) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arr));
+    U32(port, 0x2c) = n + 1;
+}
+static uint8_t* newPad(const GUID& g, uint32_t lost) {
+    uint8_t* pad = static_cast<uint8_t*>(calloc(1, 0x184));
+    U32(pad, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_padVtbl));
+    U32(pad, 0x14) = lost;
+    U32(pad, 0x34) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(newDev(g)));
+    return pad;
+}
+static BOOL CALLBACK fakeEnumCb(const DIDEVICEINSTANCEW* inst, void* port) {
+    if (!g_enumFails) appendDevice(static_cast<uint8_t*>(port), newPad(inst->guidInstance, 1));
+    return DIENUM_CONTINUE;
+}
+static void __fastcall fakeReserve(uint32_t* arr, void*, uint32_t n) { // {count, ptr, cap} of 8-byte items
+    if (static_cast<int>(n - arr[2]) <= 0) return;
+    uint32_t* items = static_cast<uint32_t*>(malloc(n * 8));
+    if (arr[0]) memcpy(items, reinterpret_cast<void*>(static_cast<uintptr_t>(arr[1])), arr[0] * 8);
+    free(reinterpret_cast<void*>(static_cast<uintptr_t>(arr[1])));
+    arr[1] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(items));
+    arr[2] = n;
+}
+static uint8_t* newTable(uint32_t devices, uint32_t bindings) {
+    uint8_t* t = static_cast<uint8_t*>(calloc(1, 0x38));
+    uint32_t* ranges = reinterpret_cast<uint32_t*>(t + 0x14);
+    fakeReserve(ranges, nullptr, devices);
+    ranges[0] = devices;
+    uint32_t* items = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(ranges[1]));
+    for (uint32_t k = 0; k < devices; k++) { // all bindings on the last device
+        items[k * 2] = k + 1 == devices ? 0 : 0;
+        items[k * 2 + 1] = k + 1 == devices ? bindings : 0;
+    }
+    U32(t, 0x20) = bindings;
+    return t;
+}
+
+static void buildPort() {
+    g_devVtbl[2] = reinterpret_cast<void*>(&devRelease);
+    g_devVtbl[6] = reinterpret_cast<void*>(&devSetProperty);
+    g_devVtbl[8] = reinterpret_cast<void*>(&devUnacquire);
+    g_devVtbl[11] = reinterpret_cast<void*>(&devSetDataFormat);
+    g_devVtbl[13] = reinterpret_cast<void*>(&devSetCoop);
+    g_devVtbl[15] = reinterpret_cast<void*>(&devGetInfo);
+    g_diVtbl[3] = reinterpret_cast<void*>(&diCreateDevice);
+    g_di.vtbl = g_diVtbl;
+    g_port = static_cast<uint8_t*>(calloc(1, 0xac));
+    U32(g_port, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_portVtbl));
+    U32(g_port, 0x94) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&g_di));
+    U32(g_port, 0x98) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_cfg));
+    // mouse, keyboard (not pads), one pad present at start
+    for (int i = 0; i < 2; i++) {
+        uint8_t* other = static_cast<uint8_t*>(calloc(1, 0x138));
+        U32(other, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_otherVtbl));
+        appendDevice(g_port, other);
+    }
+    GUID a;
+    memcpy(&a, G(1).b, 16);
+    appendDevice(g_port, newPad(a, 0));
+    // two binding tables of a running race (3 devices)
+    uint8_t** tables = static_cast<uint8_t**>(malloc(2 * sizeof(void*)));
+    tables[0] = newTable(3, 5);
+    tables[1] = newTable(3, 0);
+    U32(g_port, 0x14) = 2;
+    U32(g_port, 0x18) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(tables));
+}
+
+static uint8_t* g_portGlobal = nullptr;
+
+static void backendTests() {
+    printf("game backend (fake port)\n");
+    buildPort();
+    static const CodeSig code[] = {{reinterpret_cast<uintptr_t>(kSig), sizeof(kSig), kSig}};
+    const uint8_t wrong[] = {0x11, 0x22, 0x33, 0x45};
+    static CodeSig badCode[] = {{reinterpret_cast<uintptr_t>(kSig), sizeof(kSig), nullptr}};
+    badCode[0].bytes = wrong;
+    static PtrSig ptrs[1];
+    g_portVtbl[0x2c] = 0x12345678;
+    ptrs[0] = PtrSig{reinterpret_cast<uintptr_t>(&g_portVtbl[0x2c]), 0x12345678};
+    GameTable t = {"fake",
+                   0,
+                   reinterpret_cast<uintptr_t>(&g_portGlobal),
+                   reinterpret_cast<uintptr_t>(g_portVtbl),
+                   reinterpret_cast<uintptr_t>(g_padVtbl),
+                   reinterpret_cast<uintptr_t>(&fakeEnumCb),
+                   reinterpret_cast<uintptr_t>(&fakeReserve),
+                   reinterpret_cast<uintptr_t>(&g_fmt),
+                   code,
+                   1,
+                   ptrs,
+                   1};
+    {
+        GameTable bad = t;
+        bad.code = badCode;
+        GameBackend b(&bad, 0x400000, nullptr, nullptr);
+        check(!b.ready() && b.failed(), "code bytes differ: backend stays off");
+        PtrSig badPtr[1] = {{reinterpret_cast<uintptr_t>(&g_portVtbl[0x2c]), 0x1}};
+        GameTable bad2 = t;
+        bad2.ptrs = badPtr;
+        GameBackend b2(&bad2, 0x400000, nullptr, nullptr);
+        check(!b2.ready() && b2.failed(), "vtable entry differs: backend stays off");
+        GameTable bad3 = t;
+        bad3.code = nullptr;
+        bad3.codeCount = 0;
+        bad3.ptrs = nullptr;
+        bad3.ptrCount = 0;
+        bad3.enumCallback = 0x10; // never read: no port yet
+        GameBackend b3(&bad3, 0x400000, nullptr, nullptr);
+        check(!b3.ready() && !b3.failed(), "no port yet: not ready, not failed");
+    }
+    GameBackend b(&t, 0x400000, nullptr, nullptr);
+    check(!b.ready(), "port global still 0: not ready");
+    g_portGlobal = g_port;
+    check(b.ready() && !b.failed(), "port set: ready");
+    std::vector<Slot> s;
+    b.slots(s);
+    check(s.size() == 1 && s[0].index == 2 && sameGuid(s[0].instance, G(1)) && !s[0].lost, "slots: only the pad (index 2), its GUID");
+
+    // add B through the game's callback
+    check(b.add(A(2, L"Pad B")), "add: true");
+    check(U32(g_port, 0x2c) == 4, "port has 4 devices");
+    uint8_t** tables = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_port, 0x18)));
+    for (int k = 0; k < 2; k++) {
+        uint8_t* tb = tables[k];
+        const uint32_t* r = reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(U32(tb, 0x18)));
+        check(U32(tb, 0x14) == 4, k == 0 ? "table 1 has 4 ranges" : "table 2 has 4 ranges");
+        check(r[6] == U32(tb, 0x20) && r[7] == 0, "new range: starts at the binding count, empty");
+        check(r[4] == 0 && r[5] == U32(tb, 0x20), "old ranges unchanged");
+    }
+    b.slots(s);
+    check(s.size() == 2 && s[1].index == 3 && sameGuid(s[1].instance, G(2)) && s[1].lost, "slots: B at index 3, not acquired yet");
+
+    // the callback adds nothing (CreateDevice failed in the game)
+    g_enumFails = true;
+    check(!b.add(A(3, L"Pad C")) && U32(g_port, 0x2c) == 4, "callback added nothing: false, tables untouched");
+    g_enumFails = false;
+
+    // refresh slot 3
+    uint8_t* padB = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_port, 0x30)))[3];
+    FakeDev* old = reinterpret_cast<FakeDev*>(static_cast<uintptr_t>(U32(padB, 0x34)));
+    U32(padB, 0x14) = 0;
+    check(b.refresh(3, A(2, L"Pad B")), "refresh: true");
+    FakeDev* fresh = reinterpret_cast<FakeDev*>(static_cast<uintptr_t>(U32(padB, 0x34)));
+    check(fresh != old && old->unacquired == 1 && old->refs == 0, "old device unacquired and released");
+    check(fresh->fmt == &g_fmt && fresh->coop == (DISCL_NONEXCLUSIVE | DISCL_FOREGROUND) && fresh->buffer == 0x100,
+          "fresh device set up like the game (pad format, non-exclusive foreground, buffer 256)");
+    check(U32(padB, 0x14) == 1 && g_di.creates == 1, "slot marked for the game's own Acquire; one CreateDevice");
+    g_cfg[0x84] = 1;
+    check(b.refresh(3, A(2, L"Pad B")), "refresh with exclusive config");
+    fresh = reinterpret_cast<FakeDev*>(static_cast<uintptr_t>(U32(padB, 0x34)));
+    check(fresh->coop == (DISCL_EXCLUSIVE | DISCL_FOREGROUND), "exclusive config: exclusive like the game");
+    g_cfg[0x84] = 0;
+    check(!b.refresh(1, A(2, L"x")), "refresh of the keyboard slot: refused");
+    check(!b.refresh(9, A(2, L"x")), "refresh of a slot out of range: refused");
+    b.slots(s);
+    check(s.size() == 2 && sameGuid(s[1].instance, G(2)), "slot keeps its GUID after the refresh");
+
+    // tracker + backend: plug, unplug, replug -> one registration, same slot
+    Tracker tr;
+    std::vector<Event> ev;
+    std::vector<Attached> l = {A(1, L"Start"), A(2, L"Pad B")};
+    tr.step(b, l, 1, 0, ev);
+    check(ev.empty() && U32(g_port, 0x2c) == 4, "tracker on the fake port: both known, nothing added");
+    l.push_back(A(4, L"Pad D"));
+    tr.step(b, l, 2, 100, ev);
+    check(U32(g_port, 0x2c) == 5 && countNote(ev, Note::Added) == 1, "Pad D registered through the callback");
+    tr.step(b, {A(1, L"Start"), A(2, L"Pad B")}, 3, 200, ev);
+    tr.step(b, l, 4, 300, ev);
+    check(U32(g_port, 0x2c) == 5 && countNote(ev, Note::Back) == 1, "Pad D replugged: same slot, no second device");
+    for (int i = 0; i < 1000 && U32(g_port, 0x2c) < GameBackend::kMaxDevices; i++) {
+        GUID g;
+        memcpy(&g, G(500 + i).b, 16);
+        appendDevice(g_port, newPad(g, 0));
+    }
+    check(!b.add(A(99, L"Too many")), "device limit: refused");
+}
+
+static void realTableTests() {
+    printf("real tables in a process that is not the game\n");
+    const GameTable* tables[2] = {&eswcTable(), &sunriseTable()};
+    for (const GameTable* t : tables) {
+        GameBackend b(t, 0x400000, nullptr, nullptr);
+        std::vector<Slot> s;
+        b.slots(s);
+        check(!b.ready() && b.failed() && s.empty() && !b.add(A(1, L"x")) && !b.refresh(2, A(1, L"x")),
+              "code bytes do not match here: off, no crash, no game call");
+    }
+    check(tableForTimestamp(0x5ce7272f) == &eswcTable() && tableForTimestamp(0x5cc8f0cf) == &sunriseTable() && !tableForTimestamp(1),
+          "exe timestamps pick the tables");
+}
+
+int main() {
+    realTableTests();
+    trackerTests();
+    backendTests();
+    printf("%d passed, %d failed\n", g_pass, g_fail);
+    return g_fail ? 1 : 0;
+}

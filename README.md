@@ -32,6 +32,8 @@ MSVC Build Tools (x86). `build.cmd` builds everything into `dist\legacy\` and th
 - `docs/scripting.md`: writing a script for the Horizon Scripts plugin (AngelScript, runs on every supported game)
 - `docs/profile-json.md`: how TM Horizon enables plugins (and what happens without it)
 - `docs/plugins/tmx-upload.md`: the TMX Upload plugin (replays offered to TM Horizon or the browser extension)
+- `docs/plugins/controller-hotplug.md`: the Controller nachträglich erkennen module (a pad plugged in after the game started works without a restart)
+- `docs/plugin-abi.md`, "Standalone builds": modules that also run without Horizon (`controller-hotplug` is built here as a standalone zip)
 - `TESTPLAN.md`: my test steps for the game
 
 ## Licence
