@@ -289,6 +289,20 @@ void Render() {
     UI::Text("still fine");
 }
 )");
+    addScript(game, "wdraw", toml("Window draw", "\"ui\""), R"(
+void Render() {
+    if (UI::Begin("Draw")) {
+        vec2 p = UI::GetCursorScreenPos();
+        UI::Dummy(vec2(40, 20));
+        UI::WindowDrawCircleFilled(p + vec2(10, 10), 8, vec4(1, 0.8f, 0.2f, 1));
+        UI::WindowDrawCircle(p + vec2(10, 10), 8, vec4(0.5f, 0.4f, 0.1f, 1), 1.5f);
+        UI::WindowDrawTriangleFilled(p + vec2(20, 0), p + vec2(30, 0), p + vec2(25, 8), vec4(1, 0, 0, 1));
+        UI::WindowDrawRectFilled(p + vec2(32, 2), p + vec2(38, 18), vec4(0, 1, 0, 1), 2);
+        UI::WindowDrawLine(p, p + vec2(40, 20), vec4(1, 1, 1, 1), 1);
+    }
+    UI::End();
+}
+)");
     addScript(game, "uiend", toml("UI end", "\"ui\""), "void Render() {\n    UI::End();\n}\n");
     addScript(game, "uievent", toml("UI in event", "\"ui\", \"read-game\""), "void OnRaceStart() { UI::Text(\"x\"); }\n");
     addScript(game, "solo", toml("Solo", "\"ui\""), "int n = 0;\nvoid Render() { n++; if (n % 2 == 0) print(\"solo \" + n); }\n");
@@ -370,7 +384,7 @@ void OnFinish(int t, bool pb) { Game::PlayMapFile("C:\\maps\\notamap.txt"); }
         m.tick(t);
         CHECK(imguiBalanced());
     }
-    CHECK(m.scripts().size() == 25);
+    CHECK(m.scripts().size() == 26);
 
     Script* s = get(m, "good");
     CHECK(s && s->state == ScriptState::Running);
@@ -453,6 +467,8 @@ void OnFinish(int t, bool pb) { Game::PlayMapFile("C:\\maps\\notamap.txt"); }
         CHECK(imguiBalanced());
         ImGuiWindow* win = ImGui::FindWindowByName("Good##hs.good");
         CHECK(win != nullptr);
+        ImGuiWindow* dw = ImGui::FindWindowByName("Draw##hs.wdraw");
+        CHECK(dw != nullptr && dw->DrawList->VtxBuffer.Size > 100); // the window-list shapes landed in the window
     }
 
     CHECK(contains(testhost::logs(), "[hidetimer] alpha 1 0.75 0 1")); // Clock: visible, fading, hidden, "0 = always visible"

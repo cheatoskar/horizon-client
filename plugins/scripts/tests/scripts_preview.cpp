@@ -258,6 +258,7 @@ int main(int argc, char** argv) {
         {"tab", "map-info", true},
         {"errors", "split-demo", true},
         {"overlays", "clock", false},
+        {"mapinfo", "map-info", false},
     };
     int failed = 0;
     for (const Scene& sc : scenes) {
@@ -272,15 +273,15 @@ int main(int argc, char** argv) {
         if (init(&host) != 0) return 7;
         HorizonMapInfo mi = {};
         mi.size = sizeof(mi);
-        mi.name = "A07-Race";
-        mi.author = "Nadeo";
+        mi.name = "Tor`s Gotham City";
+        mi.author = "Tor";
         mi.uid = "";
         mi.path = "";
         mi.environment = "Stadium";
-        mi.author_time = 26830;
-        mi.gold_time = 29000;
-        mi.silver_time = 33000;
-        mi.bronze_time = 41000;
+        mi.author_time = 41230;
+        mi.gold_time = 44000;
+        mi.silver_time = 50000;
+        mi.bronze_time = 58000;
         mi.author_score = -1;
         HorizonEvent e = {};
         e.size = sizeof(e);

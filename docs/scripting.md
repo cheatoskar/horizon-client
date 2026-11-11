@@ -364,6 +364,17 @@ void DrawLine(const vec2 &in a, const vec2 &in b, const vec4 &in color, float th
 void DrawCircleFilled(const vec2 &in center, float radius, const vec4 &in color)
 ```
 
+The same shapes inside your own window (`UI::Begin` ... `UI::End`), for icons next to text. They draw on the window's list, so they stay above its background and under other windows. `GetCursorScreenPos()` is where the next item goes in screen pixels; reserve the space with `UI::Dummy(size)` and draw into it.
+
+```angelscript
+vec2 GetCursorScreenPos()
+void WindowDrawLine(const vec2 &in a, const vec2 &in b, const vec4 &in color, float thickness = 1)
+void WindowDrawRectFilled(const vec2 &in min, const vec2 &in max, const vec4 &in color, float rounding = 0)
+void WindowDrawCircleFilled(const vec2 &in center, float radius, const vec4 &in color)
+void WindowDrawCircle(const vec2 &in center, float radius, const vec4 &in color, float thickness = 1)   // outline
+void WindowDrawTriangleFilled(const vec2 &in a, const vec2 &in b, const vec2 &in c, const vec4 &in color)
+```
+
 #### Host
 
 ```angelscript

@@ -447,6 +447,25 @@ void drawCircleFilled(const Vec2& center, float r, const Vec4& c) {
     if (ok("UI::DrawCircleFilled")) ImGui::GetBackgroundDrawList()->AddCircleFilled(iv(center), r, col32(c));
 }
 
+// The same shapes on the current window's draw list: they sit inside the window (above its background, below
+// windows opened later), so a script can draw icons in its own overlay. Screen pixels, like the background ones.
+Vec2 getCursorScreenPos() { return ok("UI::GetCursorScreenPos") ? hv(ImGui::GetCursorScreenPos()) : Vec2{0, 0}; }
+void wDrawLine(const Vec2& a, const Vec2& b, const Vec4& c, float thickness) {
+    if (ok("UI::WindowDrawLine")) ImGui::GetWindowDrawList()->AddLine(iv(a), iv(b), col32(c), thickness);
+}
+void wDrawRectFilled(const Vec2& a, const Vec2& b, const Vec4& c, float rounding) {
+    if (ok("UI::WindowDrawRectFilled")) ImGui::GetWindowDrawList()->AddRectFilled(iv(a), iv(b), col32(c), rounding);
+}
+void wDrawCircleFilled(const Vec2& center, float r, const Vec4& c) {
+    if (ok("UI::WindowDrawCircleFilled")) ImGui::GetWindowDrawList()->AddCircleFilled(iv(center), r, col32(c), 24);
+}
+void wDrawCircle(const Vec2& center, float r, const Vec4& c, float thickness) {
+    if (ok("UI::WindowDrawCircle")) ImGui::GetWindowDrawList()->AddCircle(iv(center), r, col32(c), 24, thickness);
+}
+void wDrawTriangleFilled(const Vec2& a, const Vec2& b, const Vec2& c, const Vec4& col) {
+    if (ok("UI::WindowDrawTriangleFilled")) ImGui::GetWindowDrawList()->AddTriangleFilled(iv(a), iv(b), iv(c), col32(col));
+}
+
 // ---- host ----
 bool isMenuOpen() {
     Manager* m = currentManager();
@@ -668,6 +687,12 @@ bool registerUiApi(asIScriptEngine* e) {
         {"void DrawRectFilled(const vec2 &in min, const vec2 &in max, const vec4 &in color, float rounding = 0)", asFUNCTION(drawRectFilled)},
         {"void DrawLine(const vec2 &in a, const vec2 &in b, const vec4 &in color, float thickness = 1)", asFUNCTION(drawLine)},
         {"void DrawCircleFilled(const vec2 &in center, float radius, const vec4 &in color)", asFUNCTION(drawCircleFilled)},
+        {"vec2 GetCursorScreenPos()", asFUNCTION(getCursorScreenPos)},
+        {"void WindowDrawLine(const vec2 &in a, const vec2 &in b, const vec4 &in color, float thickness = 1)", asFUNCTION(wDrawLine)},
+        {"void WindowDrawRectFilled(const vec2 &in min, const vec2 &in max, const vec4 &in color, float rounding = 0)", asFUNCTION(wDrawRectFilled)},
+        {"void WindowDrawCircleFilled(const vec2 &in center, float radius, const vec4 &in color)", asFUNCTION(wDrawCircleFilled)},
+        {"void WindowDrawCircle(const vec2 &in center, float radius, const vec4 &in color, float thickness = 1)", asFUNCTION(wDrawCircle)},
+        {"void WindowDrawTriangleFilled(const vec2 &in a, const vec2 &in b, const vec2 &in c, const vec4 &in color)", asFUNCTION(wDrawTriangleFilled)},
         {"bool IsMenuOpen()", asFUNCTION(isMenuOpen)},
         {"float GetScale()", asFUNCTION(getScale)},
         {"vec4 AccentColor()", asFUNCTION(accent)},

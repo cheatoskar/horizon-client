@@ -1,4 +1,5 @@
 // Map Info: name, author and medal times of the running map, from OnMapLoaded.
+// Small box in the HUD font: name, "by <author>", then one row per medal (a drawn medal icon and the time).
 // It fades out "Hide after" seconds after the map loads and comes back while the Horizon menu is open and
 // after the "Show script overlays" hotkey (default Ctrl+F4, the host calls OnPeek()).
 // Runs unchanged on ESWC, Sunrise, TMNF and TMUF. Some games leave the author empty for maps started
@@ -81,13 +82,37 @@ void OnMenu() {
     haveMap = false;
 }
 
-void MedalRow(const string &in name, int ms, const vec4 &in color) {
-    if (ms < 0) return;
-    UI::TableNextRow();
-    UI::TableNextColumn();
-    UI::TextColored(color, name);
-    UI::TableNextColumn();
-    UI::Text(Time::FormatRace(ms));
+// Colour with the fade applied: shapes in the draw list do not follow the window alpha by themselves.
+vec4 Tint(const vec4 &in c, float shade = 1.0f, float a = 1.0f) {
+    return vec4(c.x * shade, c.y * shade, c.z * shade, c.w * a * alpha);
+}
+
+// A medal about one text line high: two-tailed ribbon on top, a disc with a darker rim and a light highlight.
+void DrawMedal(const vec2 &in pos, float size, const vec4 &in color) {
+    float r = size * 0.38f;
+    float cx = pos.x + size * 0.5f;
+    float cy = pos.y + size - r - size * 0.04f;
+    float top = pos.y + size * 0.04f;
+    float w = r * 0.8f;
+    vec4 ribbon = Tint(color, 0.62f);
+    UI::WindowDrawTriangleFilled(vec2(cx - r * 0.95f, top), vec2(cx - r * 0.15f, top), vec2(cx + w * 0.55f, cy), ribbon);
+    UI::WindowDrawTriangleFilled(vec2(cx + r * 0.95f, top), vec2(cx + r * 0.15f, top), vec2(cx - w * 0.55f, cy), Tint(color, 0.80f));
+    UI::WindowDrawCircleFilled(vec2(cx, cy), r, Tint(color, 0.50f));
+    UI::WindowDrawCircleFilled(vec2(cx, cy), r - size * 0.07f, Tint(color));
+    UI::WindowDrawCircleFilled(vec2(cx - r * 0.30f, cy - r * 0.32f), r * 0.28f, Tint(vec4(1, 1, 1, 1), 1.0f, 0.55f));
+}
+
+void MedalRow(const vec4 &in color, const string &in text) {
+    float h = UI::CalcTextSize("0").y;
+    vec2 p = UI::GetCursorScreenPos();
+    UI::Dummy(vec2(h, h));
+    DrawMedal(p, h, color);
+    UI::SameLine();
+    UI::Text(text);
+}
+
+void MedalTime(const vec4 &in color, int ms) {
+    if (ms >= 0) MedalRow(color, Time::FormatRace(ms));
 }
 
 void Render() {
@@ -98,10 +123,13 @@ void Render() {
     if (alpha < target) alpha = alpha + step > target ? target : alpha + step;
     else alpha = alpha - step < target ? target : alpha - step;
     if (alpha <= 0.001f) return;
+    float sc = UI::GetScale();
     UI::PushStyleVar(UI::StyleVar::Alpha, alpha);
+    UI::PushStyleVar(UI::StyleVar::WindowPadding, vec2(8.0f * sc, 5.0f * sc));
+    UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(5.0f * sc, 1.0f * sc));
 
     vec2 screen = UI::GetScreenSize();
-    float m = margin * UI::GetScale();
+    float m = margin * sc;
     bool right = position == 1 || position == 3;
     bool bottom = position == 2 || position == 3;
     UI::SetNextWindowPos(vec2(right ? screen.x - m : m, bottom ? screen.y - m : m), UI::Cond::Always,
@@ -110,25 +138,23 @@ void Render() {
     int flags = UI::WindowFlags::NoDecoration | UI::WindowFlags::AlwaysAutoResize | UI::WindowFlags::NoInputs
               | UI::WindowFlags::NoSavedSettings | UI::WindowFlags::NoFocusOnAppearing | UI::WindowFlags::NoNav;
     if (UI::Begin("Map Info", flags)) {
-        UI::PushFont(UI::Font::Title);
         UI::Text(mapName.isEmpty() ? "Unnamed map" : mapName);
-        UI::PopFont();
         string sub = mapAuthor.isEmpty() ? "" : "by " + mapAuthor;
-        if (!environment.isEmpty()) sub += (sub.isEmpty() ? "" : "  ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·  ") + environment;
+        if (!environment.isEmpty()) sub += (sub.isEmpty() ? "" : " - ") + environment;
         if (!sub.isEmpty()) UI::TextColored(UI::MutedColor(), sub);
 
         if (showMedals) {
             if (stunts) {
-                if (authorScore >= 0) UI::TextColored(AUTHOR, "Author score " + authorScore);
-            } else if (UI::BeginTable("medals", 2, UI::TableFlags::SizingFixedFit)) {
-                MedalRow("Author", authorTime, AUTHOR);
-                MedalRow("Gold", goldTime, GOLD);
-                MedalRow("Silver", silverTime, SILVER);
-                MedalRow("Bronze", bronzeTime, BRONZE);
-                UI::EndTable();
+                if (authorScore >= 0) MedalRow(AUTHOR, "" + authorScore);
+            } else {
+                UI::Dummy(vec2(0.0f, 2.0f * sc));
+                MedalTime(AUTHOR, authorTime);
+                MedalTime(GOLD, goldTime);
+                MedalTime(SILVER, silverTime);
+                MedalTime(BRONZE, bronzeTime);
             }
         }
     }
     UI::End();
-    UI::PopStyleVar();
+    UI::PopStyleVar(3);
 }
