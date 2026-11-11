@@ -160,7 +160,7 @@ The TMX rules for every plugin, online or not:
 Competition Patch is a mod for TMNF/TMUF that makes runs comparable. While it is loaded:
 
 - my plugin never touches timing, physics, input or replay data,
-- reflection writes and scripts are off while CP is loaded and a run is going,
+- reflection writes are off while CP is loaded and a run is going; Horizon Scripts does not load scripts with the `game-control` permission while CP is loaded (read-only scripts keep running, see `docs/scripting.md`),
 - `actions_allowed(plugin)` returns 0 during such a run and `HORIZON_ERR_BLOCKED_ONLINE` comes back from game control calls.
 
 I do not work around this. Read-only plugins (overlays, loggers) are fine.

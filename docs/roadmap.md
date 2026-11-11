@@ -9,6 +9,18 @@ State of 0.1.0 (2026-11-11). Additive ABI changes only (`HORIZON_ABI_MINOR`), se
 - ~~`save_replay`~~ done on ESWC in 0.2.0 (the Autosave plugin's save code, now also in the host). Open: Sunrise (replay field of the app not known yet), Forever; ESWC Autosave could use `save_replay` instead of its own copy of the code.
 - `unsubscribe`/hotkey query: not needed so far.
 
+## Phase 2: scripts (Horizon Scripts plugin)
+
+Built (branch `scripts`, plugin 0.1.0, not yet run in a game): AngelScript 2.38.0 as a plugin (`plugins/scripts`), no host changes. Scripts in `<game>\horizon\scripts\<id>\` with `info.toml`/`info.json`, hot reload, per-script errors with file:line in the Scripts tab, settings page from `[Setting]` globals, UI (ImGui subset), Time, Game (state, map, PlayMapFile/ReturnToMenu behind `game-control`), read-only Reflection over the Node Explorer's read layer, IO for the script's own data folder, Log. Time budget per callback, online gate, Competition Patch rule. Guide: `docs/scripting.md`.
+
+Next, in this order:
+
+- **Write access behind permissions**: reflection writes and parameterless method calls through the engine's own member accessors, a new permission (`write-game`), solo only, never with Competition Patch loaded, never on members that touch physics, timing, input or replays (allow list per class, not a block list).
+- **Net**: HTTP GET/POST to an allow list declared in `info.toml` (TMX API first), off the game thread, results delivered in a callback; never while a CP run is validated.
+- **Openplanet-compat layer** for simple UI plugins (`UI::`, `Render`/`RenderMenu`, `[Setting]`, `print`): only after asking Openplanet's author whether that is welcome, and without copying Openplanet code or docs.
+- Smaller: `yield()`-style coroutines (Main() that waits for a frame), `UI::Begin` with a close button (needs unsafe references or a handle type), vec4 colour settings (`[Setting color]` is parsed but ignored today), `Game::Map` thumbnail, Sunrise/Forever events as the host gains them (scripts get them without changes).
+- Before a release: run both examples in ESWC, Sunrise, TMNF and TMUF (TESTPLAN), a TMX-validated run with CP 2.0 and the plugin loaded, and ask donadigo how CP treats AngelScript in another DLL.
+
 ## Game adapters
 
 - ESWC: map uid/author/path in MAP_LOADED only when gamectl started the map (gbx header). For maps started from the game's own menu they stay "" (no reflection field for the uid; the challenge's file is reachable through its fid, offsets not mapped yet).

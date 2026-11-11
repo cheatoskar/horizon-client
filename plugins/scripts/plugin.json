@@ -11,7 +11,7 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Runs AngelScript scripts from horizon\scripts on every supported game.",
+  "description": "Runs AngelScript scripts from horizon\\scripts on every supported game.",
   "author": "cheatoskar",
   "icon": "icon.png"
 }

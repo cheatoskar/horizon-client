@@ -181,7 +181,7 @@ void drawSettingWidget(Script& s, ScriptSetting& st) {
     default:
         if (st.typeId == stringType) {
             std::string* v = static_cast<std::string*>(st.addr);
-            char buf[1024];
+            char buf[4096]; // like the host settings read
             strncpy_s(buf, sizeof(buf), v->c_str(), _TRUNCATE);
             changed = m.multiline ? ImGui::InputTextMultiline(label.c_str(), buf, sizeof(buf), ImVec2(0, 80.0f * uiScale()))
                                   : ImGui::InputText(label.c_str(), buf, sizeof(buf));
@@ -219,7 +219,8 @@ void drawMessages(Script& s, bool problems) {
         return;
     }
     const float lineH = ImGui::GetTextLineHeightWithSpacing();
-    const float h = std::min(static_cast<float>(n) * lineH * 1.4f + 12.0f * uiScale(), problems ? 220.0f * uiScale() : 160.0f * uiScale());
+    const float pad = ImGui::GetStyle().WindowPadding.y * 2.0f;
+    const float h = std::min(static_cast<float>(n) * lineH * 1.5f + pad + 4.0f * uiScale(), problems ? 220.0f * uiScale() : 160.0f * uiScale());
     ImGui::PushStyleColor(ImGuiCol_ChildBg, tok(&HorizonStyle::bg2, ImVec4(0.06f, 0.07f, 0.10f, 1.0f)));
     if (ImGui::BeginChild(problems ? "##problems" : "##log", ImVec2(0, h), ImGuiChildFlags_AlwaysUseWindowPadding)) {
         for (const Message& m : s.messages) {
@@ -378,7 +379,10 @@ void drawScriptsTab() {
             ImGui::SameLine();
             const std::string name = sc.hasManifest && !sc.manifest.name.empty() ? sc.manifest.name : sc.id;
             const ImVec2 start = ImGui::GetCursorPos();
-            if (ImGui::Selectable("##sel", g_selected == sc.id, 0, ImVec2(0, ImGui::GetTextLineHeight() * 2.1f))) g_selected = sc.id;
+            if (ImGui::Selectable("##sel", g_selected == sc.id, 0, ImVec2(0, ImGui::GetTextLineHeight() * 2.1f))) {
+                g_selected = sc.id;
+                g_host->set_string(g_host->plugin, "Selected", g_selected.c_str()); // the tab opens on it next time
+            }
             ImGui::SetCursorPos(start);
             ImGui::BeginGroup();
             ImGui::TextUnformatted(name.c_str());
@@ -408,7 +412,7 @@ void drawGeneralSettings() {
         g_mgr.cfg.callLimitMs = limit;
         g_host->set_int(g_host->plugin, "CallLimitMs", limit);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A script call that runs longer is stopped (Main() gets 4x).");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A script call that runs longer is stopped (Main() and global initialisers get 4x).");
     int reads = g_mgr.cfg.readLimit;
     if (ImGui::SliderInt("Game reads per frame", &reads, 500, 20000)) {
         g_mgr.cfg.readLimit = reads;
@@ -465,6 +469,9 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     const wchar_t* df = host->data_folder_w ? host->data_folder_w(host->plugin) : nullptr;
     const std::wstring dataDir = df && *df ? std::wstring(df) : gameFolder + L"horizon\\data\\scripts\\";
     loadConfig();
+    char sel[96];
+    host->get_string(host->plugin, "Selected", "", sel, sizeof(sel));
+    g_selected = sel;
     if (!g_mgr.init(host, scriptsDir, dataDir, gi ? gi->game : 0)) {
         g_initError = "AngelScript could not be set up (see the log).";
         host->log(host->plugin, HORIZON_LOG_ERROR, "script engine did not start");

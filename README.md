@@ -29,10 +29,11 @@ MSVC Build Tools (x86). `build.cmd` builds everything into `dist\legacy\` and th
 ## Docs
 
 - `docs/plugin-abi.md`: writing a plugin
+- `docs/scripting.md`: writing a script for the Horizon Scripts plugin (AngelScript, runs on every supported game)
 - `docs/profile-json.md`: how TM Horizon enables plugins (and what happens without it)
 - `docs/plugins/tmx-upload.md`: the TMX Upload plugin (replays offered to TM Horizon or the browser extension)
 - `TESTPLAN.md`: my test steps for the game
 
 ## Licence
 
-MIT (`LICENSE`). Vendored: Dear ImGui 1.91.5 (MIT), the reflection and game-control modules from my legacy-randomizer repo (MIT), see `third_party/README.md`.
+MIT (`LICENSE`). Vendored: Dear ImGui 1.91.5 (MIT), AngelScript 2.38.0 (zlib, Horizon Scripts plugin only), the reflection and game-control modules from my legacy-randomizer repo (MIT), see `third_party/README.md`.

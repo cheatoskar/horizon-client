@@ -588,7 +588,7 @@ void Manager::applyGate(Script& s) {
     s.gameControlNow = g.gameControl;
     if (g.state == GateState::BlockedCp) {
         // Competition Patch showed up after the script was loaded
-        unloadScript(s, false);
+        unloadScript(s, true); // OnUnload may still save its own data files
         s.state = ScriptState::BlockedCp;
         s.stateText = gateText(g.state);
         return;

@@ -378,11 +378,13 @@ Nod root(const std::string& name) {
 bool nodIsNull(const Nod* s) { return s->ptr == 0; }
 std::string nodClassName(const Nod* s) {
     if (!ready("Nod::ClassName") || !s->ptr) return std::string();
+    g_lastError.clear();
     const nx::ClassEntry* c = g_cat.classOf(s->ptr);
     return c ? c->name : std::string();
 }
 bool nodIsKindOf(const std::string& cls, const Nod* s) {
     if (!ready("Nod::IsKindOf") || !s->ptr) return false;
+    g_lastError.clear();
     for (const nx::ClassEntry* c = g_cat.classOf(s->ptr); c; c = c->parent)
         if (c->name == cls) return true;
     return false;
@@ -392,6 +394,7 @@ void nodDefault(Nod* self) { new (self) Nod{0}; }
 
 bool available() {
     if (!requirePerm(PermReadGame, "Reflection::Available")) return false;
+    g_lastError.clear();
     return ensureCatalog();
 }
 std::string lastError() { return g_lastError; }
