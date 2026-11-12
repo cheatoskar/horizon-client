@@ -125,17 +125,20 @@ int splitCount(const std::vector<int>& live, const MapStats& s, const Comparison
     return static_cast<int>(n);
 }
 
-std::vector<Row> buildRows(const std::vector<int>& live, const MapStats& s, const Comparison& target) {
+std::vector<Row> buildRows(const std::vector<int>& live, const MapStats& s, const Comparison& target, bool finished) {
     const int n = splitCount(live, s, target);
     std::vector<Row> rows;
     const bool pbFits = !s.pb.empty() && static_cast<int>(s.pb.size()) == n;
     const bool tFits = !target.splits.empty() && static_cast<int>(target.splits.size()) == n;
+    // The last row is the finish only when the count is known (PB or target of this length) or the run finished:
+    // without them (a new map on ESWC/Sunrise/Original) the live run's last split is just the latest checkpoint.
+    const bool lastIsFinish = finished || pbFits || tFits;
     int prevPb = kNoDelta, prevT = kNoDelta;
     int prevTime = 0;
     for (int i = 0; i < n; i++) {
         Row r;
         r.index = i;
-        r.finish = i == n - 1;
+        r.finish = lastIsFinish && i == n - 1;
         r.time = i < static_cast<int>(live.size()) ? live[static_cast<size_t>(i)] : -1;
         r.pbSplit = pbFits ? s.pb[static_cast<size_t>(i)] : -1;
         r.targetSplit = tFits ? target.splits[static_cast<size_t>(i)] : -1;

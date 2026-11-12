@@ -424,8 +424,11 @@ void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
     const float lineW = 300.0f * s;
     char cp[32] = "";
     if (n > 0) {
-        if (done >= n) snprintf(cp, sizeof(cp), "Finish");
-        else snprintf(cp, sizeof(cp), "CP %d/%d", done, n - 1);
+        // count known (the last row is the finish): "CP 2/5", "Finish" once crossed; unknown: "CP 2"
+        const bool countKnown = rows.back().finish;
+        if (done >= n && countKnown) snprintf(cp, sizeof(cp), "Finish");
+        else if (countKnown) snprintf(cp, sizeof(cp), "CP %d/%d", done, n - 1);
+        else snprintf(cp, sizeof(cp), "CP %d", done);
     }
     const float cpW = cp[0] ? ImGui::CalcTextSize(cp).x : 0.0f;
     ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
@@ -590,7 +593,7 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
 void HORIZON_CALL drawSplits(void*) {
     if (!g_ui) return;
     const ck::Palette p = ck::palette(g_host);
-    const std::vector<wrh::Row> rows = wrh::buildRows(g_live, g_stats, g_target);
+    const std::vector<wrh::Row> rows = wrh::buildRows(g_live, g_stats, g_target, g_runState == 2);
     ImGui::PushID("wrh-splits");
     g_rowsShown = 0;
     if (setting("Layout", 0) == 1) drawDetailed(p, rows);
@@ -771,7 +774,7 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) {
     static const HorizonPluginInfo info = {HORIZON_ABI,
                                            "wr-hunter",
                                            "WR Hunter",
-                                           "0.1.0",
+                                           "0.1.1",
                                            HORIZON_GAME_ALL,
                                            HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS,
                                            HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,

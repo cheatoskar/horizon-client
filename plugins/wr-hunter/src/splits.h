@@ -62,8 +62,9 @@ struct Row {
 };
 
 // The table for the live run (splits so far) against the PB and the target. count: number of splits of the
-// map (PB, target or the live run, whichever knows).
-std::vector<Row> buildRows(const std::vector<int>& live, const MapStats& s, const Comparison& target);
+// map (PB, target or the live run, whichever knows). finished: the live run's last split is the finish.
+// The last row is marked finish only when finished or when the PB/target gives the count.
+std::vector<Row> buildRows(const std::vector<int>& live, const MapStats& s, const Comparison& target, bool finished = false);
 int splitCount(const std::vector<int>& live, const MapStats& s, const Comparison& target);
 
 // Live delta while driving between splits: once the race time passes the comparison's next split, the

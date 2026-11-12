@@ -76,6 +76,15 @@ void testSplits() {
     check(rows[1].dPb == 9800 - 9900 && rows[1].prevDPb == -100, "previous delta kept for the colour");
     check(rows[1].sector == 4800 && rows[2].time == -1, "sector time, finish not reached");
     check(rows[1].isGold == (4800 < s.golds[1]), "gold flag against the stored gold");
+    // a new map (no PB, no target): checkpoints are checkpoints until the run finished (ESWC log 2026-11-12, G-3)
+    const wrh::MapStats fresh;
+    const wrh::Comparison none;
+    const auto one = wrh::buildRows({10330}, fresh, none);
+    check(one.size() == 1 && !one[0].finish && one[0].index == 0, "new map, CP 1: not the finish");
+    const auto two = wrh::buildRows({10330, 22230}, fresh, none);
+    check(two.size() == 2 && !two[0].finish && !two[1].finish, "new map, CP 2: no finish row");
+    const auto fin = wrh::buildRows({10330, 22230, 30100}, fresh, none, true);
+    check(fin.size() == 3 && !fin[1].finish && fin[2].finish, "new map, finished: the last row is the finish");
     check(wrh::runningDelta({5000}, 9000, t.splits) == wrh::kNoDelta, "in time: no running delta");
     check(wrh::runningDelta({5000}, 9800, t.splits) == 300, "behind the next split: running delta");
 
@@ -230,6 +239,41 @@ void testReader() {
     };
     const ck::Layout R = ck::resolveLayout(ck::Engine::Forever, fn, &log);
     check(R.vSteer == 0x99 && R.vNamed && R.piState == 0x400 && R.raceTarget == 0x98, "layout: names win, defaults stay");
+
+    // ESWC/Sunrise: the player's Mobil is the car itself (CSceneToyVehicle); its +0x14 is another scene object
+    {
+        FakeMem e;
+        ck::Layout E = ck::defaultLayout(ck::Engine::Legacy);
+        E.vNamed = true; // as in the game: offsets by name, which must not skip the class check
+        const uintptr_t er = 0x200000, ei = 0x210000, ep = 0x220000, einfo = 0x230000, car = 0x240000, other = 0x250000;
+        for (uintptr_t o = 0; o < 0x400; o += 4) {
+            e.u32(er + o, 0);
+            e.u32(ep + o, 0);
+            e.u32(einfo + o, 0);
+            e.u32(car + o, 0);
+            e.u32(other + o, 0);
+        }
+        e.cls[er] = "CTrackManiaRace1P";
+        e.cls[einfo] = "CTrackManiaPlayerInfo";
+        e.cls[car] = "CSceneToyVehicle";
+        e.cls[other] = "CSceneMobil";
+        e.u32(er + E.racePlayers, 1);
+        e.u32(er + E.racePlayers + 4, ei);
+        e.u32(ei, ep);
+        e.u32(ep + E.playerInfo, einfo);
+        e.u32(ep + E.playerMobil, car);
+        e.u32(car + E.mobilScene, other);
+        e.f32(car + E.vSteer, 0.75f);
+        e.f32(car + E.vGas, 1.0f);
+        e.f32(car + E.vBrake, 0.0f);
+        ck::Reader er2(E);
+        er2.poll(e, er);
+        check(er2.run().race && er2.car().ok && er2.car().steer == 0.75f && er2.car().gas == 1.0f, "ESWC: the car is the player's Mobil");
+        e.u32(ep + E.playerMobil, other); // a scene object that is not the car: no data, not zeros
+        e.u32(other + E.mobilScene, other);
+        er2.poll(e, er);
+        check(!er2.car().ok, "ESWC: zeros of another object are not taken as the car");
+    }
 }
 
 void testReplay() {

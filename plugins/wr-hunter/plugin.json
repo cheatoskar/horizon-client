@@ -1,7 +1,7 @@
 {
   "id": "wr-hunter",
   "name": "WR Hunter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "dll": "wr-hunter.dll",
   "games": [
     "eswc",
