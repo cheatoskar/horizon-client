@@ -11,7 +11,7 @@ One panel, **Inputs** (HUD: starts popped out and kept open, see `plugin-abi.md`
 - **Wheel**: a steering wheel that turns with the steering, brake and gas bars at the sides, an RPM arc around it (with "RPM") and the speed below.
 - **Minimal**: one line with the speed and three small bars.
 
-Analog values are shown as they are (a pad stick or a pedal shows in between). Outside a race the panel says "Shows while you drive." If the car's values cannot be read it says "No car data in this game yet."
+Analog values are shown as they are (a pad stick or a pedal shows in between). Outside a race the panel says "Waiting for race". If the car's values cannot be read it says "No data".
 
 ## Settings
 
@@ -21,14 +21,14 @@ On the plugin's page, before the tabs:
 |---|---|---|---|
 | Style: Bars / Keys / Wheel / Minimal | `Style` (0-3) | Bars | The look |
 | Size | `Size` | 1.0x (0.6x to 2.0x) | Scales the panel |
-| Key at | `Threshold` | 0.20 (0.05 to 0.90) | Keys style only: how far a stick or pedal goes before its key lights up |
+| Key at | `Threshold` | 0.20 (0.05 to 0.90) | Keys style only: stick or pedal travel that lights a key |
 | Speed | `ShowSpeed` | on | Shows the speed |
 | mph | `Mph` | off | Speed in mph instead of km/h |
 | Graph | `Graph` | on | Bars style only: the three-second trace |
 | Gear | `Gear` | on | Shows "gear N" under the speed where the game gives it |
 | RPM | `Rpm` | on | Wheel style only: the RPM arc where the game gives it |
 
-Below the settings, "Now" lists the live values (Steer, Gas, Brake, Speed, Gear, RPM; "not available" for a value the game does not give).
+Below the settings, "Now" lists the live values (Steer, Gas, Brake, Speed, Gear, RPM; "-" for a value the game does not give).
 
 ## What is read per game
 
@@ -41,7 +41,7 @@ Every value is checked before it is shown: steer within -1 to 1, gas and brake w
 
 ## What it never does
 
-No writes to game memory, no change to your input, no hooks, no code patches, no game function calls. Reads are guarded, a bad address gives "not available" and not a crash. This is also the Competition Patch rule on Forever. It does not use the TM Horizon bridge and sends nothing anywhere.
+No writes to game memory, no change to your input, no hooks, no code patches, no game function calls. Reads are guarded, a bad address gives "-" and not a crash. This is also the Competition Patch rule on Forever. It does not use the TM Horizon bridge and sends nothing anywhere.
 
 ## Where data is stored
 

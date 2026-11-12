@@ -8,6 +8,13 @@ Plugin id `tmx-upload`. All games, online-ok, live toggle, **off by default**. I
 2. Queues the file if it passes the rules below (newest first, the last 20 are kept).
 3. Serves the queue over a local HTTP bridge. The uploader pairs once (you press Allow in the game), takes the file and reports the result back. The page in the Horizon menu lists the last 10 results.
 
+## The page
+
+One status line, then the buttons and the results:
+
+- **Uploader: waiting (port 27311)**: the bridge runs, no uploader has called yet. **Uploader: connected (TM Horizon)**: an uploader called this start (TM Horizon, the browser extension or another app). **Uploader: other mod (port N)**: another mod already runs the bridge on that port (checked again every 30 s). **Uploader: no free port**: 27311-27315 are all taken. **Uploader: off**: the module is switched off.
+- **Upload last**, **Forget apps** (see below), **Queue: n** (replays waiting for an uploader), **Results** (OK / Failed, time, map, detail and link).
+
 ## Rules for a queued replay
 
 - The file name ends in `.Replay.Gbx` and the file exists.

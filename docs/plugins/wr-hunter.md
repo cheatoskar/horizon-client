@@ -23,13 +23,13 @@ Panels (see `plugin-abi.md`, Panels):
 | Layout: Compact / Detailed | `Layout` (0/1) | Compact | One-line delta or a table of all splits with PB, target and sector columns |
 | Sum of best | `ShowSob` | on | Shows the sum of your gold sectors |
 | Runs and resets | `ShowResets` | on | Shows "Runs / Resets / Finishes" |
-| PB note | `PbToast` | on | A short note in the corner after a new personal best |
-| Compare with: Personal best only / TMX record / Ghost in the race / Replay file | `Target` (0-3) | TMX record | What the second delta is measured against |
+| PB toast | `PbToast` | on | A toast after a new personal best |
+| Compare with: PB only / TMX record / Race ghost / Replay file | `Target` (0-3) | TMX record | What the second delta is measured against |
 | Reload | | | TMX record only: deletes the cached record replay and loads it again |
 | Find replays | `TargetFile` | | Replay file only: lists your replays of this map (time and driver), click one to use it |
 | Reset map stats, Delete / Keep | | | Deletes PB, golds and history of the loaded map after a second click |
 
-"Ghost in the race" is only listed on TMNF and TMUF.
+"Race ghost" is only listed on TMNF and TMUF. In a narrow window (a pop-out, a 640x480 game window) the checkboxes wrap and the History run list drops the respawn column.
 
 ## Where the times come from
 
@@ -65,5 +65,5 @@ Settings are in `horizon\settings\wr-hunter.json`. The replay picker reads your 
 
 - The reading of the local player's checkpoint list on TMNF/TMUF is written from the reflection tables and tested against fake game memory only. I have not confirmed it in the real game yet.
 - The ESWC, Sunrise and Original map UID offset (the three ids in the challenge) was found by scanning, not from a reflection member, and is not confirmed in the game yet. If it is wrong, maps are kept by name.
-- "Ghost in the race" reads the ghost list of the race with fixed offsets on TMNF/TMUF; also not confirmed in the game.
+- "Race ghost" reads the ghost list of the race with fixed offsets on TMNF/TMUF; also not confirmed in the game.
 - A finish without a start the plugin saw (switched on during a run) is counted as a run but not as a reset.

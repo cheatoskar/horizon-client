@@ -178,17 +178,17 @@ void drawHeader(const Model& model, bool* open) {
         std::string tip;
     };
     std::vector<Chip> chips;
-    if (model.safeMode) chips.push_back({"Safe mode", t.warn, false, "Mods are not loaded this start."});
-    if (model.runGate) chips.push_back({"Run check", t.warn, false, "A checked run is going: solo-only modules pause."});
+    if (model.safeMode) chips.push_back({"Safe mode", t.warn, false, "No mods this start."});
+    if (model.runGate) chips.push_back({"Run check", t.warn, false, "Solo-only modules paused."});
     {
         // the launcher (TM Horizon) over the bridge: 3 = connected, 2 = waiting for Allow, 0 = switched off
         const int b = model.bridgeState;
         const char* text = b == 3 ? "Launcher connected" : b == 2 ? "Launcher: allow?" : b == 0 ? "Launcher off" : "Launcher not connected";
         const Rgba& c = b == 3 ? t.ok : b == 2 ? t.warn : t.muted;
-        chips.push_back({text, c, true, model.bridgeText.empty() ? std::string("TM Horizon on this PC.") : "TM Horizon: " + model.bridgeText});
+        chips.push_back({text, c, true, model.bridgeText.empty() ? std::string("TM Horizon") : "TM Horizon: " + model.bridgeText});
     }
     chips.push_back({model.online ? "Game: online" : "Game: offline", model.online ? t.ok : t.muted, true,
-                     "Whether the game is connected to an online server. Solo-only modules turn off online."});
+                     "Solo-only modules pause online."});
     // Chips between the logo and the close button. When the full chips do not fit (small window), each
     // shrinks to a coloured dot and its text moves into the tooltip.
     const float chipH = 26.0f * s;
@@ -363,8 +363,7 @@ void drawSidebar(const Model& model, const Actions& actions, float width, float 
         if (model.plugins.empty()) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x - 20.0f * s;
-            const std::string msg = model.safeMode ? "Safe mode: no mods loaded. Start without Shift to load them."
-                                                   : "No mods installed.";
+            const std::string msg = model.safeMode ? "Safe mode: no mods." : "No mods.";
             const std::vector<std::string> lines = wrapLines(f.small, msg, w, 4);
             const float lh = F(f.small)->FontSize + 3.0f * s;
             ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -495,20 +494,30 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
         g_metrics.pageW = room.x;
         g_metrics.pageH = room.y;
         ImGui::PushID(plugin.id.c_str());
+        // ui_metrics' page_w/page_h: the room right where the plugin draws (PageRoom)
+        auto page = [&] {
+            const ImVec2 a = ImGui::GetContentRegionAvail();
+            const PageRoom r(a.x, a.y);
+            actions.drawPluginPage(plugin.id);
+        };
         if (plugin.panels.empty()) {
-            if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
+            if (actions.drawPluginPage) page();
         } else if (ImGui::BeginTabBar("##panels")) {
             const bool pick = g.tabPending && g.tabPlugin == plugin.id;
             // Settings (the plugin's DrawMenu) first, then one tab per panel (ABI minor 2)
             if (plugin.hasMenu && ImGui::BeginTabItem("Settings", nullptr, pick && g.tabKey.empty() ? ImGuiTabItemFlags_SetSelected : 0)) {
-                if (actions.drawPluginPage) actions.drawPluginPage(plugin.id);
+                if (actions.drawPluginPage) page();
                 ImGui::EndTabItem();
             }
             for (const PanelView& pv : plugin.panels) {
                 const std::string label = pv.label + (pv.detached ? " (window)" : "") + "###tab_" + pv.key;
                 if (ImGui::BeginTabItem(label.c_str(), nullptr, pick && g.tabKey == pv.key ? ImGuiTabItemFlags_SetSelected : 0)) {
                     ImGui::Spacing();
-                    if (actions.drawPanelTab) actions.drawPanelTab(plugin.id, pv.key);
+                    if (actions.drawPanelTab) {
+                        const ImVec2 a = ImGui::GetContentRegionAvail();
+                        const PageRoom r(a.x, a.y);
+                        actions.drawPanelTab(plugin.id, pv.key);
+                    }
                     ImGui::EndTabItem();
                 }
             }
@@ -536,7 +545,7 @@ void drawOtherPage(const OtherModView& o) {
     ImGui::Dummy(ImVec2(0.0f, 10.0f * s));
     ImGui::PushStyleColor(ImGuiCol_Text, toVec(t.muted));
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted("Not a Horizon plugin: shown for orientation, Horizon does not control it.");
+    ImGui::TextUnformatted("Not controlled by Horizon.");
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
 }
@@ -551,7 +560,7 @@ void pollCapture(const Model& model, const Actions& actions) {
         g.captureHandle = 0;
     } else if (actions.pollKeyCapture && actions.pollKeyCapture(g.captureHandle, key)) {
         if (!key.empty() && actions.rebindHotkey && !actions.rebindHotkey(g.captureHandle, key)) {
-            g.note = "That key is not available.";
+            g.note = "Key not available";
             g.noteUntil = ImGui::GetTime() + 3.0;
         }
         g.captureHandle = 0;
@@ -578,7 +587,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const float w = ImGui::GetContentRegionAvail().x;
             drawText(dl, f.bodyBold, p, U(t.text), "Top bar");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
-                     "Shows the Horizon bar when the pointer touches the top edge.");
+                     "Top screen edge");
             const ImVec2 swSize(44.0f * s, 24.0f * s);
             const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
             if (inlineSwitch("##bar", swPos, swSize, model.barEnabled, true, nullptr) && actions.setBarEnabled) {
@@ -594,7 +603,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
         {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             drawText(dl, f.bodyBold, p, U(t.text), "Menu size");
-            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Share of the screen.");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Share of screen");
             ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
             const std::string autoLabel = "Auto (" + std::to_string(model.menuSizeAuto) + "%)";
             const char* labels[5] = {autoLabel.c_str(), "60%", "70%", "80%", "90%"};
@@ -612,7 +621,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             drawText(dl, f.bodyBold, p, U(t.text), "Text and icons");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
-                     "Ctrl + mouse wheel in the menu.");
+                     "Ctrl + wheel");
             ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
             // applied when the slider is let go: the fonts are rebuilt at the new size
             int pct = g.scaleDrag > 0 ? g.scaleDrag : model.contentPct;
@@ -633,7 +642,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
             const ImVec2 p = ImGui::GetCursorScreenPos();
             drawText(dl, f.bodyBold, p, U(t.text), "Module icons");
-            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Only here in the game.");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "In-game only");
             ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
             const char* styles[2] = {"Distinct", "Saturn"};
             ImGui::PushFont(F(f.body));
@@ -650,9 +659,8 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x;
             drawText(dl, f.bodyBold, p, U(t.text), "Widget layout");
-            std::string sub = "Move, resize, minimise and hide widgets.";
-            if (!model.layoutKey.empty()) sub += " Key: " + model.layoutKey + ".";
-            if (model.forever) sub += " TMNF/TMUF: not during a race.";
+            std::string sub = model.layoutKey.empty() ? std::string("No key") : "Key: " + model.layoutKey;
+            if (model.forever) sub += "  \xC2\xB7  game menus only";
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), sub);
             const char* label = "Edit layout";
             const float bw = textSize(f.body, label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -669,7 +677,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             ImGui::SameLine();
             ImGui::SetNextItemWidth(240.0f * s);
             if (ImGui::SliderInt("##widgetbg", &op, 20, 100, "%d%%") && actions.setWidgetOpacity) actions.setWidgetOpacity(op);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower lets more of the game show through.");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower shows more of the game.");
         }
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
@@ -680,7 +688,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const float w = ImGui::GetContentRegionAvail().x;
             drawText(dl, f.bodyBold, p, U(t.text), "Login-Fix (Fehler 12157)");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
-                     "Lets the login reach the server on Windows 10/11. Applies on the next start.");
+                     "Windows 10/11, next start");
             const ImVec2 swSize(44.0f * s, 24.0f * s);
             const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
             if (inlineSwitch("##onlinefix", swPos, swSize, model.onlineFix == 1, true, nullptr) && actions.setOnlineFix) {
@@ -706,11 +714,11 @@ void drawGeneral(const Model& model, const Actions& actions) {
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
         };
-        switchRow("##dnd", "Do not disturb", "Notifications only go to the list below.", model.dnd, actions.setDnd);
-        switchRow("##holdtoasts", "Quiet while driving", "Notifications wait until the run ends.", model.holdToasts, actions.setHoldToasts);
+        switchRow("##dnd", "Do not disturb", "List only", model.dnd, actions.setDnd);
+        switchRow("##holdtoasts", "Quiet while driving", "After the run", model.holdToasts, actions.setHoldToasts);
         switchRow("##bridge", "TM Horizon connection",
                   model.bridgeEnabled ? (model.bridgeText.empty() ? std::string("On") : model.bridgeText)
-                                      : std::string("Off: no TMX search, no notifications from TM Horizon."),
+                                      : std::string("Off"),
                   model.bridgeEnabled, actions.setBridgeEnabled);
         if (model.bridgePaired && actions.forgetBridge) {
             if (ImGui::Button("Forget pairing")) actions.forgetBridge();
@@ -745,7 +753,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             drawText(dl, f.bodyBold, p, U(t.text), "Menu key");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted),
-                     "Opens and closes this menu.");
+                     "Open / close");
             ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
             const bool capturing = model.menuHotkey > 0 && g.captureHandle == model.menuHotkey;
             ImGui::AlignTextToFramePadding();
@@ -787,7 +795,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
                     ImGui::PopID();
                     if (picked && model.menuHotkey > 0 && actions.rebindHotkey) {
                         if (!actions.rebindHotkey(model.menuHotkey, sug)) {
-                            g.note = "That key is not available.";
+                            g.note = "Key not available";
                             g.noteUntil = ImGui::GetTime() + 3.0;
                         }
                     }
@@ -804,7 +812,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
-        infoRow("Safe mode", model.safeMode ? "On: mods are not loaded" : "Off");
+        infoRow("Safe mode", model.safeMode ? "On (no mods)" : "Off");
         infoRow("Profile", model.profileName.empty() ? "none" : model.profileName);
         infoRow("Game state", model.gameState);
     }
@@ -817,10 +825,10 @@ void drawHotkeys(const Model& model, const Actions& actions) {
     const Fonts& f = fonts();
     const Tokens& t = tokens();
 
-    dim("Click a key to change it.", true);
+    dim("Click a key to change", true);
     ImGui::Dummy(ImVec2(0.0f, 2.0f * s));
     if (model.hotkeys.empty()) {
-        dim("No hotkeys registered.", false);
+        dim("No hotkeys", false);
         return;
     }
     const float noteH = 28.0f * s;
@@ -914,8 +922,7 @@ void drawLog(const Model& model, const Actions& actions) {
         }
         if (idx.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, toVec(t.muted));
-            ImGui::TextUnformatted(g.logFilter == 1 && model.log && !model.log->empty() ? "No problems logged."
-                                                                                         : "No log lines yet.");
+            ImGui::TextUnformatted(g.logFilter == 1 && model.log && !model.log->empty() ? "No problems" : "Empty");
             ImGui::PopStyleColor();
         } else {
             ImGuiListClipper clipper;
@@ -1096,6 +1103,10 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);
 
+    // where the header row ends once the fade-in is done (computed: while the alpha is 0 ImGui skips items)
+    g_metrics.headerBottom = ImGui::GetCursorScreenPos().y - (1.0f - eased) * 12.0f * s + F(fonts().title)->FontSize +
+                             F(fonts().small)->FontSize + 6.0f * s;
+    g_metrics.headerFrame = frame;
     drawHeader(model, open);
     ImGui::Dummy(ImVec2(0.0f, 12.0f * s));
 
@@ -1143,6 +1154,41 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
 }
 
 const MenuMetrics& menuMetrics() { return g_metrics; }
+
+PageRoom::PageRoom(float w, float h) : w0_(g_metrics.pageW), h0_(g_metrics.pageH) {
+    g_metrics.pageW = std::max(0.0f, w);
+    g_metrics.pageH = std::max(0.0f, h);
+}
+PageRoom::~PageRoom() {
+    g_metrics.pageW = w0_;
+    g_metrics.pageH = h0_;
+}
+
+float windowTop(float displayH) {
+    const float s = scale();
+    float top = 56.0f * s; // the top bar (52 px at scale 1) stays clickable
+    // and the menu's header row, while the menu is open (drawn this or the last frame)
+    if (g_metrics.headerBottom > 0.0f && ImGui::GetFrameCount() - g_metrics.headerFrame <= 1)
+        top = std::max(top, g_metrics.headerBottom + 4.0f * s);
+    return std::floor(std::min(top, displayH * 0.25f));
+}
+
+WinRect fitWindow(float x, float y, float w, float h, float minW, float minH, float displayW, float displayH, int index) {
+    const float s = scale();
+    const float top = windowTop(displayH);
+    const float roomW = std::max(1.0f, displayW), roomH = std::max(1.0f, displayH - top);
+    WinRect r;
+    r.minW = std::min(minW, roomW);
+    r.minH = std::min(minH, roomH);
+    r.w = std::floor(std::min(std::max(w, r.minW), roomW));
+    r.h = std::floor(std::min(std::max(h, r.minH), roomH));
+    const float shift = 24.0f * s * static_cast<float>(index);
+    r.x = x >= 0.0f ? x : std::floor((displayW - r.w) * 0.5f + shift);
+    r.y = y >= 0.0f ? y : std::floor(top + (roomH - r.h) * 0.35f + shift);
+    r.x = std::min(std::max(r.x, 0.0f), std::max(0.0f, displayW - r.w));
+    r.y = std::min(std::max(r.y, top), std::max(top, displayH - r.h));
+    return r;
+}
 
 float menuShare(int menuSizePct, float displayW, float displayH) {
     // small windows (TMUF at 640x480, ESWC at 800x600) get nearly the whole window
@@ -1196,18 +1242,28 @@ void drawWindowBody(const PluginView& p, const Actions& actions) {
             ImGui::SetTooltip("%s", p.restartText.empty() ? "Applies after a restart." : p.restartText.c_str());
     }
     ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+    // ui_metrics reports this window's room, not the menu page's (plugins switch to a compact layout)
+    auto page = [&] {
+        const ImVec2 a = ImGui::GetContentRegionAvail();
+        const PageRoom r(a.x, a.y);
+        actions.drawPluginPage(p.id);
+    };
     if (p.panels.empty()) {
-        if (actions.drawPluginPage) actions.drawPluginPage(p.id);
+        if (actions.drawPluginPage) page();
     } else if (ImGui::BeginTabBar("##panels")) {
         if (p.hasMenu && ImGui::BeginTabItem("Settings")) {
-            if (actions.drawPluginPage) actions.drawPluginPage(p.id);
+            if (actions.drawPluginPage) page();
             ImGui::EndTabItem();
         }
         for (const PanelView& pv : p.panels) {
             const std::string label = pv.label + "###wtab_" + pv.key;
             if (ImGui::BeginTabItem(label.c_str())) {
                 ImGui::Spacing();
-                if (actions.drawPanelTab) actions.drawPanelTab(p.id, pv.key);
+                if (actions.drawPanelTab) {
+                    const ImVec2 a = ImGui::GetContentRegionAvail();
+                    const PageRoom r(a.x, a.y);
+                    actions.drawPanelTab(p.id, pv.key);
+                }
                 ImGui::EndTabItem();
             }
         }
@@ -1261,22 +1317,17 @@ bool drawPluginWindows(const Model& model, const Actions& actions) {
             w.screen = screen;
             w.place = true; // display size changed (Reset): clamp again
         }
+        // plugin.json "ui" (logical px) times the UI scale; the saved size wins; clamped below the bar and header
+        const WinRect fit = fitWindow(w.x, w.y, w.w > 0.0f ? w.w : pv->prefW * s, w.h > 0.0f ? w.h : pv->prefH * s, pv->minW * s,
+                                      pv->minH * s, screen.x, screen.y, static_cast<int>(&e - &g_pwins[0]));
         if (w.place) {
             w.place = false;
-            float ww = w.w > 0.0f ? w.w : 560.0f * s;
-            float hh = w.h > 0.0f ? w.h : 440.0f * s;
-            ww = std::min(std::max(ww, 240.0f * s), screen.x);
-            hh = std::min(std::max(hh, 160.0f * s), screen.y);
-            float x = w.x >= 0.0f ? w.x : std::floor((screen.x - ww) * 0.5f + 24.0f * s * static_cast<float>(&e - &g_pwins[0]));
-            float y = w.y >= 0.0f ? w.y : std::floor((screen.y - hh) * 0.35f + 24.0f * s * static_cast<float>(&e - &g_pwins[0]));
-            x = std::min(std::max(x, 0.0f), std::max(0.0f, screen.x - std::min(ww, 120.0f * s)));
-            y = std::min(std::max(y, 0.0f), std::max(0.0f, screen.y - 48.0f * s));
-            w.x = x;
-            w.y = y;
-            w.w = ww;
-            w.h = hh;
-            ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(ww, hh), ImGuiCond_Always);
+            w.x = fit.x;
+            w.y = fit.y;
+            w.w = fit.w;
+            w.h = fit.h;
+            ImGui::SetNextWindowPos(ImVec2(fit.x, fit.y), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(fit.w, fit.h), ImGuiCond_Always);
         }
         ImVec4 bg = toVec(tokens().bg);
         bg.w = 0.94f;
@@ -1285,8 +1336,10 @@ bool drawPluginWindows(const Model& model, const Actions& actions) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * s, 14.0f * s));
         const std::string title = pv->name + "###hzwin." + e.first;
         bool open = true;
-        ImGui::SetNextWindowSizeConstraints(ImVec2(240.0f * s, 160.0f * s), ImVec2(FLT_MAX, FLT_MAX));
-        if (ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::SetNextWindowSizeConstraints(ImVec2(fit.minW, fit.minH), ImVec2(FLT_MAX, FLT_MAX));
+        // smaller than its content: scrolls both ways instead of clipping
+        const ImGuiWindowFlags wf = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar;
+        if (ImGui::Begin(title.c_str(), &open, wf)) {
             ImGui::PushID(e.first.c_str());
             drawWindowBody(*pv, actions);
             ImGui::PopID();

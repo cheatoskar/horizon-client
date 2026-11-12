@@ -89,6 +89,7 @@ struct PluginView {
     bool soloOnly = false;
     std::vector<PanelView> panels; // tabs after "Settings"
     float winX = -1, winY = -1, winW = 0, winH = 0; // remembered rect of its free window (px), winX < 0 = none
+    float minW = 480, minH = 320, prefW = 820, prefH = 560; // plugin.json "ui": its own window, logical px at scale 1
 };
 
 struct HotkeyView {
@@ -196,10 +197,35 @@ struct Actions {
 };
 
 // Where the last menu frame was: the window and the room inside a plugin page's card (for ui_metrics).
+// pageW/pageH: the room of the container a plugin is being drawn in right now (PageRoom), else the menu page's.
 struct MenuMetrics {
     float menuW = 0, menuH = 0, pageW = 0, pageH = 0;
+    float headerBottom = 0; // screen y below the menu's header row in the last menu frame (0 = menu not drawn yet)
+    int headerFrame = -10;  // ImGui frame of that menu frame (the header only counts while the menu is open)
 };
 const MenuMetrics& menuMetrics();
+// ui_metrics' page_w/page_h for one plugin draw call (menu page, pop-out, free window): set from the
+// container's content region, restored afterwards. 0 x 0 = a widget that sizes itself (no fixed room).
+class PageRoom {
+public:
+    PageRoom(float w, float h);
+    ~PageRoom();
+    PageRoom(const PageRoom&) = delete;
+    PageRoom& operator=(const PageRoom&) = delete;
+private:
+    float w0_, h0_;
+};
+
+// A module's own window (pop-out, free window): where it opens and how small it may get.
+struct WinRect {
+    float x, y, w, h;
+    float minW, minH; // for SetNextWindowSizeConstraints
+};
+// The first row such a window opens at: below the top bar and the menu's header, so both stay reachable.
+float windowTop(float displayH);
+// x/y < 0: not placed yet (centred, a bit above the middle, shifted by index). w/h: the wanted size (saved or
+// preferred), minW/minH: the module's minimum, all in pixels. Clamped to the screen below windowTop().
+WinRect fitWindow(float x, float y, float w, float h, float minW, float minH, float displayW, float displayH, int index);
 
 // Fitting the menu into small windows (TMUF at 640x480 and the like).
 constexpr float kMinUiScale = 0.8f;     // smallest UI scale the fit goes to (body text about 13 px); below it the menu scrolls

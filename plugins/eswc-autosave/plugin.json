@@ -10,7 +10,8 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Saves your replay after a finish (Sunrise, Original: solo bests). The login fix for ESWC and Original is part of Horizon.",
+  "description": "Saves your replay after each finish.",
   "author": "cheatoskar",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "ui": { "min_w": 320, "min_h": 240, "pref_w": 460, "pref_h": 340 }
 }

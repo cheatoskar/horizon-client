@@ -902,15 +902,6 @@ void forgetPaired() {
 
 ImVec4 col(const HorizonColor* c, ImVec4 fallback) { return c ? horizon_color(*c) : fallback; }
 
-const char* modeText(const Snap& s) {
-    switch (s.mode) {
-    case Mode::Serving: return "Ready for uploaders";
-    case Mode::Passive: return "Another mod runs the upload bridge";
-    case Mode::NoPort: return "No free port (27311-27315)";
-    default: return "Starting...";
-    }
-}
-
 void drawPairPrompt(const Snap& s) {
     ImGui::Text("%s wants to upload replays.", clientName(s.pairWho));
     if (ImGui::Button("Allow")) answerPair(true);
@@ -922,7 +913,33 @@ std::string connectedText(const Snap& s) {
     std::string t;
     for (int i = 0; i < kClientCount; i++)
         if (s.seen[i]) t += (t.empty() ? "" : ", ") + std::string(clientName(i));
-    return t.empty() ? "none" : t;
+    return t;
+}
+
+// The one status line: "Uploader: waiting (port 27311)", "Uploader: connected (TM Horizon)", "Uploader: off" ...
+// 0 = muted, 1 = ok, 2 = warn.
+std::string statusLine(const Snap& s, int* tone) {
+    char b[160];
+    *tone = 0;
+    switch (s.mode) {
+    case Mode::Serving: {
+        const std::string who = connectedText(s);
+        if (!who.empty()) {
+            *tone = 1;
+            _snprintf_s(b, sizeof(b), _TRUNCATE, "Uploader: connected (%s)", who.c_str());
+        } else {
+            _snprintf_s(b, sizeof(b), _TRUNCATE, "Uploader: waiting (port %d)", s.port);
+        }
+        return b;
+    }
+    case Mode::Passive:
+        *tone = 2;
+        _snprintf_s(b, sizeof(b), _TRUNCATE, "Uploader: other mod (port %d)", s.foreign);
+        return b;
+    case Mode::NoPort: *tone = 2; return "Uploader: no free port";
+    case Mode::Probing: return "Uploader: starting";
+    default: return "Uploader: off";
+    }
 }
 
 } // namespace
@@ -939,7 +956,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Offers your new replays to TM Horizon or the browser extension, which upload them to TMX.",
+    "Lets the TMX uploader pick up your new replays.",
     HORIZON_ABI_MINOR,
 };
 
@@ -1056,14 +1073,11 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     const ImVec4 badc = col(st ? &st->bad : nullptr, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
     const ImVec4 mutedc = col(st ? &st->muted : nullptr, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
 
-    ImGui::TextUnformatted("Offer replays");
-    ImGui::SameLine();
-    ImGui::TextColored(s.mode == Mode::Serving ? okc : s.mode == Mode::Passive || s.mode == Mode::NoPort ? warnc : mutedc, "%s", modeText(s));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Switch the plugin on or off in the plugin list.");
-    if (s.mode == Mode::Serving) ImGui::TextColored(mutedc, "Port %d", s.port);
-    else if (s.mode == Mode::Passive) ImGui::TextColored(mutedc, "Found on port %d. Checked again every 30 s.", s.foreign);
-
-    ImGui::Text("Connected: %s", connectedText(s).c_str());
+    int tone = 0;
+    const std::string status = g_enabled ? statusLine(s, &tone) : std::string("Uploader: off");
+    ImGui::TextColored(tone == 1 ? okc : tone == 2 ? warnc : mutedc, "%s", status.c_str());
+    if (s.mode == Mode::Passive && ImGui::IsItemHovered()) ImGui::SetTooltip("Checked again every 30 s.");
+    if (s.mode == Mode::NoPort && ImGui::IsItemHovered()) ImGui::SetTooltip("Ports 27311-27315 are taken.");
     ImGui::Spacing();
 
     if (s.pair == Pair::Asked) {
@@ -1074,32 +1088,35 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     }
 
     if (ImGui::Button("Upload last")) uploadLast();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Offers your newest replay to the uploader again.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Offer the newest replay again.");
     ImGui::SameLine();
     if (ImGui::Button("Forget apps")) forgetPaired();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Paired apps ask again next time. Paired now: %d.", static_cast<int>(s.tokens));
-    if (!s.note.empty()) ImGui::TextColored(mutedc, "%s", s.note.c_str());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Paired: %d. They ask again next time.", static_cast<int>(s.tokens));
+    if (!s.note.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(mutedc, "%s", s.note.c_str());
+        ImGui::PopTextWrapPos();
+    }
 
     ImGui::Spacing();
     int waiting = 0;
     for (const Entry& e : s.entries)
         if (e.queued) waiting++;
-    ImGui::Text("Waiting for an uploader: %d", waiting);
+    ImGui::Text("Queue: %d", waiting);
     ImGui::Separator();
-    ImGui::TextUnformatted("Last results");
-    if (s.results.empty()) ImGui::TextColored(mutedc, "None yet.");
+    ImGui::TextUnformatted("Results");
+    if (s.results.empty()) ImGui::TextColored(mutedc, "None");
     for (const ResultRec& r : s.results) {
         char when[16] = "";
         tm lt = {};
         if (localtime_s(&lt, &r.at) == 0) strftime(when, sizeof(when), "%H:%M", &lt);
-        ImGui::TextColored(r.ok ? okc : badc, "%s", r.ok ? "OK" : "Not sent");
+        ImGui::TextColored(r.ok ? okc : badc, "%s", r.ok ? "OK" : "Failed");
         ImGui::SameLine();
         ImGui::Text("%s  %s  %s", when, r.map.empty() ? "?" : r.map.c_str(), timeText(r.timeMs).c_str());
-        ImGui::TextColored(mutedc, "%s", r.detail.c_str());
-        if (!r.link.empty()) {
-            ImGui::SameLine();
-            ImGui::TextColored(mutedc, "%s", r.link.c_str());
-        }
+        // small windows: detail and link wrap instead of running off the right edge
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(mutedc, "%s", r.link.empty() ? r.detail.c_str() : (r.detail + "  " + r.link).c_str());
+        ImGui::PopTextWrapPos();
     }
 }
 

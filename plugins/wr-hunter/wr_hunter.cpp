@@ -140,14 +140,14 @@ void setTargetFromReplay(const ck::Replay& r, const std::string& name) {
 void HORIZON_CALL onReplayBytes(void* user, int32_t status, const char*, const void* body, uint32_t len) {
     if (reinterpret_cast<uintptr_t>(user) != g_generation || !g_host) return;
     if (status != 200 || !body || !len) {
-        g_targetStatus = status == HORIZON_BRIDGE_ERR_RATE_LIMIT ? "Too many requests, try later." : "Record replay not available.";
+        g_targetStatus = status == HORIZON_BRIDGE_ERR_RATE_LIMIT ? "Rate limited, try later" : "No record replay";
         return;
     }
     std::vector<unsigned char> bytes(static_cast<const unsigned char*>(body), static_cast<const unsigned char*>(body) + len);
     ck::Replay r;
     std::string err;
     if (!ck::parseReplay(bytes, true, r, err)) {
-        g_targetStatus = "Record replay unreadable (" + err + ").";
+        g_targetStatus = "Record unreadable (" + err + ")";
         return;
     }
     horizon::ensureDir(dataFolder() + L"records\\");
@@ -159,7 +159,7 @@ void HORIZON_CALL onReplayBytes(void* user, int32_t status, const char*, const v
 void HORIZON_CALL onRecordInfo(void* user, int32_t status, const char*, const void* body, uint32_t len) {
     if (reinterpret_cast<uintptr_t>(user) != g_generation || !g_host) return;
     if (status != 200 || !body) {
-        g_targetStatus = status == HORIZON_BRIDGE_ERR_NOT_CONNECTED ? "Start TM Horizon for the TMX record." : "TMX did not answer.";
+        g_targetStatus = status == HORIZON_BRIDGE_ERR_NOT_CONNECTED ? "TM Horizon not running" : "No answer from TMX";
         return;
     }
     horizon::Json j;
@@ -171,11 +171,11 @@ void HORIZON_CALL onRecordInfo(void* user, int32_t status, const char*, const vo
     const horizon::Json* found = j.get("found");
     const horizon::Json* rid = j.get("replayId");
     if (!found || found->type != horizon::Json::Bool || !found->b || !rid) {
-        g_targetStatus = "This map has no record on TMX.";
+        g_targetStatus = "No TMX record";
         return;
     }
     const std::string path = std::string("/v1/tmx/replay?game=") + ck::siteCode(g_host) + "&id=" + std::to_string(rid->asInt(0));
-    g_targetStatus = "Loading the record replay...";
+    g_targetStatus = "Loading record...";
     g_host->bridge_request(g_host->plugin, "GET", path.c_str(), nullptr, 0, &onReplayBytes, reinterpret_cast<void*>(static_cast<uintptr_t>(g_generation)));
 }
 
@@ -188,7 +188,7 @@ void refreshTarget() {
     if (mode == kTargetPb) return;
     if (mode == kTargetTmx) {
         if (!g_uidKnown) {
-            g_targetStatus = "Map UID unknown: no TMX record.";
+            g_targetStatus = "Map UID unknown";
             return;
         }
         // cached record replay first
@@ -200,18 +200,18 @@ void refreshTarget() {
             return;
         }
         if (!ck::abiAtLeast(g_host, 3) || !g_host->bridge_request) {
-            g_targetStatus = "This Horizon Client has no TM Horizon bridge.";
+            g_targetStatus = "No launcher bridge";
             return;
         }
         const std::string path = std::string("/v1/tmx/record?game=") + ck::siteCode(g_host) + "&uid=" + ck::urlEscape(g_stats.uid);
         const HorizonResult hr =
             g_host->bridge_request(g_host->plugin, "GET", path.c_str(), nullptr, 0, &onRecordInfo, reinterpret_cast<void*>(static_cast<uintptr_t>(g_generation)));
         g_tmxAsked = true;
-        g_targetStatus = hr == HORIZON_OK ? "Asking TMX..." : "TM Horizon connection is off.";
+        g_targetStatus = hr == HORIZON_OK ? "Asking TMX..." : "Launcher connection off";
         return;
     }
     if (mode == kTargetGhost) {
-        g_targetStatus = g_forever ? "Waiting for a ghost in the race." : "Ghosts in the race are read on TMNF/TMUF only.";
+        g_targetStatus = g_forever ? "Waiting for ghost" : "TMNF/TMUF only";
         g_ghostTimer = 0;
         return;
     }
@@ -219,9 +219,9 @@ void refreshTarget() {
         const std::string path = ck::getString(g_host, "TargetFile", "");
         ck::Replay r;
         std::string err;
-        if (path.empty()) g_targetStatus = "Pick a replay in Settings.";
-        else if (!ck::readReplay(horizon::wide(path), r, err)) g_targetStatus = "Replay unreadable (" + err + ").";
-        else if (g_uidKnown && r.mapUid != g_stats.uid) g_targetStatus = "That replay is of another map.";
+        if (path.empty()) g_targetStatus = "Pick a replay";
+        else if (!ck::readReplay(horizon::wide(path), r, err)) g_targetStatus = "Replay unreadable (" + err + ")";
+        else if (g_uidKnown && r.mapUid != g_stats.uid) g_targetStatus = "Replay of another map";
         else setTargetFromReplay(r, "Replay" + (r.driver.empty() ? std::string() : " (" + ck::stripCodes(r.driver) + ")"));
     }
 }
@@ -445,7 +445,7 @@ void drawCompact(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
         ImGui::PopStyleColor();
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, p.text2);
-        ImGui::TextUnformatted(g_runState == 1 ? "Go!" : "Waiting for the start");
+        ImGui::TextUnformatted(g_runState == 1 ? "Go!" : "Waiting for start");
         ImGui::PopStyleColor();
     }
     if (setting("CpStrip", 1)) drawCpStrip(p, rows, std::min(done, n), lineW);
@@ -476,7 +476,7 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
     ImGui::PushFont(mono);
     if (rows.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-        ImGui::TextUnformatted(g_haveMap ? "Drive a run: the splits show up here." : "No map loaded.");
+        ImGui::TextUnformatted(g_haveMap ? "No splits yet" : "No map");
         ImGui::PopStyleColor();
     } else if (ImGui::BeginTable("##splits", cols, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 44.0f * s);
@@ -587,14 +587,16 @@ void HORIZON_CALL drawHistory(void*) {
     if (!g_ui) return;
     const ck::Palette p = ck::palette(g_host);
     const float s = ck::uiScale(g_host);
+    const bool narrow = ck::narrow(g_host); // pop-out or small window: fewer columns
     if (g_haveMap) {
         ck::section(p, g_mapName.empty() ? "This map" : g_mapName.c_str());
-        ImGui::Text("PB %s   Sum of best %s   Runs %d   Resets %d   Finishes %d", fmtTime(g_stats.pbTime()).c_str(),
-                    fmtTime(wrh::sumOfBest(g_stats)).c_str(), g_stats.attempts, g_stats.resets, g_stats.finishes);
+        ImGui::TextWrapped("PB %s   SoB %s   Runs %d   Resets %d   Finishes %d", fmtTime(g_stats.pbTime()).c_str(),
+                           fmtTime(wrh::sumOfBest(g_stats)).c_str(), g_stats.attempts, g_stats.resets, g_stats.finishes);
         if (!g_stats.golds.empty() && g_stats.golds.size() == g_stats.pb.size()) {
             const std::vector<int> pbSec = wrh::sectors(g_stats.pb);
             ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-            ImGui::TextUnformatted("Gold sectors (time to gain against the PB)");
+            ImGui::TextUnformatted("Gold sectors");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Time to gain against the PB.");
             ImGui::PopStyleColor();
             std::string line;
             for (size_t i = 0; i < g_stats.golds.size(); i++) {
@@ -608,12 +610,12 @@ void HORIZON_CALL drawHistory(void*) {
             ImGui::PopStyleColor();
         }
         if (g_stats.runs.empty()) {
-            ck::hint(p, "No finished run on this map yet.");
-        } else if (ImGui::BeginTable("##runs", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
+            ck::hint(p, "No finishes");
+        } else if (ImGui::BeginTable("##runs", narrow ? 3 : 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
                                      ImVec2(0, 220.0f * s))) {
             ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 90.0f * s);
             ImGui::TableSetupColumn("vs PB", ImGuiTableColumnFlags_WidthFixed, 80.0f * s);
-            ImGui::TableSetupColumn("Respawns", ImGuiTableColumnFlags_WidthFixed, 80.0f * s);
+            if (!narrow) ImGui::TableSetupColumn("Respawns", ImGuiTableColumnFlags_WidthFixed, 80.0f * s);
             ImGui::TableSetupColumn("When", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
@@ -630,30 +632,32 @@ void HORIZON_CALL drawHistory(void*) {
                 ImGui::PushStyleColor(ImGuiCol_Text, d <= 0 ? p.aheadGain : p.text2);
                 ImGui::TextUnformatted(fmtDelta(d).c_str());
                 ImGui::PopStyleColor();
-                ImGui::TableNextColumn();
-                if (r.respawns >= 0) ImGui::Text("%d", r.respawns);
-                else ImGui::TextDisabled("-");
+                if (!narrow) {
+                    ImGui::TableNextColumn();
+                    if (r.respawns >= 0) ImGui::Text("%d", r.respawns);
+                    else ImGui::TextDisabled("-");
+                }
                 ImGui::TableNextColumn();
                 char when[32] = "-";
                 const time_t t = static_cast<time_t>(r.at);
                 tm lt;
-                if (r.at > 0 && localtime_s(&lt, &t) == 0) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &lt);
+                if (r.at > 0 && localtime_s(&lt, &t) == 0) strftime(when, sizeof(when), narrow ? "%d.%m. %H:%M" : "%Y-%m-%d %H:%M", &lt);
                 ImGui::TextUnformatted(when);
             }
             ImGui::EndTable();
         }
     } else {
-        ck::hint(p, "Load a map to see its runs.");
+        ck::hint(p, "No map");
     }
     ck::section(p, "All maps");
     if (!g_allMapsLoaded) loadAllMaps();
     if (g_allMaps.empty()) {
-        ck::hint(p, "Nothing yet.");
+        ck::hint(p, "None");
     } else if (ImGui::BeginTable("##maps", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit, ImVec2(0, 180.0f * s))) {
         ImGui::TableSetupColumn("Map", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("PB", ImGuiTableColumnFlags_WidthFixed, 90.0f * s);
-        ImGui::TableSetupColumn("Runs", ImGuiTableColumnFlags_WidthFixed, 60.0f * s);
-        ImGui::TableSetupColumn("Finishes", ImGuiTableColumnFlags_WidthFixed, 70.0f * s);
+        ImGui::TableSetupColumn("Runs", ImGuiTableColumnFlags_WidthFixed, 50.0f * s);
+        ImGui::TableSetupColumn(narrow ? "Fin." : "Finishes", ImGuiTableColumnFlags_WidthFixed, (narrow ? 44.0f : 70.0f) * s);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         for (const MapRow& m : g_allMaps) {
@@ -733,7 +737,7 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) {
                                            HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS,
                                            HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
                                            "cheatoskar",
-                                           "Split times against your best and the TMX record, with gold sectors and history.",
+                                           "Splits against your PB and the TMX record.",
                                            HORIZON_ABI_MINOR};
     return &info;
 }
@@ -848,23 +852,23 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (ImGui::RadioButton("Detailed", layout == 1)) setSetting("Layout", 1);
     bool sob = setting("ShowSob", 1) != 0, resets = setting("ShowResets", 1) != 0, toast = setting("PbToast", 1) != 0;
     if (ImGui::Checkbox("Sum of best", &sob)) setSetting("ShowSob", sob ? 1 : 0);
-    ImGui::SameLine();
+    ck::sameLineIfFits(ck::checkboxWidth("Runs and resets"));
     if (ImGui::Checkbox("Runs and resets", &resets)) setSetting("ShowResets", resets ? 1 : 0);
-    ImGui::SameLine();
-    if (ImGui::Checkbox("PB note", &toast)) setSetting("PbToast", toast ? 1 : 0);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A short note in the corner after a new personal best.");
+    ck::sameLineIfFits(ck::checkboxWidth("PB toast"));
+    if (ImGui::Checkbox("PB toast", &toast)) setSetting("PbToast", toast ? 1 : 0);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toast after a new PB.");
 
     ck::section(p, "Compare with");
     const int target = setting("Target", kTargetTmx);
-    const char* names[] = {"Personal best only", "TMX record", "Ghost in the race", "Replay file"};
+    const char* names[] = {"PB only", "TMX record", "Race ghost", "Replay file"};
     for (int i = 0; i < 4; i++) {
         if (i == kTargetGhost && !g_forever) continue;
         if (ImGui::RadioButton(names[i], target == i)) {
             setSetting("Target", i);
             refreshTarget();
         }
-        if (i == kTargetTmx && ImGui::IsItemHovered()) ImGui::SetTooltip("The record replay from TMX, through TM Horizon.");
-        if (i == kTargetGhost && ImGui::IsItemHovered()) ImGui::SetTooltip("The fastest ghost the race shows (a medal, a loaded replay).");
+        if (i == kTargetTmx && ImGui::IsItemHovered()) ImGui::SetTooltip("Via TM Horizon.");
+        if (i == kTargetGhost && ImGui::IsItemHovered()) ImGui::SetTooltip("Fastest ghost in the race.");
     }
     if (!g_targetStatus.empty()) ck::hint(p, g_targetStatus.c_str());
     else if (!g_target.splits.empty())
@@ -875,7 +879,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     }
     if (target == kTargetFile) {
         if (!g_uidKnown) {
-            ck::hint(p, "The map's UID is unknown, so replays can't be matched.");
+            ck::hint(p, "Map UID unknown");
         } else {
             if (ImGui::Button(g_scanning ? "Looking..." : "Find replays")) startScan();
             std::lock_guard<std::mutex> lock(g_pickMutex);
@@ -888,21 +892,22 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
                     refreshTarget();
                 }
             }
-            if (!g_scanning && g_picked.empty()) ck::hint(p, "No replay of this map found yet.");
+            if (!g_scanning && g_picked.empty()) ck::hint(p, "No replays found");
         }
     }
 
     ck::section(p, "This map");
-    ImGui::Text("%s", g_haveMap ? (g_mapName.empty() ? "(no name)" : g_mapName.c_str()) : "No map loaded");
+    ImGui::Text("%s", g_haveMap ? (g_mapName.empty() ? "(no name)" : g_mapName.c_str()) : "No map");
     if (g_haveMap) {
         ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-        ImGui::Text("%s  |  times from %s", g_uidKnown ? "kept by UID" : "kept by name (UID unknown)",
-                    g_forever ? (g_reader && g_reader->run().cpsFromList ? "the game's checkpoint list" : "the checkpoint counter") : "the host's events");
+        ImGui::Text("%s  \xC2\xB7  %s", g_uidKnown ? "By UID" : "By name",
+                    g_forever ? (g_reader && g_reader->run().cpsFromList ? "CP list" : "CP counter") : "Host events");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the stats are kept and the split times come from.");
         ImGui::PopStyleColor();
         static bool confirm = false;
         if (!confirm && ImGui::Button("Reset map stats")) confirm = true;
         if (confirm) {
-            ImGui::TextUnformatted("Delete PB, golds and history of this map?");
+            ImGui::TextUnformatted("Delete PB, golds, history?");
             if (ImGui::Button("Delete")) {
                 const std::string key = g_stats.key, uid = g_stats.uid, name = g_stats.name;
                 g_stats = wrh::MapStats();
@@ -917,7 +922,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
             if (ImGui::Button("Keep")) confirm = false;
         }
     }
-    ck::hint(p, "Split times only: no checkpoint positions, nothing changes the run. Allowed online.");
+    ck::hint(p, "Splits only  \xC2\xB7  allowed online");
 }
 
 // Test hook (tests\wr_hunter_fakehost.cpp, the preview): "state" -> a one-line summary.

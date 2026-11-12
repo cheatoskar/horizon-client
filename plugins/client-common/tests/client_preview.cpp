@@ -3,7 +3,10 @@
 // test host (fake world, fake TM Horizon bridge with TMX fixtures). Saves screens\client-<scene>.png
 // (screens\ is not committed). No game needed.
 //
-//   client_preview.exe <build\plugins folder>
+// Also the modules in their own window (top bar, left click on the icon) with the top bar shown, at 640x480 and
+// 1920x1080: screens\client-popout-<tag>-<module>-<size>.png (<tag> = second argument, default "now").
+//
+//   client_preview.exe <build\plugins folder> [tag]
 #include <windows.h>
 
 #include <d3d9.h>
@@ -35,6 +38,9 @@ namespace {
 
 const int kWidth = 1600, kHeight = 900;
 IDirect3DDevice9* g_dev = nullptr;
+D3DPRESENT_PARAMETERS g_pp = {};
+int g_w = kWidth, g_h = kHeight; // the back buffer (the game window) of the current scene
+std::string g_tag = "now";
 int g_failed = 0;
 
 LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
@@ -144,6 +150,7 @@ void shot(const char* name, int frames, const std::function<void(int)>& draw, bo
     for (int f = 0; f < frames; ++f) {
         ImGui_ImplDX9_NewFrame();
         ImGui_ImplWin32_NewFrame();
+        io.DisplaySize = ImVec2(static_cast<float>(g_w), static_cast<float>(g_h));
         io.DeltaTime = 1.0f / 30.0f;
         io.AddMousePosEvent(-100, -100);
         ImGui::NewFrame();
@@ -174,6 +181,7 @@ void shot(const char* name, int frames, const std::function<void(int)>& draw, bo
 void tick(const std::function<void()>& fn) {
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(g_w), static_cast<float>(g_h));
     ImGui::NewFrame();
     fn();
     ImGui::EndFrame();
@@ -288,12 +296,101 @@ PanelView tab(const char* key, const char* title, bool detached = false) {
     return v;
 }
 
+// The host's ui_metrics (ABI 1.4) as the menu shell knows them right now, handed to the plugin.
+void syncMetrics() {
+    const MenuMetrics& mm = menuMetrics();
+    chost::metrics.scale = scale();
+    chost::metrics.display_w = static_cast<float>(g_w);
+    chost::metrics.display_h = static_cast<float>(g_h);
+    chost::metrics.menu_w = mm.menuW;
+    chost::metrics.menu_h = mm.menuH;
+    chost::metrics.page_w = mm.pageW;
+    chost::metrics.page_h = mm.pageH;
+}
+
+// A new back buffer size (the game window) and the UI scale the host would pick for it.
+void setDisplay(int w, int h, float uiScale) {
+    ImGui_ImplDX9_InvalidateDeviceObjects();
+    g_pp.BackBufferWidth = static_cast<UINT>(w);
+    g_pp.BackBufferHeight = static_cast<UINT>(h);
+    if (FAILED(g_dev->Reset(&g_pp))) {
+        std::printf("FAILED Reset to %dx%d\n", w, h);
+        ++g_failed;
+    }
+    g_w = w;
+    g_h = h;
+    reloadFonts(uiScale);
+    applyStyle(uiScale);
+    ImGui_ImplDX9_CreateDeviceObjects();
+    chost::style.scale = uiScale;
+    chost::style.font_body = fonts().body;
+    chost::style.font_title = fonts().title;
+    chost::style.font_mono = fonts().mono;
+}
+
+// The module in its own window (left click on its bar icon) with the top bar shown, at 640x480 (UI scale 0.8,
+// as the host fits it) and 1920x1080 (1.0). A fresh window per size (id suffix), so it opens at its default size.
+void menuShot(const char* name, const Model& model, const Actions& actions, const char* page, int frames, const std::function<void(int)>& before);
+
+void popoutShots(const char* name, PluginView pv, const Actions& a, const char* gameName) {
+    struct Size {
+        int w, h;
+        float s;
+        const char* tag;
+    } sizes[] = {{640, 480, 0.8f, "640x480"}, {1920, 1080, 1.0f, "1920x1080"}};
+    const std::string baseId = pv.id;
+    for (const Size& z : sizes) {
+        setDisplay(z.w, z.h, z.s);
+        Model m = baseModel(gameName);
+        pv.id = baseId + "@" + z.tag;
+        m.plugins.clear();
+        m.plugins.push_back(pv);
+        for (const char* other : {"input-display", "tmx-browser", "tmx-upload", "performance", "scripts"}) {
+            if (baseId.find(other) == 0) continue;
+            PluginView o = view(other, other, "");
+            m.plugins.push_back(o);
+        }
+        togglePluginWindow(pv.id);
+        const std::string shotName = "popout-" + g_tag + "-" + name + "-" + z.tag;
+        shot(shotName.c_str(), 14, [&](int) {
+            bool openMenu = false;
+            drawBar(m, a, true, false, &openMenu);
+            drawPluginWindows(m, a);
+        }, false);
+        togglePluginWindow(pv.id);
+    }
+    // 640x480: the window next to the open menu (its header must stay reachable), and the window made narrow
+    // by the player (330 px: the compact layout; the window keeps its minimum, content scrolls)
+    setDisplay(640, 480, 0.8f);
+    for (int scene = 0; scene < 2; ++scene) {
+        Model m = baseModel(gameName);
+        PluginView q = pv;
+        q.id = baseId + (scene == 0 ? "@menu" : "@narrow");
+        if (scene == 1) {
+            q.winX = 8;
+            q.winY = 60;
+            q.winW = 330;
+            q.winH = 400;
+        }
+        m.plugins.push_back(q);
+        togglePluginWindow(q.id);
+        const std::string shotName = "popout-" + g_tag + "-" + name + (scene == 0 ? "-640x480-menu" : "-640x480-narrow");
+        menuShot(shotName.c_str(), m, a, scene == 0 ? "general" : "", 14, [&](int) {});
+        togglePluginWindow(q.id);
+    }
+    setDisplay(kWidth, kHeight, 1.0f);
+}
+
 Actions actionsFor(const Plugin& p) {
     Actions a;
     a.drawPluginPage = [&p](const std::string&) {
+        syncMetrics();
         if (p.menu) p.menu();
     };
-    a.drawPanelTab = [](const std::string&, const std::string& key) { drawPanel(key.c_str()); };
+    a.drawPanelTab = [](const std::string&, const std::string& key) {
+        syncMetrics();
+        drawPanel(key.c_str());
+    };
     a.setPluginEnabled = [](const std::string&, bool) {};
     a.closeMenu = [] {};
     a.setDnd = [](bool) {};
@@ -307,10 +404,15 @@ void menuShot(const char* name, const Model& model, const Actions& actions, cons
     frames += 30; // the menu fades in
     shot(name, frames, [&](int f) {
         if (before) before(f);
+        if (!*page) { // no menu: the free plugin windows only
+            drawPluginWindows(model, actions);
+            return;
+        }
         if (std::strncmp(page, "plugin:", 7) == 0) showPluginPage(page + 7);
         else showPage(page);
         bool open = true;
         drawMenu(model, actions, &open);
+        drawPluginWindows(model, actions); // free plugin windows sit above the menu, as in the host
     });
 }
 
@@ -386,6 +488,14 @@ void wrHunter(const std::string& dir) {
     m.plugins[0].id = "wr-hunter.history"; // a fresh tab bar that opens on History
     m.plugins[0].panels = {tab("history", "History"), tab("splits", "Splits", true)};
     menuShot("wr-hunter-history", m, a, "plugin:wr-hunter.history", 8, nullptr);
+    PluginView pw = view("wr-hunter", "WR Hunter", "Splits against your PB and the TMX record.");
+    pw.hasMenu = true;
+    pw.panels = {tab("splits", "Splits", true), tab("history", "History")};
+    popoutShots("wr-hunter-settings", pw, a, "TrackMania Nations Forever");
+    pw.id = "wr-hunter.history";
+    pw.hasMenu = false;
+    pw.panels = {tab("history", "History"), tab("splits", "Splits", true)};
+    popoutShots("wr-hunter-history", pw, a, "TrackMania Nations Forever");
     p.shutdown();
 }
 
@@ -422,6 +532,13 @@ void inputDisplay(const std::string& dir) {
         }
     }, false);
     p.cmd("style 0");
+    {
+        PluginView pv = view("input-display", "Input Display", "Steering, gas, brake and speed on screen.");
+        pv.hasMenu = true;
+        pv.panels = {tab("inputs", "Inputs", true)};
+        Actions a = actionsFor(p);
+        popoutShots("input-display", pv, a, "TrackMania United Forever");
+    }
     p.shutdown();
     // ESWC: no speed field in the old engine
     startHost(HORIZON_GAME_ESWC, "input-display");
@@ -530,6 +647,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string dir = argv[1];
+    if (argc > 2) g_tag = argv[2];
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr, L"CkPreview", nullptr};
     RegisterClassExW(&wc);
@@ -540,7 +658,7 @@ int main(int argc, char** argv) {
     if (!hwnd) return 2;
     IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d) return 3;
-    D3DPRESENT_PARAMETERS pp = {};
+    D3DPRESENT_PARAMETERS& pp = g_pp;
     pp.Windowed = TRUE;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;

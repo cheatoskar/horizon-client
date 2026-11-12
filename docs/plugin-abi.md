@@ -41,6 +41,7 @@ horizon\plugins\<id>\
 | `abi` | `HORIZON_ABI` the plugin was built against (1 today). |
 | `enabled_by_default` | `false`: off until switched on in the menu when there is no profile.json (default `true`). Anything that draws on screen during a race or talks to the network should ship `false`. |
 | `startup_only` | `true`: the module must hook the game at start (before the Direct3D device exists, or game code that only runs once). Switching it on in a running game then says "Needs a restart" instead of loading it. Default `false`: the host loads it the moment the player switches it on. |
+| `ui` | Optional: `{ "min_w": 520, "min_h": 360, "pref_w": 860, "pref_h": 600 }`, the size of the module's own window (a popped-out panel, the free window from the top bar) in logical pixels at UI scale 1. The host multiplies by `ui_metrics()->scale`, opens the window at `pref` (or at the size the player left it), clamps it to the game window below the top bar and the menu's header, and never makes it smaller than `min`; content that does not fit scrolls. Defaults: min 480 x 320, pref 820 x 560. Values outside 160-4000 are ignored. See "ABI 1.4". |
 | `icon` | PNG file name in the plugin's folder, e.g. `"icon.png"` (no sub-folders, no `..`). Square, 64-256 px, transparent corners welcome; shown as a rounded square in the menu and the bar. Missing or unreadable: coloured initials. A second set may lie next to it as `icon-alt.png`: the player picks "Distinct" (`icon`, default) or "Saturn" (`icon-alt.png`) in General -> Display (host.json `ui.icon_alt`, independent of the launcher); the other file is the fallback, then the initials. The modules in this repo ship the flat Distinct set as `icon.png` and the Saturn set as `icon-alt.png` (since 0.3.0; before, the other way round). Without `icon`, `icon.png` is tried. |
 
 The same facts are repeated inside the DLL (`HorizonPlugin_Info`). The JSON lets the launcher show the plugin without loading it. If they disagree, the DLL wins.
@@ -55,7 +56,7 @@ All exports are `__cdecl`, undecorated names.
 | `HorizonPlugin_Init(host)` | yes | Once, if abi and game match. Return 0 to load. Any other number shows the plugin as Failed with that number (I use 2 for "wrong exe"). Usually at game start; a module that was off at start runs `Init` later, in the middle of the game, when the player switches it on (see "Loading while the game runs"). |
 | `HorizonPlugin_Shutdown` | yes | Before the DLL is unloaded. Stop threads, free memory. `host` is invalid afterwards. |
 | `HorizonPlugin_DrawMenu` | with `CAP_MENU` | Every frame the plugin's page is visible, inside an ImGui child. |
-| `HorizonPlugin_DrawOverlay` | with `CAP_OVERLAY` | Every frame while the plugin is enabled and not gated. |
+| `HorizonPlugin_DrawOverlay` | with `CAP_OVERLAY` | Every frame while the plugin is enabled and not gated, also while the menu, a popped-out panel or a free plugin window is open (a confirm popup opened from it keeps working). |
 | `HorizonPlugin_OnEvent(const HorizonEvent*)` | with `CAP_GAME_EVENTS` | Per subscribed event. |
 | `HorizonPlugin_SetEnabled(int)` | with `FLAG_LIVE_TOGGLE` | User switches the plugin on or off without a restart. |
 
@@ -211,7 +212,7 @@ host->register_panel(host->plugin, &d);
 ```
 
 - Every panel is a tab on the plugin's page in the menu, after "Settings" (the plugin's `DrawMenu`, if it has one). A plugin without panels keeps the plain page.
-- "Pop out" (top right of the tab) puts the panel into its own window. With the menu open the window sits above the menu and can be moved and resized; its close button and "Back to the menu" bring it back. Right-click in the window, or the tab of a popped-out panel, shows its options: **Keep open when the menu closes**, **Lock layout** (no moving or resizing), **Click-through** (with the menu closed, clicks go to the game), **Hide in photos and videos** (on by default, see `HORIZON_HOST_FLAG_CAPTURE`), **Opacity** 30-100 %.
+- "Pop out" (top right of the tab) puts the panel into its own window. With the menu open the window sits above the menu and can be moved and resized; its close button and **Dock** (right-click) bring it back. A panel with a size (`default_w` > 0) opens at its saved size, else at `default_w` x `default_h` of the screen, at least the plugin's `ui.min_w` x `ui.min_h` (plugin.json), clamped to the screen below the top bar and the menu's header; smaller than its content it scrolls. Right-click in the window, or the tab of a popped-out panel, shows its options: **Keep open** (stays with the menu closed), **Lock layout** (no moving or resizing), **Click-through** (with the menu closed, clicks go to the game), **Hide in photos and videos** (on by default, see `HORIZON_HOST_FLAG_CAPTURE`), **Opacity** 30-100 %.
 - With the menu closed, kept windows have no title bar and can't be moved; they take mouse clicks unless they are click-through.
 - `HORIZON_PANEL_HUD`: starts popped out and kept open (a timer, a split display). The player can still bring it into the menu.
 - `HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN` (host 0.3.0, no ABI change; an older host ignores the bit and shows the widget at once): a widget that is off until the player shows it, from the list of hidden widgets in layout mode ("+ Title") or "Show" on its tab. Its tab then has "Hide". Reset in layout mode leaves hidden ones hidden. Horizon Scripts registers every script widget (`UI::AddWidget`) this way.
@@ -233,8 +234,9 @@ Fonts: `style()->font_*` keep the same `ImFont*` for the whole start. When the p
 
 Every plugin icon in the top bar has two clicks. Left click opens (or closes) the plugin's page as a free window: the plugin's Settings (`DrawMenu`) and one tab per panel, an "On" switch, no menu frame or sidebar. It can be moved and resized, has a close button, and several plugins' windows can be open at once. Right click opens the Horizon menu on that plugin's page (the settings). The icon tooltip says "Linksklick: Fenster Â· Rechtsklick: Einstellungen".
 
-- Position and size are saved per plugin in `settings\host.json` as `pwin.<plugin id>` (`x,y,w,h` in pixels). They are clamped to the screen when the window opens and again when the display size changes (Reset). Whether the window is open is not saved.
-- Plugins need no change: the window calls the same `DrawMenu` and panel draw functions as the menu page. A panel that was popped out into its own window shows its "in its own window" note in the tab, as in the menu.
+- Position and size are saved per plugin in `settings\host.json` as `pwin.<plugin id>` (`x,y,w,h` in pixels). A window without a saved size opens at the plugin's `ui.pref_w` x `ui.pref_h` (plugin.json, default 820 x 560) times the UI scale; it never gets smaller than `ui.min_w` x `ui.min_h` (default 480 x 320, scaled). The rect is clamped to the screen when the window opens and again when the display size changes (Reset), and it starts below the top bar and the menu's header row, so both stay clickable. Content wider or taller than the window scrolls. Whether the window is open is not saved.
+- The top bar stays in front of these windows. In a small game window (640x480) its buttons shrink to icons (Menu, Layout, Log, TM Horizon; names in the tooltips) when the module icons do not all fit.
+- The window calls the same `DrawMenu` and panel draw functions as the menu page. `ui_metrics()` reports the window's room while they run (see "ABI 1.4"), so a plugin page can switch to its compact layout. A panel that was popped out into its own window shows its "in its own window" note in the tab, as in the menu.
 - Input rules: the windows are ordinary ImGui windows drawn after the menu, so they sit above the menu and its dim layer. With the menu closed, mouse clicks over a window (or the bar) are kept from the game, mouse moves are not; a focused text field also takes the keyboard (the game does not see those keys). The pointer is drawn while a window is open. The game's DirectInput is only blocked while the menu is open.
 - `HorizonHost_GetUiState` does not report these windows (bit 4 stays for detached panels).
 
@@ -270,17 +272,31 @@ typedef struct HorizonUiMetrics {
     float content_scale;         /* the player's content scale, 0.8 .. 1.25 */
     float display_w, display_h;  /* the game's back buffer, pixels */
     float menu_w, menu_h;        /* the Horizon menu window, pixels */
-    float page_w, page_h;        /* room for a plugin page inside the menu card, pixels (0 before a page was drawn) */
+    float page_w, page_h;        /* room of the container the plugin is drawn in right now, pixels (see below) */
 } HorizonUiMetrics;
 ```
 
-The player sets the menu size (Auto, 60, 70, 80 or 90 % of the screen; Auto is 80 % at 1440p and higher, 85 % below) and the content scale (80-125 %; Auto is 90 % at 1440p and higher, 100 % below) in General -> Display, or changes the content scale with Ctrl + mouse wheel while the menu is open. A plugin page with a wide layout (columns, tables) reads `page_w` to pick fewer columns instead of clipping, for example:
+**`page_w` / `page_h` contract (host 0.3).** They always describe the content region of the container that is calling the plugin's `DrawMenu` or panel draw function right now: the docked menu page, a popped-out panel window or a free plugin window (top bar, left click). The host sets them right before each call and restores them afterwards; outside a draw call they hold the menu page's room (0 before a page was drawn). An auto-sized widget (a HUD panel with `default_w`/`default_h` 0, drawn with the menu closed) gets 0 x 0: draw at your natural size there. No new fields, no ABI change: a plugin built against 1.4 gets this from a 0.3 host as is.
+
+Inside `DrawMenu` and a panel draw function `ImGui::GetContentRegionAvail()` stays the ground truth; `page_w` is never larger. Read `page_w` where the content region is not at hand (before a child window, to size columns ahead). A page that does not fit should switch to a compact layout instead of clipping:
 
 ```c
 const HorizonUiMetrics* m = host->abi_minor >= 4 && host->ui_metrics ? host->ui_metrics() : NULL;
-const float avail = m && m->page_w > 0 ? m->page_w : ImGui::GetContentRegionAvail().x;
-const int columns = avail > 1100.0f * scale ? 3 : avail > 700.0f * scale ? 2 : 1;
+float room = ImGui::GetContentRegionAvail().x;
+if (m && m->size >= sizeof(HorizonUiMetrics) && m->page_w > 0 && m->page_w < room) room = m->page_w;
+const bool compact = room < 560.0f * scale;   /* scale = m->scale or style()->scale */
 ```
+
+In the compact layout:
+
+- one column: cards and side panes below each other, side lists 130-170 px x scale instead of 220-260,
+- buttons and checkboxes in a row wrap to the next line when the next one does not fit (`plugins/client-common/ckui.h`: `ck::sameLineIfFits`, `ck::checkboxWidth`, `ck::buttonWidth`, `ck::narrow`, `ck::roomWidth`),
+- long lines wrap (`TextWrapped`, `PushTextWrapPos(0)`), tables drop secondary columns, input widths are `min(wanted * scale, room - label)`,
+- a header with a title and chips puts the chips on their own line (or drops them) instead of drawing them over the title.
+
+A free or popped-out window opens at the plugin's `ui.pref_w` x `ui.pref_h` (plugin.json) and never gets smaller than `ui.min_w` x `ui.min_h`; set `min_w` to the narrowest width the compact layout still works at.
+
+The player sets the menu size (Auto, 60, 70, 80 or 90 % of the screen; Auto is 80 % at 1440p and higher, 85 % below) and the content scale (80-125 %; Auto is 90 % at 1440p and higher, 100 % below) in General -> Display, or changes the content scale with Ctrl + mouse wheel while the menu is open. A plugin page with a wide layout (columns, tables) picks fewer columns from the room it has, for example `const int columns = room > 1100.0f * scale ? 3 : room > 700.0f * scale ? 2 : 1;`.
 
 The pointer stays valid for the whole start; the values change between frames. `offsetof(HorizonHostApi, ui_metrics)` equals the size of the 1.3 table (unit test `static_assert`), so a plugin built against 1.3 never sees it, and one built against 1.4 checks `host->abi_minor >= 4` (or `host->size`) first.
 
@@ -291,7 +307,7 @@ A module that was off at game start is loaded the moment the player switches it 
 - `Init` can run in the middle of a game: the device exists, a map may be running. `set_device_callbacks` calls `device_created` at once with the existing device (`present_params` is NULL then); `before_reset` / `after_reset` follow as usual. `adjust_present_params` only takes effect at the next `Reset`.
 - Right after `Init` the host sends the plugin a `GAME_STATE` event with the current state and, if a map runs, a `MAP_LOADED` event (only to that plugin, only if it subscribed).
 - Switching off: a plugin with `HORIZON_FLAG_LIVE_TOGGLE` gets `SetEnabled(0)` as before. The DLL stays loaded until the game ends (threads and hooks of a plugin may still point into it); switching on again is `SetEnabled(1)`, no second `Init`. A running plugin without `LIVE_TOGGLE` still turns off only after a restart.
-- A module that cannot work this way sets `"startup_only": true` in its `plugin.json`; the menu then says "Needs a restart: this module hooks the game at start".
+- A module that cannot work this way sets `"startup_only": true` in its `plugin.json`; the switch's tooltip then says "Needs a restart: this module hooks the game at start".
 
 ### Opening the plugin's page: `open_page`
 

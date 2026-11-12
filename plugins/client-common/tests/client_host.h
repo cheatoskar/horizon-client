@@ -50,6 +50,7 @@ extern int gameState;
 extern int bridgeStateValue;
 extern bool menuIsOpen;
 extern HorizonStyle style;
+extern HorizonUiMetrics metrics; // ABI 1.4 ui_metrics(): a 1080p screen with the menu at 80 % unless a test sets it
 
 // game: HORIZON_GAME_*; dataRoot with trailing backslash (the plugin's data folder is dataRoot + id + "\").
 void setup(uint32_t game, const std::string& dataRoot, const std::string& pluginId);

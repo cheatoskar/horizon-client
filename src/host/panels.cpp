@@ -125,7 +125,13 @@ void drawBody(HostPanel& q, bool scaled) {
         if (st) st->scale = before * q.scale;
         ImGui::SetWindowFontScale(q.scale);
     }
-    const bool ok = sehDraw(q.draw, q.user);
+    bool ok;
+    {
+        // ui_metrics: the room of this window or tab; 0 x 0 for a widget that fits its content
+        const ImVec2 room = scaled ? ImVec2(0.0f, 0.0f) : ImGui::GetContentRegionAvail();
+        const ui::PageRoom r(room.x, room.y);
+        ok = sehDraw(q.draw, q.user);
+    }
     if (scaled && q.scale != 1.0f) {
         if (st) st->scale = before;
         ImGui::SetWindowFontScale(1.0f);
@@ -137,11 +143,12 @@ void drawBody(HostPanel& q, bool scaled) {
 // The window options, in the menu tab of a detached panel and in the window's right-click menu.
 void drawOptions(HostPanel& q) {
     bool dirty = false;
-    dirty |= ImGui::Checkbox("Keep open when the menu closes", &q.keepOpen);
+    dirty |= ImGui::Checkbox("Keep open", &q.keepOpen);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stays on screen with the menu closed.");
     dirty |= ImGui::Checkbox("Lock layout", &q.locked);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The window can't be moved or resized.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("No moving or resizing.");
     dirty |= ImGui::Checkbox("Click-through", &q.clickThrough);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("With the menu closed, clicks go through the window to the game.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clicks reach the game while the menu is closed.");
     dirty |= ImGui::Checkbox("Hide in photos and videos", &q.hideInCapture);
     ImGui::SetNextItemWidth(220.0f * ImGui::GetFontSize() / 16.0f);
     dirty |= ImGui::SliderInt("Opacity", &q.opacity, 30, 100, "%d%%");
@@ -536,9 +543,24 @@ bool panelsDrawWindows(const PanelsFrame& f) {
         if (q.locked) flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
         const bool autoSize = autoSized(q);
         if (autoSize) flags |= ImGuiWindowFlags_AlwaysAutoResize;
+        else flags |= ImGuiWindowFlags_HorizontalScrollbar; // smaller than its content: scrolls instead of clipping
+        // a pop-out with a size (not a widget kept on screen): opens at its saved or default size, at least the
+        // plugin's minimum (plugin.json "ui", scaled), clamped below the top bar and the menu's header
+        const bool popout = !autoSize && !widget;
+        ui::WinRect fit{};
+        if (popout) {
+            const float s = uiScale();
+            const float w0 = q.w > 0.0f ? q.w : q.dw * screen.x;
+            const float h0 = q.h > 0.0f ? q.h : (q.dh > 0.0f ? q.dh * screen.y : q.plugin->manifest.uiPrefH * s);
+            fit = ui::fitWindow(q.x, q.y, w0, h0, q.plugin->manifest.uiMinW * s, q.plugin->manifest.uiMinH * s, screen.x, screen.y, 0);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(fit.minW, fit.minH), ImVec2(FLT_MAX, FLT_MAX));
+        }
         if (q.placeNext) {
             q.placeNext = false;
-            if (q.x < 0.0f && hud) {
+            if (popout) {
+                ImGui::SetNextWindowPos(ImVec2(fit.x, fit.y), ImGuiCond_Always);
+                ImGui::SetNextWindowSize(ImVec2(fit.w, fit.h), ImGuiCond_Always);
+            } else if (q.x < 0.0f && hud) {
                 q.slotFrames = 3; // a new widget: into its slot once its size is known
             } else {
                 const float w = q.w > 0.0f ? q.w : q.dw * screen.x;
@@ -550,7 +572,7 @@ bool panelsDrawWindows(const PanelsFrame& f) {
                 x = std::fmax(0.0f, std::fmin(x, screen.x - std::fmin(cw > 0.0f ? cw : 40.0f, screen.x)));
                 y = std::fmax(0.0f, std::fmin(y, screen.y - std::fmin(ch > 0.0f ? ch : 40.0f, screen.y)));
                 ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
-                if (!autoSize) ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+                if (!autoSize) ImGui::SetNextWindowSize(ImVec2(std::fmin(w, screen.x), std::fmin(h, screen.y)), ImGuiCond_Always);
             }
         }
         if (q.slotFrames > 0) {
@@ -575,11 +597,11 @@ bool panelsDrawWindows(const PanelsFrame& f) {
             drawBody(q, autoSize);
             if (menuOpen && ImGui::BeginPopupContextWindow("##panel_options")) {
                 drawOptions(q);
-                if (ImGui::Selectable("Back to the menu")) open = false;
+                if (ImGui::Selectable("Dock")) open = false;
                 ImGui::EndPopup();
             }
             if (menuOpen && ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !ImGui::IsAnyItemHovered())
-                ImGui::SetTooltip("Right-click: window options");
+                ImGui::SetTooltip("Right-click: options");
             ImVec2 pos = ImGui::GetWindowPos();
             const ImVec2 size = ImGui::GetWindowSize();
             // dragged by its title bar (menu open): snap to the edges and the other widgets
@@ -791,7 +813,7 @@ void panelsDrawLayout() {
     {
         const float h = 34.0f * s, pad = 14.0f * s, gp = 8.0f * s;
         const std::string title = std::string(HZ_ICON_LAYOUT_GRID_U8) + "  Edit layout";
-        const std::string hint = "Drag to move, corner to resize. Esc ends.";
+        const std::string hint = "Drag: move  \xC2\xB7  Corner: resize  \xC2\xB7  Esc: done";
         std::vector<HostPanel*> hidden;
         for (auto& up : g_panels)
             if ((up->flags & HORIZON_PANEL_HUD) && !isWidget(*up) && usable(*up)) hidden.push_back(up.get());
@@ -826,7 +848,7 @@ void panelsDrawLayout() {
             x += pillWidth(chips[i]) + gp;
         }
         if (pill(wl, "##reset", ImVec2(x, by), h, "Reset", false)) panelsResetLayout();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Every widget back to its place and size.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("All widgets to their default place.");
         x += pillWidth("Reset") + gp;
         if (pill(wl, "##done", ImVec2(x, by), h, "Done", true)) setLayoutMode(false, "Done");
     }

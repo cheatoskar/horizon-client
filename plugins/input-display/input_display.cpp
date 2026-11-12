@@ -8,6 +8,7 @@
 #define HORIZON_PLUGIN_BUILD
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -193,7 +194,7 @@ void HORIZON_CALL drawInputs(void*) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (!g_car.ok) {
         ck::text(dl, ck::font(g_host, 0), 14.0f * ck::uiScale(g_host), o, ck::u32(p.muted),
-                 g_inRace ? "No car data in this game yet." : "Shows while you drive.");
+                 g_inRace ? "No data" : "Waiting for race");
         return;
     }
     switch (style) {
@@ -217,7 +218,7 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) {
                                            HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY,
                                            HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
                                            "cheatoskar",
-                                           "Shows steering, gas, brake and speed as the car sees them.",
+                                           "Steering, gas, brake and speed on screen.",
                                            HORIZON_ABI_MINOR};
     return &info;
 }
@@ -276,40 +277,42 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     const char* styles[] = {"Bars", "Keys", "Wheel", "Minimal"};
     int style = setting("Style", kBars);
     for (int i = 0; i < 4; i++) {
-        if (i) ImGui::SameLine();
+        if (i) ck::sameLineIfFits(ck::checkboxWidth(styles[i]));
         if (ImGui::RadioButton(styles[i], style == i)) g_host->set_int(g_host->plugin, "Style", i);
     }
+    // sliders: 220 px at scale 1, less in a narrow pop-out (the label stays visible)
+    const float sliderW = std::min(220.0f * ck::uiScale(g_host), std::max(80.0f, ck::roomWidth(g_host) - 90.0f * ck::uiScale(g_host)));
     float size = settingF("Size", 1.0f);
-    ImGui::SetNextItemWidth(220.0f * ck::uiScale(g_host));
+    ImGui::SetNextItemWidth(sliderW);
     if (ImGui::SliderFloat("Size", &size, 0.6f, 2.0f, "%.1fx")) g_host->set_float(g_host->plugin, "Size", size);
     if (style == kKeys) {
         float th = settingF("Threshold", 0.2f);
-        ImGui::SetNextItemWidth(220.0f * ck::uiScale(g_host));
+        ImGui::SetNextItemWidth(sliderW);
         if (ImGui::SliderFloat("Key at", &th, 0.05f, 0.9f, "%.2f")) g_host->set_float(g_host->plugin, "Threshold", th);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far a pad stick or pedal goes before its key lights up.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stick or pedal travel that lights a key.");
     }
     ck::section(p, "Show");
     bool speed = setting("ShowSpeed", 1) != 0, mph = setting("Mph", 0) != 0, graph = setting("Graph", 1) != 0, gear = setting("Gear", 1) != 0,
          rpm = setting("Rpm", 1) != 0;
     if (ImGui::Checkbox("Speed", &speed)) g_host->set_int(g_host->plugin, "ShowSpeed", speed ? 1 : 0);
-    ImGui::SameLine();
+    ck::sameLineIfFits(ck::checkboxWidth("mph"));
     if (ImGui::Checkbox("mph", &mph)) g_host->set_int(g_host->plugin, "Mph", mph ? 1 : 0);
-    ImGui::SameLine();
+    ck::sameLineIfFits(ck::checkboxWidth("Graph"));
     if (ImGui::Checkbox("Graph", &graph)) g_host->set_int(g_host->plugin, "Graph", graph ? 1 : 0);
-    ImGui::SameLine();
+    ck::sameLineIfFits(ck::checkboxWidth("Gear"));
     if (ImGui::Checkbox("Gear", &gear)) g_host->set_int(g_host->plugin, "Gear", gear ? 1 : 0);
-    ImGui::SameLine();
+    ck::sameLineIfFits(ck::checkboxWidth("RPM"));
     if (ImGui::Checkbox("RPM", &rpm)) g_host->set_int(g_host->plugin, "Rpm", rpm ? 1 : 0);
     ck::section(p, "Now");
     if (g_car.ok) {
-        ImGui::Text("Steer %+.2f   Gas %.2f   Brake %.2f", g_car.steer, g_car.gas, g_car.brake);
-        ImGui::Text("Speed %s   Gear %s   RPM %s", g_car.haveSpeed ? speedText(g_car.speedKmh).c_str() : "not available",
-                    g_car.haveGear ? std::to_string(g_car.gear).c_str() : "not available",
-                    g_car.haveRpm ? std::to_string(static_cast<int>(g_car.rpm)).c_str() : "not available");
+        ImGui::TextWrapped("Steer %+.2f   Gas %.2f   Brake %.2f", g_car.steer, g_car.gas, g_car.brake);
+        ImGui::TextWrapped("Speed %s   Gear %s   RPM %s", g_car.haveSpeed ? speedText(g_car.speedKmh).c_str() : "-",
+                           g_car.haveGear ? std::to_string(g_car.gear).c_str() : "-",
+                           g_car.haveRpm ? std::to_string(static_cast<int>(g_car.rpm)).c_str() : "-");
     } else {
-        ck::hint(p, g_inRace ? "The car's values could not be read in this game." : "Drive to see the values.");
+        ck::hint(p, g_inRace ? "No data" : "Waiting for race");
     }
-    ck::hint(p, "Read only: the plugin never changes your input.");
+    ck::hint(p, "Read only");
 }
 
 HORIZON_EXPORT int32_t __cdecl HorizonClient_TestHook(const char* cmd, char* out, int32_t outSize) {

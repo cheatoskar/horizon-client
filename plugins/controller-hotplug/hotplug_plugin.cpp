@@ -96,7 +96,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Registers game controllers you plug in while the game runs.",
+    "Adds controllers plugged in while the game runs.",
     HORIZON_ABI_MINOR,
 };
 
@@ -167,24 +167,25 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (!g_imgui || !g_host) return;
     if (g_passive) {
         ImGui::TextWrapped("%s", kStandaloneNote);
-        ImGui::TextDisabled("Remove controller_hotplug.dll from the game folder to use this module instead.");
+        ImGui::TextDisabled("Remove controller_hotplug.dll to use the module.");
         return;
     }
     if (!g_service) return;
     if (g_backend && g_backend->failed()) {
-        ImGui::TextWrapped("The game's input code is not as expected. Nothing is changed (see the log).");
+        ImGui::TextWrapped("Unknown input code: off (see log)");
         return;
     }
-    ImGui::TextWrapped("Controllers you plug in while the game runs are added to the game. Set them up in the game's input settings.");
-    ImGui::TextDisabled("%s", g_service->notifications() ? "Watching device notifications." : "Checking once per second.");
+    ImGui::TextDisabled("%s", g_service->notifications() ? "Watching: device events" : "Watching: every second");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Set new controllers up in the game's input settings.");
     ImGui::Separator();
     std::vector<hp::Tracker::View> v;
     g_service->view(v);
-    if (v.empty()) ImGui::TextDisabled("No controller connected.");
+    if (v.empty()) ImGui::TextDisabled("No controller");
     for (const auto& c : v) {
         const std::string name = hp::toUtf8(c.name);
         const char* state = !c.present ? "unplugged" : c.inGame ? "in game" : "waiting";
-        ImGui::BulletText("%s  (%s)", name.c_str(), state);
+        ImGui::Bullet();
+        ImGui::TextWrapped("%s  (%s)", name.c_str(), state); // long device names wrap in narrow windows
     }
 }
 

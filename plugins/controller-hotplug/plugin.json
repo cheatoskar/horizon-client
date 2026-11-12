@@ -10,7 +10,8 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Registers game controllers you plug in while the game runs.",
+  "description": "Adds controllers plugged in while the game runs.",
   "author": "cheatoskar",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "ui": { "min_w": 320, "min_h": 220, "pref_w": 460, "pref_h": 320 }
 }

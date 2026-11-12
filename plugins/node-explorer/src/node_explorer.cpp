@@ -103,6 +103,25 @@ struct Compact {
     Compact& operator=(const Compact&) = delete;
 };
 
+// Width of the page or window being drawn (ABI 1.4 ui_metrics page_w, never more than the content region).
+float roomWidth() {
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (g_host && g_host->abi_minor >= 4 && g_host->ui_metrics) {
+        const HorizonUiMetrics* m = g_host->ui_metrics();
+        if (m && m->size >= sizeof(HorizonUiMetrics) && m->page_w > 0.0f && m->page_w < avail) avail = m->page_w;
+    }
+    return avail;
+}
+// Compact layout (pop-out, small window): narrower side lists, toolbar buttons wrap.
+bool narrow() { return roomWidth() < 560.0f * uiScale(); }
+// SameLine() when an item w pixels wide still fits, else a new line.
+void flow(float w) {
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= right) ImGui::SameLine();
+}
+float buttonW(const char* label) { return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f; }
+float radioW(const char* label) { return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x; }
+
 void mutedText(const char* t) {
     ImGui::PushStyleColor(ImGuiCol_Text, muted());
     ImGui::TextUnformatted(t);
@@ -221,10 +240,8 @@ void drawBanner() {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * uiScale());
     if (ImGui::BeginChild("##cp", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding)) {
         ImGui::PushStyleColor(ImGuiCol_Text, w);
-        ImGui::TextUnformatted("Competition Patch is loaded.");
+        ImGui::TextUnformatted("Competition Patch: read only");
         ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::TextUnformatted("Node Explorer only reads memory here too: no writes, no calls.");
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -343,33 +360,34 @@ void drawObjectTable(const Path& here) {
     if (shown == 0) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        mutedText(g_view.rows.empty() ? "No members." : "No member matches.");
+        mutedText(g_view.rows.empty() ? "No members" : "No match");
     }
     ImGui::EndTable();
 }
 
 void drawObjects(float height) {
     const float s = uiScale();
-    // ---- left: where to start, pinned objects
-    if (ImGui::BeginChild("##start", ImVec2(220.0f * s, height), ImGuiChildFlags_ResizeX)) {
+    // ---- left: where to start, pinned objects (narrower in a small window)
+    if (ImGui::BeginChild("##start", ImVec2((narrow() ? 130.0f : 220.0f) * s, height), ImGuiChildFlags_ResizeX)) {
         mutedText("Start");
         const struct {
             const char* root;
             uint32_t id;
         } roots[] = {{"App", HORIZON_ENGINE_APP}, {"Race", HORIZON_ENGINE_RACE}, {"Challenge", HORIZON_ENGINE_CHALLENGE}};
+        bool first = true;
         for (const auto& r : roots) {
             const bool there = g_host->engine_pointer(r.id) != nullptr;
+            if (!first) flow(buttonW(r.root));
+            first = false;
             ImGui::BeginDisabled(!there);
             if (ImGui::Button(r.root)) openRoot(r.root);
             ImGui::EndDisabled();
-            if (!there && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Not available right now.");
-            ImGui::SameLine();
+            if (!there && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Not available");
         }
-        ImGui::NewLine();
         ImGui::Spacing();
         mutedText("Pinned");
         const auto& pins = g_nav.pins();
-        if (pins.empty()) mutedText("Nothing pinned yet.");
+        if (pins.empty()) mutedText("Nothing pinned");
         for (size_t i = 0; i < pins.size(); i++) {
             ImGui::PushID(static_cast<int>(i));
             const Path* cur = g_nav.current();
@@ -396,16 +414,16 @@ void drawObjects(float height) {
         ImGui::BeginDisabled(!g_nav.canBack());
         if (ImGui::Button("Back") && g_nav.back()) g_needRefresh = true;
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow(buttonW("Forward"));
         ImGui::BeginDisabled(!g_nav.canForward());
         if (ImGui::Button("Forward") && g_nav.forward()) g_needRefresh = true;
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow(buttonW("Refresh"));
         ImGui::BeginDisabled(!cur);
         if (ImGui::Button("Refresh")) g_needRefresh = true;
-        ImGui::SameLine();
+        flow(buttonW("Copy path"));
         if (ImGui::Button("Copy path") && cur) ImGui::SetClipboardText(cur->text().c_str());
-        ImGui::SameLine();
+        flow(buttonW("Unpin"));
         const bool pinned = cur && g_nav.isPinned(*cur);
         if (ImGui::Button(pinned ? "Unpin" : "Pin") && cur) {
             if (pinned) {
@@ -420,7 +438,7 @@ void drawObjects(float height) {
 
         if (!cur) {
             ImGui::Spacing();
-            mutedText("Pick a start object on the left.");
+            mutedText("Pick a start object");
         } else {
             // breadcrumb: every part opens that object
             ImGui::Spacing();
@@ -444,7 +462,7 @@ void drawObjects(float height) {
                 ImGui::PushStyleColor(ImGuiCol_Text, bad());
                 ImGui::TextUnformatted(g_pathError.c_str());
                 ImGui::PopStyleColor();
-                mutedText("Values come back when the object exists again (Refresh).");
+                mutedText("Object gone (Refresh)");
             } else if (g_viewOk && g_view.cls) {
                 if (link(g_view.cls->name.c_str())) openClass(g_view.cls);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show this class");
@@ -456,10 +474,11 @@ void drawObjects(float height) {
                 mutedText(info);
                 if (g_view.skipped > 0) {
                     ImGui::PushStyleColor(ImGuiCol_Text, warn());
-                    ImGui::Text("Read limit reached: %d values skipped. Raise it under Settings.", g_view.skipped);
+                    ImGui::TextWrapped("Read limit: %d skipped", g_view.skipped);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Raise it under Settings.");
                     ImGui::PopStyleColor();
                 }
-                ImGui::SetNextItemWidth(260.0f * s);
+                ImGui::SetNextItemWidth(std::min(260.0f * s, ImGui::GetContentRegionAvail().x));
                 ImGui::InputTextWithHint("##filter", "Filter members", g_memberFilter, sizeof(g_memberFilter));
                 drawObjectTable(*cur);
             }
@@ -479,7 +498,7 @@ void rebuildClassList() {
 void drawClasses(float height) {
     const float s = uiScale();
     rebuildClassList();
-    if (ImGui::BeginChild("##classlist", ImVec2(260.0f * s, height), ImGuiChildFlags_ResizeX)) {
+    if (ImGui::BeginChild("##classlist", ImVec2((narrow() ? 150.0f : 260.0f) * s, height), ImGuiChildFlags_ResizeX)) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##search", "Search classes", g_classFilter, sizeof(g_classFilter));
         char n[64];
@@ -604,7 +623,7 @@ void dumpNow() {
     const int n = dumpClasses(g_cat, di, path);
     char msg[512];
     if (n < 0) {
-        snprintf(msg, sizeof(msg), "Could not write the file.");
+        snprintf(msg, sizeof(msg), "File not written");
     } else {
         snprintf(msg, sizeof(msg), "%d classes written to %sclasses-%s-%08x.json", n, g_host->data_folder(g_host->plugin), tag, di.exeTimestamp);
     }
@@ -614,20 +633,22 @@ void dumpNow() {
 
 void drawSettings() {
     const float s = uiScale();
-    mutedText("Refresh the open object");
+    mutedText("Refresh");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The open object, while this page shows.");
     bool changed = false;
     changed |= ImGui::RadioButton("Manual", &g_refreshMode, 0);
-    ImGui::SameLine();
+    flow(radioW("Every second"));
     changed |= ImGui::RadioButton("Every second", &g_refreshMode, 1);
-    ImGui::SameLine();
+    flow(radioW("Every frame"));
     changed |= ImGui::RadioButton("Every frame", &g_refreshMode, 2);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only the open object, and only while this page is open.");
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(260.0f * s);
+    // sliders: 260 px at scale 1, less in a narrow window (the label stays visible)
+    const float sliderW = std::min(260.0f * s, std::max(80.0f * s, ImGui::GetContentRegionAvail().x - 130.0f * s));
+    ImGui::SetNextItemWidth(sliderW);
     if (ImGui::SliderInt("Reads per frame", &g_readLimit, 200, 20000, "%d", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp)) changed = true;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hard limit. Values past it are skipped until the next refresh.");
-    ImGui::SetNextItemWidth(260.0f * s);
-    if (ImGui::SliderInt("List items shown", &g_listItems, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp)) changed = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Values past it are skipped.");
+    ImGui::SetNextItemWidth(sliderW);
+    if (ImGui::SliderInt("List items", &g_listItems, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp)) changed = true;
     if (ImGui::Checkbox("Show methods", &g_showMethods)) {
         changed = true;
         g_needRefresh = true;
@@ -636,9 +657,10 @@ void drawSettings() {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    mutedText("Class list for tm-modding-knowledge");
+    mutedText("Class dump");
     ImGui::BeginDisabled(!g_cat.loaded());
-    if (ImGui::Button("Dump classes to JSON")) dumpNow();
+    if (ImGui::Button("Dump JSON")) dumpNow();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("All classes, for tm-modding-knowledge.");
     ImGui::EndDisabled();
     if (!g_dumpMsg.empty()) {
         ImGui::PushTextWrapPos(0.0f);
@@ -653,8 +675,10 @@ void drawSettings() {
     snprintf(line, sizeof(line), "%s %s  ·  %u classes  ·  type numbers: %s", gi && gi->game_name ? gi->game_name : "?",
              gi && gi->exe_version ? gi->exe_version : "", static_cast<unsigned>(g_cat.classes().size()),
              g_engine == Engine::Forever ? "Forever" : "ESWC/Sunrise");
+    ImGui::PushTextWrapPos(0.0f);
     mutedText(line);
-    mutedText("Read-only: never writes, calls or hooks game code.");
+    ImGui::PopTextWrapPos();
+    mutedText("Read only");
 }
 
 } // namespace
@@ -670,7 +694,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Browse the engine's classes and live objects. Read-only.",
+    "Browse the engine's classes and live objects.",
     HORIZON_ABI_MINOR,
 };
 
@@ -725,8 +749,8 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     checkCompetitionPatch();
     drawBanner();
     if (!ensureCatalog()) {
-        ImGui::TextUnformatted("The engine's class list is not available in this game build.");
-        mutedText("It is read again every few seconds.");
+        ImGui::TextUnformatted("No class list in this build");
+        mutedText("Retrying");
         return;
     }
     const float s = uiScale();

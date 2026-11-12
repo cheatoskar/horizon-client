@@ -1022,6 +1022,17 @@ void hint(const char* text) {
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
 }
+// A muted line that wraps at the window edge (pop-outs, small windows).
+void dimWrapped(const char* fmt, ...) {
+    char b[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    ImGui::TextWrapped("%s", b);
+    ImGui::PopStyleColor();
+}
 
 void exportLast60() {
     size_t n = 0;
@@ -1031,94 +1042,97 @@ void exportLast60() {
     CreateDirectoryW(dir.c_str(), nullptr);
     const std::wstring path = dir + widen(stampNow() + "_last60s.csv");
     const bool ok = writeFile(path, perf::framesCsv(g_ring.last(n)));
-    g_lastResult = ok ? "saved the last 60 s as CSV" : "CSV could not be written";
+    g_lastResult = ok ? "Saved (CSV)" : "CSV not written";
 }
 
 void drawMenu() {
     const double now = perf::sys::nowMs();
     refreshLive(now);
-    if (g_competitionPatch)
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Competition Patch is loaded: call counting and the state filter are off.");
+    const HorizonStyle* st = g_host->style();
+    const float sc = st && st->scale > 0 ? st->scale : 1.0f;
+    const float fieldW = 160.0f * sc; // input fields, scaled like the menu
+    if (g_competitionPatch) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Competition Patch: call counts off");
 
     ImGui::SeparatorText("Measure");
-    ImGui::Text("Last 10 s: %.0f fps avg, 1%% low %.0f, 0.1%% low %.0f, %u stutters", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
-                static_cast<unsigned>(g_live.stutters));
-    ImGui::TextDisabled("per frame: game %.2f ms, Present %.2f ms, limiter %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
+    ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
+                       static_cast<unsigned>(g_live.stutters));
+    dimWrapped("Game %.2f   Present %.2f   Wait %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
     if (checkbox("Frame-time window", &S.overlay, "overlay")) registerOverlay();
-    hint("A small window with FPS, lows and a graph of the last frames. Stays on screen with the menu closed.");
+    hint("FPS, lows and a frame graph on screen.");
     ImGui::BeginDisabled(!callsAllowed());
     if (checkbox("Count Direct3D calls", &S.count, "count")) applyProcessOptions();
     ImGui::EndDisabled();
-    hint("Draw calls, state changes, locks and GPU waits per frame. Costs a little time itself.");
+    hint("Calls per frame; costs a little time.");
     if (S.count) {
         ImGui::SameLine();
-        checkbox("in the window", &S.overlayCalls, "overlay_calls");
+        checkbox("In window", &S.overlayCalls, "overlay_calls");
     }
     if (perf::d3d::attached()) {
         const auto& f = perf::d3d::facts();
-        ImGui::TextDisabled("Device: flags 0x%08lx, %s%s%s", static_cast<unsigned long>(f.behaviorFlags), f.pure ? "pure, " : "",
-                            f.mixed ? "mixed vertex processing" : f.software ? "software vertex processing" : "hardware vertex processing",
-                            f.multithreaded ? ", multithreaded" : "");
+        dimWrapped("Device 0x%08lx  %s%s%s", static_cast<unsigned long>(f.behaviorFlags), f.pure ? "pure, " : "",
+                   f.mixed ? "mixed VP" : f.software ? "software VP" : "hardware VP", f.multithreaded ? ", multithreaded" : "");
         if (g_ring.size() && g_ring.newest().hasCalls && g_ring.newest().calls.drawsSoftwareVP)
-            ImGui::TextDisabled("%u draws per frame use software vertex processing (CPU)", g_ring.newest().calls.drawsSoftwareVP);
+            dimWrapped("Software-VP draws: %u per frame", g_ring.newest().calls.drawsSoftwareVP);
     }
     if (ImGui::Button("Save last 60 s")) exportLast60();
-    ImGui::SameLine();
-    ImGui::TextDisabled("CSV in the bench folder");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("CSV in the bench folder.");
 
     ImGui::SeparatorText("Benchmark");
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(fieldW);
     if (ImGui::SliderInt("Seconds", &S.benchSeconds, 10, 120)) saveInt("bench_seconds", S.benchSeconds);
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(fieldW);
     if (ImGui::InputText("Label", S.benchLabel, sizeof(S.benchLabel))) g_host->set_string(g_host->plugin, "bench_label", S.benchLabel);
     if (requestWaiting()) {
         if (ImGui::Button("Start series")) g_keyEdge = true;
         ImGui::SameLine();
-        ImGui::TextDisabled("a request from bench-request.json waits: open the scene first");
+        ImGui::TextDisabled("Request waiting");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open the scene first.");
     } else if (g_reqFromLauncher && g_bench != Bench::Idle) {
         if (ImGui::Button("Stop")) g_keyEdge = true;
     } else if (ImGui::Button(g_bench == Bench::Idle ? "Start" : "Stop")) {
         startManualBench();
     }
-    ImGui::SameLine();
     const char* hk = g_benchHotkey ? g_host->hotkey_text(g_host->plugin, g_benchHotkey) : "";
-    ImGui::TextDisabled("records from now on%s%s", hk && *hk ? ", hotkey " : "", hk ? hk : "");
-    if (!g_benchStatus.empty()) ImGui::Text("%s", g_benchStatus.c_str());
-    if (!g_lastResult.empty()) ImGui::TextDisabled("%s", g_lastResult.c_str());
+    if (hk && *hk) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Key: %s", hk);
+    }
+    if (!g_benchStatus.empty()) ImGui::TextWrapped("%s", g_benchStatus.c_str());
+    if (!g_lastResult.empty()) dimWrapped("%s", g_lastResult.c_str());
 
-    ImGui::SeparatorText("Options (each off until measured)");
-    ImGui::SetNextItemWidth(160);
-    if (ImGui::InputInt("Frame limit (0 = off)", &S.limitFps, 10, 30)) {
+    ImGui::SeparatorText("Options");
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::InputInt("FPS limit", &S.limitFps, 10, 30)) {
         if (S.limitFps < 0) S.limitFps = 0;
         if (S.limitFps > 0 && S.limitFps < 30) S.limitFps = 30;
         if (S.limitFps > 1000) S.limitFps = 1000;
         saveInt("limit_fps", S.limitFps);
         applyProcessOptions();
     }
-    hint("Waits right after Present, so the game reads input just before the next frame. Steadier frame times, less heat.");
-    static const char* kVsync[] = {"as the game sets it", "off", "on"};
-    ImGui::SetNextItemWidth(160);
+    hint("0 = off. Waits after Present for steadier frames.");
+    static const char* kVsync[] = {"Default", "Off", "On"};
+    ImGui::SetNextItemWidth(fieldW);
     if (ImGui::Combo("V-Sync", &S.vsync, kVsync, 3)) saveInt("vsync", S.vsync);
-    hint("Applies at the next start or display change (Alt+Enter).");
+    hint("Applies at the next start or Alt+Enter.");
     ImGui::BeginDisabled(!callsAllowed() || perf::d3d::filterBlockedWhy()[0] != 0);
     if (checkbox("Skip repeated states", &S.filter, "filter")) applyProcessOptions();
     ImGui::EndDisabled();
-    hint("Does not pass state calls on that repeat the value already set. Experimental: compare with the benchmark.");
-    if (perf::d3d::filterBlockedWhy()[0]) ImGui::TextDisabled("  not available: %s", perf::d3d::filterBlockedWhy());
+    hint("Experimental: drops state calls that repeat the value.");
+    if (perf::d3d::filterBlockedWhy()[0]) dimWrapped("Off: %s", perf::d3d::filterBlockedWhy());
     if (checkbox("Fine timer (0.5 ms)", &S.fineTimer, "fine_timer")) applyProcessOptions();
-    hint("The game already asks Windows for 1 ms. This asks for 0.5 ms (more precise waits, slightly more power).");
+    hint("0.5 ms instead of the game's 1 ms.");
     ImGui::SameLine();
-    ImGui::TextDisabled("now %.2f ms", perf::sys::currentTimerMs());
+    ImGui::TextDisabled("Now %.2f ms", perf::sys::currentTimerMs());
     if (checkbox("No power throttling", &S.powerThrottlingOff, "power_throttling_off")) applyProcessOptions();
-    hint("Windows must not slow the game down (EcoQoS) or ignore its timer when the window is in the background.");
-    static const char* kPrio[] = {"as the game sets it", "above normal", "high"};
-    ImGui::SetNextItemWidth(160);
+    hint("No EcoQoS slowdown in the background.");
+    static const char* kPrio[] = {"Default", "Above normal", "High"};
+    ImGui::SetNextItemWidth(fieldW);
     if (ImGui::Combo("Priority", &S.priority, kPrio, 3)) {
         saveInt("priority", S.priority);
         applyProcessOptions();
     }
-    static const char* kAff[] = {"all", "all but CPU 0", "performance cores"};
-    ImGui::SetNextItemWidth(160);
+    static const char* kAff[] = {"All", "All but CPU 0", "P-cores"};
+    ImGui::SetNextItemWidth(fieldW);
     if (ImGui::Combo("CPU cores", &S.affinity, kAff, 3)) {
         saveInt("affinity", S.affinity);
         applyProcessOptions();
@@ -1129,30 +1143,30 @@ void drawMenu() {
     }
 
     ImGui::SeparatorText("Hang log");
-    if (checkbox("Log where the game waits when no frame comes", &S.hangLog, "hang_log")) applyProcessOptions();
-    hint("For long loading stalls and the replay list refresh. Never while a race runs. Writes hangs.log in the plugin's data folder.");
-    ImGui::SetNextItemWidth(160);
-    if (ImGui::SliderInt("after ms", &S.hangMs, 500, 5000)) {
+    if (checkbox("Log stalls", &S.hangLog, "hang_log")) applyProcessOptions();
+    hint("Writes hangs.log on long stalls, never in a race.");
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::SliderInt("After (ms)", &S.hangMs, 500, 5000)) {
         saveInt("hang_ms", S.hangMs);
         applyProcessOptions();
     }
     const perf::stall::Last ls = perf::stall::last();
-    if (ls.count) ImGui::TextDisabled("%d stalls this start, last %.1f s in %s", ls.count, ls.seconds, ls.top[0] ? ls.top : "-");
+    if (ls.count) dimWrapped("Stalls: %d, last %.1f s in %s", ls.count, ls.seconds, ls.top[0] ? ls.top : "-");
 
-    ImGui::SeparatorText("Engine and memory (read only)");
+    ImGui::SeparatorText("Engine and memory");
     const EngineView ev = readEngine();
     if (ev.ok) {
-        ImGui::TextDisabled("Engine's own FPS %.0f, adaptive view distance %s (target %u fps)", ev.averageFps,
-                            ev.targetFpsEnable < 0 ? "?" : ev.targetFpsEnable ? "on" : "off", ev.targetFps);
+        dimWrapped("Engine FPS %.0f   Adaptive view %s (%u fps)", ev.averageFps, ev.targetFpsEnable < 0 ? "?" : ev.targetFpsEnable ? "on" : "off",
+                   ev.targetFps);
     } else {
-        ImGui::TextDisabled("Engine values not readable on this game");
+        dimWrapped("Engine: no data");
     }
     const perf::sys::Memory m = perf::sys::memory();
-    ImGui::TextDisabled("Memory: %.0f MB private, address space %.0f of %.0f MB used, %s", m.privateMB, m.addressSpaceUsedMB,
-                        m.addressSpaceTotalMB, m.largeAddressAware ? "large address aware" : "exe not large address aware (2 GB)");
+    dimWrapped("Memory %.0f MB   Address space %.0f / %.0f MB   %s", m.privateMB, m.addressSpaceUsedMB, m.addressSpaceTotalMB,
+               m.largeAddressAware ? "LAA" : "no LAA (2 GB)");
     char folder[300];
     WideCharToMultiByte(CP_UTF8, 0, g_data.c_str(), -1, folder, sizeof(folder), nullptr, nullptr);
-    ImGui::TextDisabled("Files: %s", folder);
+    dimWrapped("Files: %s", folder);
 }
 
 const HorizonPluginInfo kInfo = {
@@ -1164,7 +1178,7 @@ const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_DEVICE | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Frame times, Direct3D call counts, benchmark, frame limiter and a hang log.",
+    "Frame times, benchmark and frame limiter.",
     HORIZON_ABI_MINOR,
 };
 
