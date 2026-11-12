@@ -12,8 +12,9 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Shows steering, gas, brake and speed as the car sees them.",
+  "description": "Steering, gas, brake and speed on screen.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": false
+  "enabled_by_default": false,
+  "ui": { "min_w": 320, "min_h": 240, "pref_w": 480, "pref_h": 400 }
 }
