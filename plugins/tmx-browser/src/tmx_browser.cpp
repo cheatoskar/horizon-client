@@ -1001,10 +1001,12 @@ void drawForm(const ck::Palette& pal) {
         changed = true;
     }
 
-    // row 2: style, difficulty, length, awards
+    // row 2: style, difficulty, length, awards; a narrow page (pop-out, small window) puts them two by two
+    const bool compact = avail < 560.0f * s;
     const float rest = avail - gap * 3.0f;
+    const float half = (avail - gap) * 0.5f;
     {
-        const float w = rest * 0.28f;
+        const float w = compact ? half : rest * 0.28f;
         const std::string sum = f.tagMask ? tmx::tagSummary(f.tagMask) : std::string("any");
         const std::string lbl = fitText(ImGui::GetFont(), ImGui::GetFontSize(), "Style: " + sum, w - 16.0f * s);
         if (ImGui::Button((lbl + "##style").c_str(), ImVec2(w, 0))) ImGui::OpenPopup("styles");
@@ -1025,7 +1027,7 @@ void drawForm(const ck::Palette& pal) {
         }
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(rest * 0.24f);
+    ImGui::SetNextItemWidth(compact ? avail - half - gap : rest * 0.24f);
     if (ImGui::BeginCombo("##diff", f.difficulty < 0 ? "Any difficulty" : tmx::kDifficulties[f.difficulty])) {
         if (ImGui::Selectable("Any difficulty", f.difficulty < 0)) {
             f.difficulty = -1;
@@ -1038,8 +1040,8 @@ void drawForm(const ck::Palette& pal) {
             }
         ImGui::EndCombo();
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(rest * 0.24f);
+    if (!compact) ImGui::SameLine();
+    ImGui::SetNextItemWidth(compact ? half : rest * 0.24f);
     if (ImGui::BeginCombo("##len", tmx::kLengths[f.length].label)) {
         for (int i = 0; i < tmx::kLengthCount; i++)
             if (ImGui::Selectable(tmx::kLengths[i].label, f.length == i)) {
@@ -1050,7 +1052,7 @@ void drawForm(const ck::Palette& pal) {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Author time.");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(avail - (rest * 0.76f + gap * 3.0f));
+    ImGui::SetNextItemWidth(compact ? avail - half - gap : avail - (rest * 0.76f + gap * 3.0f));
     if (ImGui::DragInt("##awards", &f.awards, 0.25f, 0, 9999, "Awards: %d+")) changed = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Minimum awards.");
 
