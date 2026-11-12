@@ -34,6 +34,7 @@ private:
     volatile LONG stop_ = 0;
     volatile LONG current_ = -1; // value * 10000, -1 unknown
     volatile LONG wanted_ = -1;  // value * 10000, -1 nothing to set
+    mutable volatile LONG lastGet_ = 0; // GetTickCount of the last get()
     LogFn log_ = nullptr;
     void* logUser_ = nullptr;
 };

@@ -137,4 +137,32 @@ bool safeWrite(void* p, const void* in, size_t n);
 int toPercent(float v);
 float fromPercent(int pct);
 
+// A slider being dragged. A new volume makes the game set the DirectSound volume of every playing sound again
+// (and stop or restart sounds near 0 %), so a drag is applied at most every `ms` and the last value when it is
+// let go, not on every frame.
+class Throttle {
+public:
+    explicit Throttle(DWORD ms = 100) : ms_(ms) {}
+    // the drag starts: `value` is what the game has now
+    void begin(int value) {
+        applied_ = value;
+        any_ = false;
+    }
+    // this frame's slider value; `released`: the drag ended this frame. true: apply `value` now.
+    bool due(int value, bool released, DWORD now) {
+        if (value == applied_) return false;
+        if (!released && any_ && now - last_ < ms_) return false;
+        last_ = now;
+        applied_ = value;
+        any_ = true;
+        return true;
+    }
+
+private:
+    DWORD ms_;
+    DWORD last_ = 0;
+    int applied_ = -1;
+    bool any_ = false;
+};
+
 } // namespace gs

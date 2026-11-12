@@ -1,7 +1,7 @@
 {
   "id": "game-settings",
   "name": "Game settings",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "dll": "game-settings.dll",
   "games": [
     "eswc",

@@ -74,6 +74,9 @@ void MasterVolume::stop() {
 }
 
 float MasterVolume::get() const {
+    const DWORD now = GetTickCount();
+    const DWORD prev = static_cast<DWORD>(InterlockedExchange(&lastGet_, static_cast<LONG>(now)));
+    if (now - prev >= 1500 && wake_) SetEvent(wake_); // the menu opened again: read the mixer's value now
     const LONG c = current_;
     return c < 0 ? -1.0f : static_cast<float>(c) / 10000.0f;
 }
@@ -97,8 +100,12 @@ void MasterVolume::run() {
     ISimpleAudioVolume* vol = nullptr;
     bool loggedFail = false;
     DWORD nextOpen = 0;
+    bool first = true;
     while (!stop_) {
-        if (!vol && (nextOpen == 0 || static_cast<LONG>(GetTickCount() - nextOpen) >= 0)) {
+        // only while someone looks (the menu shows the row) or after a set: no Windows calls otherwise
+        const bool inUse = first || wanted_ >= 0 || GetTickCount() - static_cast<DWORD>(lastGet_) < 1500;
+        first = false;
+        if (inUse && !vol && (nextOpen == 0 || static_cast<LONG>(GetTickCount() - nextOpen) >= 0)) {
             HRESULT hr = S_OK;
             vol = openSession(&hr);
             if (vol) {
@@ -112,7 +119,7 @@ void MasterVolume::run() {
                 if (nextOpen == 0) nextOpen = 1;
             }
         }
-        if (vol) {
+        if (inUse && vol) {
             const LONG want = InterlockedExchange(&wanted_, -1);
             if (want >= 0 && FAILED(vol->SetMasterVolume(static_cast<float>(want) / 10000.0f, nullptr))) release(vol);
             float now = 0.0f;
@@ -123,7 +130,8 @@ void MasterVolume::run() {
                 InterlockedExchange(&current_, -1);
             }
         }
-        WaitForSingleObject(wake_, 500); // a set wakes it at once; otherwise it follows the Windows mixer
+        // a set wakes it at once; while in use it follows the Windows mixer twice a second
+        WaitForSingleObject(wake_, inUse ? 500 : 2000);
     }
     release(vol);
     if (SUCCEEDED(co)) CoUninitialize();

@@ -23,7 +23,7 @@
 
 namespace {
 
-constexpr char kVersion[] = "1.0.0";
+constexpr char kVersion[] = "1.0.1";
 constexpr char kId[] = "game-settings";
 constexpr char kName[] = "Game settings";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
@@ -52,6 +52,35 @@ void rowLabel(const char* label) {
     ImGui::SetNextItemWidth(-FLT_MIN);
 }
 
+// A 0..100 % slider: shows the game's value, applies a drag at most every 100 ms and once more when it is let
+// go (gs::Throttle), so the game does not redo its sounds on every frame. true when an edit ended: *done = value.
+struct Drag {
+    bool active = false;
+    int value = 0;
+    gs::Throttle throttle;
+};
+Drag g_dragVolume, g_dragMusic, g_dragSounds;
+
+bool slider(const char* id, Drag& d, int current, void (*apply)(int), int* done) {
+    int pct = d.active ? d.value : current;
+    ImGui::SliderInt(id, &pct, 0, 100, "%d%%");
+    const bool active = ImGui::IsItemActive();
+    const bool released = ImGui::IsItemDeactivated();
+    if (active && !d.active) d.throttle.begin(current);
+    if (active || released) {
+        d.value = pct;
+        if (d.throttle.due(pct, released, GetTickCount())) apply(pct);
+    }
+    d.active = active;
+    if (!ImGui::IsItemDeactivatedAfterEdit()) return false;
+    *done = pct;
+    return true;
+}
+
+void applyMusic(int pct) { g_game->setMusic(gs::fromPercent(pct)); }
+void applySounds(int pct) { g_game->setSounds(gs::fromPercent(pct)); }
+void applyVolume(int pct) { g_master->set(gs::fromPercent(pct)); }
+
 void volumeRow(const char* label, const char* id, bool music) {
     float v = -1.0f;
     const bool ok = g_game && (music ? g_game->readMusic(&v) : g_game->readSounds(&v));
@@ -60,13 +89,9 @@ void volumeRow(const char* label, const char* id, bool music) {
         ImGui::TextDisabled("Unavailable");
         return;
     }
-    int pct = gs::toPercent(v);
-    if (ImGui::SliderInt(id, &pct, 0, 100, "%d%%")) {
-        if (music) g_game->setMusic(gs::fromPercent(pct));
-        else g_game->setSounds(gs::fromPercent(pct));
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        int& pref = music ? g_prefs.music : g_prefs.sounds;
+    int pct = 0;
+    if (slider(id, music ? g_dragMusic : g_dragSounds, gs::toPercent(v), music ? &applyMusic : &applySounds, &pct)) {
+        int& pref = music ? g_prefs.music : g_prefs.sounds; // kept, and put into the game at every start
         pref = pct;
         g_host->set_int(g_host->plugin, music ? "Music" : "Sounds", pct);
         g_host->log(g_host->plugin, HORIZON_LOG_INFO, "%s %d%%", music ? "music" : "sounds", pct);
@@ -139,9 +164,9 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (master < 0.0f) {
         ImGui::TextDisabled("Unavailable");
     } else {
-        int pct = gs::toPercent(master);
-        if (ImGui::SliderInt("##volume", &pct, 0, 100, "%d%%")) g_master->set(gs::fromPercent(pct));
-        if (ImGui::IsItemDeactivatedAfterEdit()) g_host->log(g_host->plugin, HORIZON_LOG_INFO, "volume %d%%", pct);
+        int pct = 0;
+        if (slider("##volume", g_dragVolume, gs::toPercent(master), &applyVolume, &pct))
+            g_host->log(g_host->plugin, HORIZON_LOG_INFO, "volume %d%%", pct);
     }
     volumeRow("Music", "##music", true);
     volumeRow("Sounds", "##sounds", false);

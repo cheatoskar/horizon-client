@@ -99,6 +99,31 @@ static void tableTests() {
     check(gs::fromPercent(50) == 0.5f && gs::fromPercent(-1) == 0.0f && gs::fromPercent(120) == 1.0f, "percent: back to 0..1");
 }
 
+// a drag at 60 frames per second for one second, 100 -> 40 %: applied at most every 100 ms, the end value on release
+static void throttleTests() {
+    gs::Throttle t(100);
+    t.begin(100);
+    int applied = 0, last = -1;
+    DWORD now = 1000;
+    for (int f = 0; f < 60; f++, now += 16) {
+        const int v = 100 - f; // a new value every frame
+        if (t.due(v, false, now)) {
+            applied++;
+            last = v;
+        }
+    }
+    char what[96];
+    _snprintf_s(what, _TRUNCATE, "throttle: 60 frames of dragging -> %d applies (at most 11)", applied);
+    check(applied >= 9 && applied <= 11, what);
+    check(t.due(40, true, now) && last != 40, "throttle: the value at release is applied at once");
+    check(!t.due(40, true, now + 1), "throttle: the same value is not applied twice");
+    gs::Throttle u(100);
+    u.begin(50);
+    check(!u.due(50, false, 0) && !u.due(50, true, 5), "throttle: a click without a change applies nothing");
+    check(u.due(51, false, 7), "throttle: the first change of a drag is applied at once");
+    check(!u.due(52, false, 50) && u.due(52, false, 108), "throttle: a held value is applied once 100 ms have passed");
+}
+
 static void gameTests(const gs::GameTable& t) {
     char what[160];
     printf("===== %s\n", t.name);
@@ -214,6 +239,7 @@ static void masterTest() {
 
 int main() {
     tableTests();
+    throttleTests();
     gameTests(gs::eswcTable());
     gameTests(gs::sunriseTable());
     gameTests(gs::originalTable());
