@@ -696,6 +696,52 @@ static void testPickNewChallenge() {
     CHECK(gamectl::pickNewChallenge(before, {P(0), P(14), P(15)}, goldOf, 0, &fresh) == gamectl::kPickAmbiguous);
     // nothing new: the game did not list the copy
     CHECK(gamectl::pickNewChallenge(before, before, goldOf, 44000, &fresh) == gamectl::kPickNoNew && fresh == 0);
+
+    // By file name (what play_map_file uses): the list after a rescan, as the game leaves it.
+    std::map<void*, std::string> name;
+    auto nameOf = [&](void* info, char* buf, size_t cap) {
+        auto it = name.find(info);
+        if (it == name.end() || it->second.size() >= cap) return false;
+        memcpy(buf, it->second.c_str(), it->second.size() + 1);
+        return true;
+    };
+    const char* want = "HZ_0006124000.Challenge.Gbx";
+    for (int i = 0; i < 16; i++) name[P(i)] = "Map" + std::to_string(i) + ".Challenge.Gbx";
+    name[P(5)] = "A01-Race(00'59''12).Replay.Gbx"; // replay infos (never in the list, but must never match)
+    name[P(6)] = "HZ_0006124000.Replay.Gbx";
+    gold[P(5)] = gold[P(6)] = 44000;
+    name.erase(P(7)); // an info without a file (Kind 7)
+    gamectl::PickReport rep;
+    // several new challenge infos (rebuilt ones with the same gold time too), replays around: the file name decides
+    gold[P(10)] = gold[P(11)] = 44000;
+    name[P(11)] = want;
+    after = {P(0), P(5), P(10), P(1), P(6), P(7), P(12), P(11), P(2), P(3)};
+    CHECK(gamectl::pickCopiedChallenge(before, after, nameOf, want, goldOf, 44000, &rep) == 7 &&
+          rep.method == gamectl::PickMethod::FileName && rep.matches == 1 && rep.named == 9 && rep.newCount == 6);
+    // the copy's info at an old address (freed and reused, or an old info of the same UID reused by Build)
+    name[P(11)] = "Map11.Challenge.Gbx";
+    name[P(2)] = "c:\\games\\tmn\\GameData\\Tracks\\Challenges\\Downloaded\\_Horizon\\hz_0006124000.challenge.gbx";
+    CHECK(gamectl::pickCopiedChallenge(before, after, nameOf, want, goldOf, 44000, &rep) == 8 && rep.matches == 1);
+    // names readable but none is the copy: not listed, no guessing by gold time
+    name[P(2)] = "Map2.Challenge.Gbx";
+    CHECK(gamectl::pickCopiedChallenge(before, after, nameOf, want, goldOf, 44000, &rep) == gamectl::kPickNoNew &&
+          rep.method == gamectl::PickMethod::FileName);
+    // a name that only ends like the copy's is another file
+    name[P(12)] = "XHZ_0006124000.Challenge.Gbx";
+    CHECK(gamectl::pickCopiedChallenge(before, after, nameOf, want, goldOf, 44000, &rep) == gamectl::kPickNoNew);
+    // two infos with the copy's name: refused
+    name[P(12)] = want;
+    name[P(10)] = want;
+    CHECK(gamectl::pickCopiedChallenge(before, after, nameOf, want, goldOf, 44000, &rep) == gamectl::kPickAmbiguous &&
+          rep.matches == 2);
+    // no file name readable at all (unknown layout): the gold time among the new pointers, as before
+    auto noName = [](void*, char*, size_t) { return false; };
+    after = {P(0), P(10), P(1), P(9), P(2), P(3)};
+    gold[P(10)] = 31000;
+    CHECK(gamectl::pickCopiedChallenge(before, after, noName, want, goldOf, 44000, &rep) == 3 &&
+          rep.method == gamectl::PickMethod::GoldTime && rep.named == 0);
+    CHECK(gamectl::sameFileName("HZ_1.Challenge.Gbx", "hz_1.challenge.gbx") && gamectl::sameFileName("a/HZ_1.Challenge.Gbx", "HZ_1.Challenge.Gbx") &&
+          !gamectl::sameFileName("HZ_1.Challenge.Gbx.bak", "HZ_1.Challenge.Gbx") && !gamectl::sameFileName("", "x"));
 }
 
 int main() {
