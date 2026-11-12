@@ -1,6 +1,6 @@
 # Copies the built Controller fix module (dist\legacy\horizon\plugins\controller-hotplug) into the Horizon test
 # copies of ESWC, Sunrise and Original. Skips a copy whose game is running. Backs up the old module folder once per
-# copy as horizon\controller-hotplug.bak-vor-padfix2 (next to plugins\, so the host does not load it as a module).
+# copy as horizon\controller-hotplug.bak-vor-padfix3 (next to plugins\, so the host does not load it as a module).
 # Never touches C:\Program Files (x86), %LOCALAPPDATA%\TMLoader or other game folders.
 #   powershell -ExecutionPolicy Bypass -File plugins/controller-hotplug/tools/deploy-test-copies.ps1
 param(
@@ -9,7 +9,7 @@ param(
         'C:\Users\osaro\Games\TMSunrise-horizon-next',
         'C:\Users\osaro\Games\TMO-horizon-test'
     ),
-    [string]$Backup = 'controller-hotplug.bak-vor-padfix2'
+    [string]$Backup = 'controller-hotplug.bak-vor-padfix3'
 )
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..\..')

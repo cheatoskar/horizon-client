@@ -96,7 +96,8 @@ void Service::tick() {
         if (!waitingLogged_) logf(0, "waiting for the game's input port");
         waitingLogged_ = true;
     }
-    watcher_.wantTicks(more);
+    const bool polling = game_->ready() && game_->poll(); // the race start check of late pads
+    watcher_.wantTicks(more || polling);
     for (const auto& e : events) {
         const std::string name = toUtf8(e.name);
         switch (e.what) {

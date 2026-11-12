@@ -1,6 +1,6 @@
 # Controller fix
 
-Plugin id `controller-hotplug`, menu name "Controller fix", version 1.2.0. ESWC, Sunrise and Original, online-ok, live toggle, on by default. A game controller that you plug in (or switch on) after the game has started works at once, with the bindings it would have had if it had been there at start, without a restart.
+Plugin id `controller-hotplug`, menu name "Controller fix", version 1.2.1. ESWC, Sunrise and Original, online-ok, live toggle, on by default. A game controller that you plug in (or switch on) after the game has started works at once, with the bindings it would have had if it had been there at start, without a restart.
 
 ## What it does
 
@@ -19,7 +19,9 @@ The pad gets its bindings at once, the same way as a pad that is there at start 
 
 - At start the game runs a defaults pass for every profile's bindings config: every keyboard, mouse and pad the config has no binding for gets the game's defaults (`CTrackManiaRace::InputSetDefaultsBindings`, which the app keeps as a callback; for a pad: Accelerate = button 0 and 6, Brake = button 1 and 4, Steer = X axis, Respawn = button 2, Reset = button 5, Horn = button 8). A pad the profile already has bindings for keeps them. Bindings are saved in the profile per device id (a hash of the DirectInput instance GUID), so the same pad on the same USB port is the same device.
 - For a late pad the module calls that same defaults pass (ESWC 0x7171d0, Sunrise 0x821d50, Original 0x820230) for the current profile's config. A pad with saved bindings keeps them; a new pad gets the game's defaults, written into the profile like at start.
-- In a race, the race's binding table was built at race start without the pad. The module appends the pad's bindings from the config to that table (what the game's own AddBinding writes for the last device), so the pad drives in the running race. Without a race the config is enough: the next race start builds the table with the pad.
+- In a race, the race's binding table was built at race start without the pad. The module appends the pad's bindings from the config (saved or the game's defaults, the same in both cases) to that table (what the game's own AddBinding writes for the last device), so the pad drives in the running race. The race is the app's `CConstructionGame.CurrentRace` (ESWC +0x140, Sunrise/Original +0x12c, the offsets the host finds by reflection); the module checks that the race uses this input port and that the table belongs to it, and logs the reason if not. Without a race the config is enough: the next race start builds the table with the pad.
+- At every race start after a late pad the log says how many bindings it has in the new race table ("race start: <pad> (device 2) has 8 binding(s) in the race table"). A restart of the same race keeps the table.
+- 1.2.0 read the race from `CTrackMania.Races` (+0x2f0 / +0x2a8), another object: in game the pad was registered and had its bindings in the profile, but the running race table stayed without them ("race table unchanged").
 - The "all objects" tables (pause menu and dialogs) get the pad's menu entries the game's builder adds for every pad: buttons 0-3, the POV and the X/Y axis.
 - The log names every binding that was applied with the action and the pad's object id ("bindings for <pad> (id ...): the game's defaults added to the profile, 8 binding(s): Reset=..., Respawn=..., Accelerate=..., ..." and "race table +8, ... menu binding(s) in ... table(s)").
 

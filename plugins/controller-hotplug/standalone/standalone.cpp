@@ -16,7 +16,7 @@
 
 namespace {
 constexpr unsigned kLoaderApi = 1;
-constexpr char kVersion[] = "1.2.0";
+constexpr char kVersion[] = "1.2.1";
 constexpr WPARAM kMarker = 0x48504C47; // 'HPLG'
 
 CRITICAL_SECTION g_logLock;

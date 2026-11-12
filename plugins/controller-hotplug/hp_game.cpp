@@ -241,6 +241,11 @@ GameBackend::GameBackend(const GameTable* table, uintptr_t exeBase, LogFn log, v
 
 GameBackend::~GameBackend() { delete binder_; }
 
+bool GameBackend::poll() {
+    uint8_t* p = verified_ ? port() : nullptr;
+    return p && binder_ ? binder_->raceCheck(p) : false;
+}
+
 void GameBackend::logf(int level, const char* fmt, ...) {
     if (!log_) return;
     char buf[512];

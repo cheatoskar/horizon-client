@@ -414,6 +414,9 @@ static void realTableTests() {
         check(!b.ready() && b.failed() && s.empty() && !b.add(A(1, L"x")) && !b.refresh(2, A(1, L"x")),
               "code bytes do not match here: off, no crash, no game call");
         check(t->bind != nullptr && t->bind().codeCount >= 14, "bindings table with its code signatures");
+        // the race is CConstructionGame.CurrentRace (the host's reflection: ESWC +0x140, Sunrise/Original +0x12c);
+        // 1.2.0 read CTrackMania.Races (+0x2f0/+0x2a8), so the running race table was never found
+        check(t->bind().appRace == (t == &eswcTable() ? 0x140u : 0x12cu), "race field = CurrentRace");
         Binder bd(&t->bind(), 0x400000, t->reserve8, nullptr, nullptr);
         uint8_t fakePort[0xac] = {};
         bd.apply(fakePort, 2, L"x");
@@ -649,7 +652,7 @@ static void buildBindWorld() {
     // app and race
     U32(g_bApp, 0x258) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&fakeSetDefaults));
     U32(g_bApp, 0x58) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
-    U32(g_bApp, 0x2f0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+    U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
     U32(g_bRace, 0x40) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bApp));
     U32(g_bRace, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
     U32(g_bRace, 0x144) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_tRace));
@@ -659,7 +662,7 @@ static void buildBindWorld() {
     b.appGlobal = reinterpret_cast<uintptr_t>(&appGlobal);
     b.appDefaultsCb = 0x258;
     b.appPort = 0x58;
-    b.appRace = 0x2f0;
+    b.appRace = 0x140; // ESWC CConstructionGame.CurrentRace
     b.setDefaults = reinterpret_cast<uintptr_t>(&fakeSetDefaults);
     b.defaultsPass = reinterpret_cast<uintptr_t>(&fakePass);
     b.currentConfig = reinterpret_cast<uintptr_t>(&fakeCurConfig);
@@ -719,7 +722,7 @@ static void bindTests() {
     check(r.raceAdded == 3 && bindLogHas("the game's defaults added to the profile, 3 binding(s): Accelerate=800, Brake=801, Steer=0"),
           "log names the bindings");
 
-    // 2: a pad the profile has saved bindings for (same id as before): kept, applied to the race at once
+    // 2: saved bindings + race running (the in-game case of 1.2.0): kept, applied to the running race at once
     const uint32_t savedId = 0x80000000u | 8; // newPad's id for GUID 8
     cfgAdd(2, savedId, 0x803); // Respawn = button 3
     cfgAdd(3, savedId, 0x805); // Accelerate = button 5
@@ -732,13 +735,13 @@ static void bindTests() {
     check(bindLogHas("saved in the profile, kept, 2 binding(s): Respawn=803, Accelerate=805"), "log: saved bindings");
 
     // 3: outside a race: the config and the menu tables only
-    U32(g_bApp, 0x2f0) = 0;
+    U32(g_bApp, 0x140) = 0;
     const uint32_t raceNow = U32(g_tRace, 0x20);
     check(b.add(A(9, L"Pad Nine")), "third pad added in the menu");
     const Binder::Result& r3 = b.binder()->last();
     check(r3.ok && r3.raceAdded == 0 && r3.configPairs == 3 && r3.menuAdded == 9 && U32(g_tRace, 0x20) == raceNow,
           "no race: defaults in the config (for the next race start), menu table updated, race table untouched");
-    U32(g_bApp, 0x2f0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+    U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
 
     // 4: the app is not the one expected: nothing is changed
     U32(g_bApp, 0x258) = 0x1234;
@@ -747,6 +750,49 @@ static void bindTests() {
     check(!b.binder()->last().ok && U32(g_bCfg, 0x14) == cfgN && bindLogHas("is not as expected"),
           "app callback differs: config and tables untouched, logged");
     U32(g_bApp, 0x258) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&fakeSetDefaults));
+
+    // 4b: a race that does not use this port (wrong race field): nothing appended, the reason is logged
+    {
+        static uint8_t otherRace[0x200];
+        U32(otherRace, 0x140) = 0x1234;
+        U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(otherRace));
+        g_bindLog.clear();
+        const uint32_t raceBefore = U32(g_tRace, 0x20);
+        check(b.add(A(11, L"Pad Eleven")), "pad added while the race field holds another object");
+        check(b.binder()->last().ok && b.binder()->last().raceAdded == 0 && U32(g_tRace, 0x20) == raceBefore &&
+                  bindLogHas("its input port is 00001234"),
+              "race not using the port: race table untouched, reason logged");
+        U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+    }
+
+    // 4c: the next race start: the game builds a new race table from the config; the check logs the late pads
+    {
+        g_bindLog.clear();
+        check(b.poll(), "late pads: the backend wants steps for the race start check");
+        static uint8_t race2[0x200];
+        const uint32_t devs = U32(g_bPort, 0x2c);
+        uint8_t* nt = newTableVt(g_cfgVt, devs, 0);
+        uint32_t* rr = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(U32(nt, 0x18)));
+        rr[2 * 2 + 1] = 3; // the game put Pad Seven's 3 config bindings into the new race table
+        uint8_t** old = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_bPort, 0x18)));
+        uint8_t** tl = static_cast<uint8_t**>(malloc(4 * sizeof(void*)));
+        memcpy(tl, old, 3 * sizeof(void*));
+        tl[3] = nt;
+        U32(g_bPort, 0x18) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(tl));
+        U32(g_bPort, 0x14) = 4;
+        U32(race2, 0x40) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bApp));
+        U32(race2, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
+        U32(race2, 0x144) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(nt));
+        U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(race2));
+        b.poll();
+        check(bindLogHas("race start: Pad Seven (device 2) has 3 binding(s) in the race table") &&
+                  bindLogHas("race start: Pad Eight (device 3) has 0 binding(s)"),
+              "race start check: logs each late pad's bindings in the new race table");
+        g_bindLog.clear();
+        b.poll();
+        check(g_bindLog.empty(), "same race: logged once");
+        U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+    }
 
     // 5: appendToTable refuses what the game's AddBinding would not produce for the last device
     BindPair p[1] = {{0x55, 0x66}};

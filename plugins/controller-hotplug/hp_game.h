@@ -78,6 +78,7 @@ public:
     const GameTable* table() const { return table_; }
     uint32_t deviceCount(); // all devices of the port (keyboard, mouse, pads), 0 without a port
     uint32_t devices() override { return deviceCount(); }
+    bool poll() override;
 
 private:
     uintptr_t rb(uintptr_t link) const { return base_ - 0x400000 + link; }

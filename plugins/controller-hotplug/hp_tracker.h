@@ -48,6 +48,7 @@ public:
     virtual bool add(const Attached& d) = 0;                    // true when the game has a slot for it afterwards
     virtual bool refresh(int slotIndex, const Attached& d) = 0; // fresh DirectInput device for that slot
     virtual uint32_t devices() { return 0; }                    // all input devices of the game (log only)
+    virtual bool poll() { return false; }                       // game thread, each step; true = wants steps
 };
 
 enum class Note {

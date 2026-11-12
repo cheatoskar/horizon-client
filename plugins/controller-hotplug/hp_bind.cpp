@@ -71,7 +71,7 @@ const CodeSig kEswcBindCode[] = {
     {0x00460b56, sizeof(kEswcAllPad4), kEswcAllPad4},
     {0x00460b92, sizeof(kEswcAllPad5), kEswcAllPad5},
 };
-const BindTable kEswcBindT = {0x00caee50, 0x258, 0x58, 0x2f0, 0x006e6560, 0x007171d0, 0x00716fb0,
+const BindTable kEswcBindT = {0x00caee50, 0x258, 0x58, 0x140, 0x006e6560, 0x007171d0, 0x00716fb0,
     0x40, 0x140, 0x144, 0x148, 0x00acfd2c, 0x00acfd34,
     {0x00bbe668, 0x00bbe66c, 0x00bbe678, 0x00bbe67c, 0x00bbe680}, 0x00c278e0,
     kEswcBindCode, static_cast<int>(sizeof(kEswcBindCode) / sizeof(kEswcBindCode[0]))};
@@ -110,7 +110,7 @@ const CodeSig kTmsBindCode[] = {
     {0x00496f26, sizeof(kTmsAllPad4), kTmsAllPad4},
     {0x00496f62, sizeof(kTmsAllPad5), kTmsAllPad5},
 };
-const BindTable kTmsBindT = {0x00bcce50, 0x220, 0x58, 0x2a8, 0x007fffe0, 0x00821d50, 0x00821b30,
+const BindTable kTmsBindT = {0x00bcce50, 0x220, 0x58, 0x12c, 0x007fffe0, 0x00821d50, 0x00821b30,
     0x3c, 0x130, 0x134, 0x138, 0x00a223e8, 0x00a223f0,
     {0x00acc368, 0x00acc36c, 0x00acc378, 0x00acc37c, 0x00acc380}, 0x00b494b0,
     kTmsBindCode, static_cast<int>(sizeof(kTmsBindCode) / sizeof(kTmsBindCode[0]))};
@@ -149,7 +149,7 @@ const CodeSig kTmoBindCode[] = {
     {0x004971c6, sizeof(kTmoAllPad4), kTmoAllPad4},
     {0x00497202, sizeof(kTmoAllPad5), kTmoAllPad5},
 };
-const BindTable kTmoBindT = {0x00bc8084, 0x220, 0x58, 0x2a8, 0x007fe510, 0x00820230, 0x00820010,
+const BindTable kTmoBindT = {0x00bc8084, 0x220, 0x58, 0x12c, 0x007fe510, 0x00820230, 0x00820010,
     0x3c, 0x130, 0x134, 0x138, 0x00a1e3a8, 0x00a1e3b0,
     {0x00ac8040, 0x00ac8044, 0x00ac8050, 0x00ac8054, 0x00ac8058}, 0x00b44f00,
     kTmoBindCode, static_cast<int>(sizeof(kTmoBindCode) / sizeof(kTmoBindCode[0]))};
@@ -324,6 +324,69 @@ bool Binder::verify() {
     return true;
 }
 
+// The race's binding table, checked: the race uses this port, the table belongs to the port and is a table built
+// from a config. Returns null if fine, else what is wrong (with the values, for the log).
+const char* Binder::raceTable(uintptr_t app, uintptr_t race, uintptr_t port, uintptr_t* table) {
+    static char why[200];
+    uintptr_t rApp = 0, rPort = 0, tbl = 0, vt = 0, tableArr = 0;
+    uint32_t tables = 0;
+    rd(race + t_->raceApp, rApp);
+    if (!rd(race + t_->racePort, rPort) || rPort != port) {
+        sprintf_s(why, "its input port is %08X, not %08X (race app %08X)", static_cast<unsigned>(rPort), static_cast<unsigned>(port),
+                  static_cast<unsigned>(rApp));
+        return why;
+    }
+    if (!rd(race + t_->raceConfigTable, tbl) || !tbl) return "no race binding table";
+    bool owned = false;
+    if (rd(port + kPortTableCount, tables) && rd(port + kPortTableArray, tableArr) && tables <= 256)
+        for (uint32_t i = 0; i < tables && !owned; i++) {
+            uintptr_t x = 0;
+            owned = rd(tableArr + i * 4, x) && x == tbl;
+        }
+    if (!owned || !rd(tbl, vt) || vt != rb(t_->configTableVtbl)) {
+        sprintf_s(why, "table %08X is not a binding table of the port (owned %d, class %08X)", static_cast<unsigned>(tbl), owned ? 1 : 0,
+                  static_cast<unsigned>(vt));
+        return why;
+    }
+    if (rApp != app) logf(0, "race %08X: app field %08X (app %08X), port and table match", static_cast<unsigned>(race),
+                          static_cast<unsigned>(rApp), static_cast<unsigned>(app));
+    *table = tbl;
+    return nullptr;
+}
+
+// Once per new race (game thread, about once a second while a late pad exists): does the race table the game
+// built at race start have the late pads' bindings? Log only.
+bool Binder::raceCheck(uint8_t* port) {
+    if (late_.empty() || !verified_) return false;
+    uintptr_t app = 0, race = 0;
+    if (!rd(rb(t_->appGlobal), app) || !app) return true;
+    rd(app + t_->appRace, race);
+    if (race == lastRace_) return true;
+    lastRace_ = race;
+    if (!race) return true;
+    uintptr_t tbl = 0;
+    const char* bad = raceTable(app, race, reinterpret_cast<uintptr_t>(port), &tbl);
+    if (bad) {
+        logf(1, "race start: race %08X: %s", static_cast<unsigned>(race), bad);
+        return true;
+    }
+    uint32_t rc = 0;
+    uintptr_t ranges = 0;
+    rd(tbl + kTblRangeCount, rc);
+    rd(tbl + kTblRanges, ranges);
+    for (const auto& l : late_) {
+        uint32_t n = 0;
+        if (l.devIndex >= rc || !rd(ranges + l.devIndex * 8 + 4, n)) {
+            logf(1, "race start: %s (device %u) is not in the race table (%u devices)", l.name.c_str(), l.devIndex, rc);
+            continue;
+        }
+        logf(n ? 0 : 1, "race start: %s (device %u) has %u binding(s) in the race table%s", l.name.c_str(), l.devIndex, n,
+             n ? "" : " (none: the profile has no bindings for it)");
+        last_.raceCheck = static_cast<int>(n);
+    }
+    return true;
+}
+
 void Binder::apply(uint8_t* port, uint32_t devIndex, const std::wstring& name) {
     last_ = Result();
     const std::string nm = toUtf8(name);
@@ -383,7 +446,8 @@ void Binder::apply(uint8_t* port, uint32_t devIndex, const std::wstring& name) {
         if (!list.empty()) list += ", ";
         list += an + "=" + ob;
     }
-    logf(0, "bindings for %s (id %08X): %s, %d binding(s): %s", nm.c_str(), id,
+    logf(0, "bindings for %s (device %u, id %08X, read from the device the game just created): %s, %d binding(s): %s", nm.c_str(),
+         devIndex, id,
          before.known ? "saved in the profile, kept" : "the game's defaults added to the profile", after.count,
          list.empty() ? "none" : list.c_str());
 
@@ -391,23 +455,29 @@ void Binder::apply(uint8_t* port, uint32_t devIndex, const std::wstring& name) {
     uint32_t tables = 0;
     uintptr_t tableArr = 0;
     if (!rd(p + kPortTableCount, tables) || !rd(p + kPortTableArray, tableArr) || tables > 256) return;
-    auto owned = [&](uintptr_t tbl) {
-        for (uint32_t i = 0; i < tables; i++) {
-            uintptr_t x = 0;
-            if (rd(tableArr + i * 4, x) && x == tbl) return true;
+    // the running race's table: the pad's bindings (saved or the game's defaults), now; the game would only put
+    // them there at the next race start
+    uintptr_t race = 0, rTable = 0, vt = 0;
+    rd(app + t_->appRace, race);
+    if (race) {
+        const char* bad = raceTable(app, race, p, &rTable);
+        if (!bad) {
+            const char* why = "";
+            if (appendToTable(reinterpret_cast<uint8_t*>(rTable), devIndex, after.pairs, after.count, reserve8_, &why))
+                last_.raceAdded = after.count;
+            else
+                logf(1, "bindings for %s: race table %08X not changed (%s); they apply from the next race start", nm.c_str(),
+                     static_cast<unsigned>(rTable), why);
+        } else {
+            logf(1, "bindings for %s: race %08X: %s; the bindings apply from the next race start", nm.c_str(), static_cast<unsigned>(race),
+                 bad);
         }
-        return false;
-    };
-    // the running race's table: the pad's bindings, now (otherwise only from the next race start)
-    uintptr_t race = 0, rApp = 0, rPort = 0, rTable = 0, vt = 0;
-    if (rd(app + t_->appRace, race) && race && rd(race + t_->raceApp, rApp) && rApp == app && rd(race + t_->racePort, rPort) &&
-        rPort == p && rd(race + t_->raceConfigTable, rTable) && rTable && owned(rTable) && rd(rTable, vt) && vt == rb(t_->configTableVtbl)) {
-        const char* why = "";
-        if (appendToTable(reinterpret_cast<uint8_t*>(rTable), devIndex, after.pairs, after.count, reserve8_, &why))
-            last_.raceAdded = after.count;
-        else
-            logf(1, "bindings for %s: race table not changed (%s); they apply from the next race start", nm.c_str(), why);
     }
+    lastRace_ = race;
+    bool listed = false;
+    for (const auto& l : late_)
+        if (l.devIndex == devIndex) listed = true;
+    if (!listed) late_.push_back(Late{devIndex, nm});
     // "all objects" tables (menus and the race's pause menu): the pad entries the game's builder adds per pad
     BindPair menu[10];
     int menuN = 0;

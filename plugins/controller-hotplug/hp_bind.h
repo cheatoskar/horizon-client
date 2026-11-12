@@ -33,7 +33,7 @@ struct BindTable {
     uintptr_t appGlobal;     // CTrackMania* (the app)
     uint32_t appDefaultsCb;  // app field: InputSetDefaultsBindings
     uint32_t appPort;        // app field: input port
-    uint32_t appRace;        // app field: current race (0 outside a race)
+    uint32_t appRace;        // app field CConstructionGame.CurrentRace (reflection name; 0 outside a race)
     uintptr_t setDefaults;   // CTrackManiaRace::InputSetDefaultsBindings (what app+appDefaultsCb holds)
     uintptr_t defaultsPass;  // thiscall(app; config), ret 4: defaults for every device without bindings
     uintptr_t currentConfig; // thiscall(app) -> CInputBindingsConfig* the race uses
@@ -76,6 +76,9 @@ public:
     bool verify(); // every code signature once; false = bindings stay off (the pad is still registered)
     // the game registered a pad at devIndex of the port: give it the bindings it would get at start
     void apply(uint8_t* port, uint32_t devIndex, const std::wstring& name);
+    // game thread, every tick while it returns true: logs once per race start whether the race table the game
+    // built has the late pads' bindings
+    bool raceCheck(uint8_t* port);
 
     // what the last apply did (tests, log)
     struct Result {
@@ -85,12 +88,14 @@ public:
         int raceAdded = 0;    // appended to the running race's table
         int menuAdded = 0;    // appended to "all objects" tables
         int menuTables = 0;
+        int raceCheck = -1;   // bindings of the late pad in the table of the last race started after it
     };
     const Result& last() const { return last_; }
 
 private:
     uintptr_t rb(uintptr_t link) const { return base_ - 0x400000 + link; }
     void logf(int level, const char* fmt, ...);
+    const char* raceTable(uintptr_t app, uintptr_t race, uintptr_t port, uintptr_t* table);
 
     const BindTable* t_;
     uintptr_t base_;
@@ -100,6 +105,12 @@ private:
     bool verified_ = false;
     bool failed_ = false;
     Result last_;
+    struct Late {
+        uint32_t devIndex;
+        std::string name;
+    };
+    std::vector<Late> late_;  // pads registered late (for the race start check)
+    uintptr_t lastRace_ = 0;
 };
 
 } // namespace hp

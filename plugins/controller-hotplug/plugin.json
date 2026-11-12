@@ -1,7 +1,7 @@
 {
   "id": "controller-hotplug",
   "name": "Controller fix",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "dll": "controller-hotplug.dll",
   "games": [
     "eswc",
