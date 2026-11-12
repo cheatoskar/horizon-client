@@ -690,7 +690,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU | HORIZON_CAP_GAME_EVENTS,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Saves your replay after a finish (Sunrise, Original: solo bests). The login fix for ESWC and Original is part of Horizon.",
+    "Saves your replay after each finish.",
     HORIZON_ABI_MINOR,
 };
 
@@ -820,23 +820,28 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (!g_imgui || !g_host) return;
     if (g_passive) {
         ImGui::TextWrapped("%s", kStandaloneNote);
-        ImGui::TextDisabled("Remove dinput8.chain.dll to use this module instead.");
+        ImGui::TextDisabled("Remove dinput8.chain.dll to use the module.");
         return;
     }
     bool changed = false;
     ImGui::TextUnformatted("Save");
     int mode = g_cfg.bestOnly ? 0 : 1;
     if (ImGui::RadioButton("New best only", &mode, 0)) changed = true;
-    ImGui::SameLine();
+    {
+        // side by side when it fits (narrow pop-out: below each other)
+        const float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize("Every finish").x;
+        if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
+            ImGui::SameLine();
+    }
     if (ImGui::RadioButton("Every finish", &mode, 1)) changed = true;
     g_cfg.bestOnly = mode == 0;
     if (ImGui::Checkbox("Refresh replay list", &g_cfg.scanReplays)) changed = true;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan the game's replay list after each save.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan the replay list after a save.");
     if (!g_legacy) {
         if (ImGui::Checkbox("TMX copy", &g_cfg.tmxCopy)) changed = true;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("After a LAN/online save, also write a copy with only your ghost.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("LAN/online: a copy with only your ghost.");
     } else {
-        ImGui::TextDisabled("Solo races only.");
+        ImGui::TextDisabled("Solo only");
     }
     if (changed) saveConfig();
 
@@ -847,8 +852,8 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     ImGui::Text("Key: %s", (key && *key) ? key : "none");
 
     ImGui::Separator();
-    ImGui::TextWrapped("%s", g_lastResult[0] ? g_lastResult : "Nothing saved yet.");
-    ImGui::Text("Saved this session: %d", g_savedCount);
+    ImGui::TextWrapped("%s", g_lastResult[0] ? g_lastResult : "Nothing saved");
+    ImGui::Text("Saved: %d", g_savedCount);
 }
 
 }  // extern "C"
