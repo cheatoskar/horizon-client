@@ -38,7 +38,7 @@ EXTRA = os.path.join(ROOT, "extra-plugins")
 STANDALONE = os.path.join(DIST, "standalone")
 STANDALONE_NAMES = {"controller-hotplug": "Controller-Hotplug"}
 # the modules players get; anything else in the build folders stays out of the zips
-SHIP = ["eswc-autosave", "controller-hotplug", "input-display", "wr-hunter", "tmx-browser", "tmx-upload",
+SHIP = ["eswc-autosave", "controller-hotplug", "game-settings", "input-display", "wr-hunter", "tmx-browser", "tmx-upload",
         "performance", "scripts", "node-explorer"]
 # where the build leaves a plugin folder (DLL, plugin.json, icons), first match wins
 PLUGIN_BASES = [os.path.join(LEGACY, "horizon", "plugins"), os.path.join(ROOT, "build", "plugins")]
