@@ -19,10 +19,10 @@ horizon\plugins\<id>\
 ```json
 {
   "id": "eswc-autosave",
-  "name": "ESWC Autosave",
-  "version": "2.0.0",
+  "name": "Autosave & Login-Fix",
+  "version": "2.1.0",
   "dll": "eswc-autosave.dll",
-  "games": ["eswc"],
+  "games": ["eswc", "sunrise", "original"],
   "online": "online-ok",
   "abi": 1,
   "description": "Saves your replay after each finish, without the dialogs.",
@@ -409,10 +409,10 @@ Rule: every Horizon module that makes sense on its own must also work without Ho
 
 | Module | Standalone build |
 |---|---|
-| `eswc-autosave` (Autosave & Login-Fix) | own repo `cheatoskar/eswc-autosave` (not built here): `dinput8.dll` loader + `eswc_autosave.dll` |
-| `controller-hotplug` (Controller nachträglich erkennen) | built here: `dist\standalone\controller-hotplug\`, zip `Controller-Hotplug-<version>-standalone.zip` made by `tools\package.py` (loader `dinput8.dll` + `controller_hotplug.dll`, own install script) |
+| `eswc-autosave` (Autosave & Login-Fix, module 2.1.0: ESWC, Sunrise and Original) | own repo `cheatoskar/eswc-autosave` (not built here): `dinput8.dll` loader + `eswc_autosave.dll` (1.2: ESWC, Sunrise and Original) |
+| `controller-hotplug` (Controller nachträglich erkennen) | built here: `dist\standalone\controller-hotplug\`, zip `standalone\Controller-Hotplug-<version>-standalone.zip` made by `tools\package.py` (loader `dinput8.dll` + `controller_hotplug.dll`, own install script) |
 
-`tools\package.py` zips every folder `dist\standalone\<id>\` into `dist\release\<Name>-<version>-standalone.zip` (version from the module's `plugin.json`) and lists it under `standalone` in `manifest.json`. The module's build script fills the folder from `plugins\<id>\standalone\`.
+`tools\package.py` zips every folder `dist\standalone\<id>\` into `dist\release\standalone\<Name>-<version>-standalone.zip` (version from the module's `plugin.json`) and lists it under `standalone` in `manifest.json`. The module's build script fills the folder from `plugins\<id>\standalone\`.
 
 How they live together with the Legacy Loader:
 

@@ -1,4 +1,7 @@
 // Renders the Horizon menu shell offscreen (hidden window, D3D9 HAL) and saves screens\ui-<scene>.png.
+// "ui_preview.exe sizes <tag>": the menu in six window sizes (640x480 .. 2560x1440) with the scale a 1440p
+// screen and 90 % text give, fitted like the host does; screens\fit-<tag>-<w>x<h>-<list|page>.png.
+// Built with /DPREVIEW_BEFORE against older ui code, the same scenes show the menu without the fit.
 #include <windows.h>
 
 #include <d3d9.h>
@@ -15,6 +18,7 @@
 #include "imgui.h"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -74,9 +78,9 @@ void fillModel() {
         p.statusText = text;
         m.plugins.push_back(p);
     };
-    add("eswc-autosave", "ESWC Autosave", "1.2.0", "osaro", "Saves every finished run as a replay, named with map and time, so nothing is lost.",
+    add("eswc-autosave", "ESWC Autosave", "1.2.0", "cheatoskar", "Saves every finished run as a replay, named with map and time, so nothing is lost.",
         PluginStatus::On, true, true, true, "");
-    add("legacy-randomizer", "Legacy Randomizer", "0.9.1", "osaro", "Picks a random map from your list.", PluginStatus::On, true,
+    add("legacy-randomizer", "Legacy Randomizer", "0.9.1", "cheatoskar", "Picks a random map from your list.", PluginStatus::On, true,
         false, true, "");
     add("tm-vibrant-shaders", "TM Vibrant Shaders", "1.4.2", "TM Horizon",
         "Better light, bloom and colour grading for the old engine, with presets for day and night maps.",
@@ -244,9 +248,104 @@ void setupEmpty() {
 }
 void setupNone() { fillModel(); }
 
+// The menu in the window sizes players use, at the scale the host would pick (1440p screen, text 90 %).
+int runSizes(const char* tag) {
+    const int sizes[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1920, 1080}, {2560, 1440}};
+    const float base = 1440.0f / 1080.0f;
+    const int contentPct = 90, menuPct = 80;
+    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr,
+                      L"HorizonUiSizes", nullptr};
+    RegisterClassExW(&wc);
+    int failed = 0;
+    for (const auto& sz : sizes) {
+        const int w = sz[0], h = sz[1];
+        HWND hwnd = CreateWindowW(wc.lpszClassName, L"ui sizes", WS_POPUP, 0, 0, w, h, nullptr, nullptr, wc.hInstance, nullptr);
+        IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
+        if (!hwnd || !d3d) return 3;
+        D3DPRESENT_PARAMETERS pp = {};
+        pp.Windowed = TRUE;
+        pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+        pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+        pp.BackBufferWidth = static_cast<UINT>(w);
+        pp.BackBufferHeight = static_cast<UINT>(h);
+        pp.hDeviceWindow = hwnd;
+        pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+        IDirect3DDevice9* dev = nullptr;
+        HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &dev);
+        if (FAILED(hr)) hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev);
+        if (FAILED(hr)) return 4;
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+        const float user = base * static_cast<float>(contentPct) / 100.0f;
+#ifdef PREVIEW_BEFORE
+        const float s = user;
+#else
+        const float s = fitScale(user, static_cast<float>(w), static_cast<float>(h), menuPct);
+#endif
+        setIconFontFile("assets/lucide-subset.ttf");
+        loadFonts(s);
+        applyStyle(s);
+        ImGui_ImplWin32_Init(hwnd);
+        ImGui_ImplDX9_Init(dev);
+        for (int scene = 0; scene < 2; ++scene) {
+            fillModel();
+            Model& m = P.model;
+            m.hostVersion = "0.3.0";
+            m.gameName = "TrackMania Forever (TMLoader)";
+            m.exeVersion = "TMLoader 2.12.0";
+            m.bridgeState = 3;
+            m.menuSizePct = menuPct;
+            m.contentPct = contentPct;
+            if (scene == 0) showPage("mods");
+            else showPluginPage("eswc-autosave");
+            bool menuOpen = true;
+            for (int f = 0; f < 30; ++f) {
+                ImGui_ImplDX9_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                io.DisplaySize = ImVec2(static_cast<float>(w), static_cast<float>(h));
+                io.DeltaTime = 1.0f / 30.0f;
+                io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+                ImGui::NewFrame();
+                gameBackground();
+                drawMenu(P.model, P.actions, &menuOpen);
+                ImGui::EndFrame();
+                ImGui::Render();
+                dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+                dev->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
+                if (SUCCEEDED(dev->BeginScene())) {
+                    ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+                    dev->EndScene();
+                }
+                if (f == 29) {
+                    wchar_t path[260];
+                    swprintf(path, 260, L"screens\\fit-%hs-%dx%d-%ls.png", tag, w, h, scene == 0 ? L"list" : L"page");
+                    if (savePng(dev, path)) std::printf("saved %ls (scale %.2f)\n", path, s);
+                    else { std::printf("FAILED %ls\n", path); ++failed; }
+                }
+                dev->Present(nullptr, nullptr, nullptr, nullptr);
+            }
+        }
+        ImGui_ImplDX9_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        dev->Release();
+        d3d->Release();
+        DestroyWindow(hwnd);
+    }
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return failed;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "sizes") == 0) {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        CreateDirectoryW(L"screens", nullptr);
+        return runSizes(argc >= 3 ? argv[2] : "now");
+    }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr,
                       L"HorizonUiPreview", nullptr};

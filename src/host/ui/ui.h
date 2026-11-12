@@ -201,6 +201,17 @@ struct MenuMetrics {
 };
 const MenuMetrics& menuMetrics();
 
+// Fitting the menu into small windows (TMUF at 640x480 and the like).
+constexpr float kMinUiScale = 0.8f;     // smallest UI scale the fit goes to (body text about 13 px); below it the menu scrolls
+constexpr float kFitWidth = 880.0f;     // the menu's room at scale 1 (header, list and page side by side, footer)
+constexpr float kFitHeight = 560.0f;
+constexpr float kMinPageWidth = 440.0f; // page beside the list at scale 1; narrower: list or page, with a Back button
+// The share of the window the menu frame takes: the player's menu size, nearly all of a small window.
+float menuShare(int menuSizePct, float displayW, float displayH);
+// The UI scale for this window: the player's scale (screen height x text size), made smaller so the menu fits,
+// but not below kMinUiScale (or the player's own scale if that is lower). Steps of 0.05.
+float fitScale(float userScale, float displayW, float displayH, int menuSizePct);
+
 // Pictures the host made (ImTextureID values): plugin icons by plugin id, other mods by "other:<name>",
 // the TM Horizon wordmark (with its width/height) and the round mark. 0 = none (initials / text).
 void setIcon(const std::string& key, unsigned long long texture);

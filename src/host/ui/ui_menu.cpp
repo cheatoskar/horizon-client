@@ -28,6 +28,9 @@ struct MenuState {
     std::string tabKey;       // "" = Settings
     bool tabPending = false;
     int scaleDrag = 0;        // content scale slider value while it is dragged (0 = not dragged)
+    bool narrowPage = false;  // narrow menu (small window): the page is shown instead of the list
+    bool narrow = false;      // the last frame used the narrow layout
+    bool rowClicked = false;  // a sidebar row was clicked in this frame
 };
 MenuState g;
 MenuMetrics g_metrics;
@@ -150,20 +153,20 @@ void drawHeader(const Model& model, bool* open) {
     const float height = titleH + smallH + 6.0f * s;
 
     float aspect = 1.0f;
+    float logoEnd = p.x;
     if (const unsigned long long logo = logoWordmark(&aspect)) {
         // the TM Horizon wordmark (planet + chrome TM + HORIZON), as tall as the title line
         const float lh = titleH * 1.15f;
         dl->AddImage(static_cast<ImTextureID>(logo), ImVec2(p.x, p.y - titleH * 0.08f), ImVec2(p.x + lh * aspect, p.y - titleH * 0.08f + lh));
+        logoEnd = p.x + lh * aspect;
     } else {
         const std::string tm = "TM ";
         drawText(dl, f.title, p, U(t.text), tm);
         drawText(dl, f.title, ImVec2(p.x + textSize(f.title, tm).x, p.y), U(t.accent), "HORIZON");
+        logoEnd = p.x + textSize(f.title, tm + "HORIZON").x;
     }
-    std::string sub = model.gameName;
-    if (!model.exeVersion.empty()) sub += (sub.empty() ? "" : "  \xC2\xB7  ") + model.exeVersion;
-    drawText(dl, f.small, ImVec2(p.x + 1.0f * s, p.y + titleH + 4.0f * s), U(t.muted), sub);
 
-    const float closeD = 36.0f * s;
+    const float closeD = 30.0f * s;
     const float rightX = p.x + width;
     const float midY = p.y + height * 0.5f;
     if (closeButton(ImVec2(rightX - closeD, midY - closeD * 0.5f), closeD)) *open = false;
@@ -186,17 +189,38 @@ void drawHeader(const Model& model, bool* open) {
     }
     chips.push_back({model.online ? "Game: online" : "Game: offline", model.online ? t.ok : t.muted, true,
                      "Whether the game is connected to an online server. Solo-only modules turn off online."});
-    const float chipH = 28.0f * s;
+    // Chips between the logo and the close button. When the full chips do not fit (small window), each
+    // shrinks to a coloured dot and its text moves into the tooltip.
+    const float chipH = 26.0f * s;
+    const float gapX = 8.0f * s;
+    const float room = rightX - closeD - 16.0f * s - (logoEnd + 16.0f * s);
+    float full = 0.0f;
+    for (const Chip& c : chips) full += chipWidth(f.small, c.text, c.dot) + gapX;
+    const bool dots = full > room;
     float x = rightX - closeD - 16.0f * s;
     for (size_t i = chips.size(); i-- > 0;) {
-        const float cw = chipWidth(f.small, chips[i].text, chips[i].dot);
+        const float cw = dots ? chipH : chipWidth(f.small, chips[i].text, chips[i].dot);
         x -= cw;
         const ImVec2 cp(x, midY - chipH * 0.5f);
-        drawChip(dl, cp, chipH, f.small, chips[i].text, chips[i].colour, chips[i].dot);
-        if (!chips[i].tip.empty() && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(cp, ImVec2(cp.x + cw, cp.y + chipH)))
-            ImGui::SetTooltip("%s", chips[i].tip.c_str());
-        x -= 8.0f * s;
+        if (dots) {
+            const ImVec2 c(cp.x + chipH * 0.5f, cp.y + chipH * 0.5f);
+            dl->AddCircleFilled(c, chipH * 0.5f, W(0.06f), 24);
+            dl->AddCircleFilled(c, 4.0f * s, U(chips[i].colour), 16);
+        } else {
+            drawChip(dl, cp, chipH, f.small, chips[i].text, chips[i].colour, chips[i].dot);
+        }
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(cp, ImVec2(cp.x + cw, cp.y + chipH))) {
+            if (dots) ImGui::SetTooltip("%s%s%s", chips[i].text.c_str(), chips[i].tip.empty() ? "" : "\n", chips[i].tip.c_str());
+            else if (!chips[i].tip.empty()) ImGui::SetTooltip("%s", chips[i].tip.c_str());
+        }
+        x -= gapX;
     }
+    // the game name under the logo, cut before the chips
+    std::string sub = model.gameName;
+    if (!model.exeVersion.empty()) sub += (sub.empty() ? "" : "  \xC2\xB7  ") + model.exeVersion;
+    const float subX = p.x + 1.0f * s;
+    const float subW = x - 8.0f * s - subX;
+    drawText(dl, f.small, ImVec2(subX, p.y + titleH + 4.0f * s), U(t.muted), ellipsize(f.small, sub, std::max(0.0f, subW)));
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy(ImVec2(width, height));
 }
@@ -220,6 +244,7 @@ bool rowButton(const char* id, ImVec2 size, bool selected, bool* hoveredOut) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::SetNextItemAllowOverlap();
     const bool clicked = ImGui::InvisibleButton(id, size);
+    if (clicked) g.rowClicked = true;
     const bool hov = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(p, ImVec2(p.x + size.x, p.y + size.y));
     const Tokens& t = tokens();
     const ImVec2 br(p.x + size.x, p.y + size.y);
@@ -323,7 +348,7 @@ void otherRow(const OtherModView& o) {
     ImGui::PopID();
 }
 
-void drawSidebar(const Model& model, const Actions& actions, float height) {
+void drawSidebar(const Model& model, const Actions& actions, float width, float height) {
     const float s = scale();
     const Fonts& f = fonts();
     const Tokens& t = tokens();
@@ -331,7 +356,7 @@ void drawSidebar(const Model& model, const Actions& actions, float height) {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, t.radius * s);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * s, 6.0f * s));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-    const bool shown = ImGui::BeginChild("##sidebar", ImVec2(260.0f * s, height), ImGuiChildFlags_AlwaysUseWindowPadding);
+    const bool shown = ImGui::BeginChild("##sidebar", ImVec2(width, height), ImGuiChildFlags_AlwaysUseWindowPadding);
     ImGui::PopStyleVar(3);
     if (shown) {
         sectionLabel("MODS");
@@ -392,13 +417,14 @@ void infoRow(const char* label, const std::string& value) {
     ImGui::PopTextWrapPos();
 }
 
-bool beginCard(const char* id, float padX, float padY, bool autoHeight) {
+bool beginCard(const char* id, float padX, float padY, bool autoHeight, float minHeight = 0.0f) {
     const float s = scale();
     const Tokens& t = tokens();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, toVec(t.surface, 0.55f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, t.radius * s);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padX * s, padY * s));
-    const bool shown = ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+    const float h = !autoHeight && ImGui::GetContentRegionAvail().y < minHeight ? minHeight : 0.0f;
+    const bool shown = ImGui::BeginChild(id, ImVec2(0.0f, h),
                                          ImGuiChildFlags_AlwaysUseWindowPadding |
                                              (autoHeight ? ImGuiChildFlags_AutoResizeY : 0));
     ImGui::PopStyleVar(2);
@@ -432,13 +458,16 @@ void pageHeader(const std::string& id, const std::string& name, bool greyIcon, c
     const float titleH = F(f.title)->FontSize;
     const float smallH = F(f.small)->FontSize;
     const float top = p.y + (iconR * 2.0f - titleH - smallH - 2.0f * s) * 0.5f;
-    drawText(dl, f.title, ImVec2(tx, top), U(t.text), name);
+    const float textW = std::max(0.0f, p.x + width - tx);
+    const std::string title = ellipsize(f.title, name, textW);
+    drawText(dl, f.title, ImVec2(tx, top), U(t.text), title);
     if (chipText) {
         const float chipH = 26.0f * s;
-        drawChip(dl, ImVec2(tx + textSize(f.title, name).x + 16.0f * s, top + (titleH - chipH) * 0.5f + 2.0f * s), chipH,
-                 f.small, chipText, *chipColour, false);
+        const float chipX = tx + textSize(f.title, title).x + 16.0f * s;
+        if (chipX + chipWidth(f.small, chipText, false) <= p.x + width)
+            drawChip(dl, ImVec2(chipX, top + (titleH - chipH) * 0.5f + 2.0f * s), chipH, f.small, chipText, *chipColour, false);
     }
-    drawText(dl, f.small, ImVec2(tx + 1.0f * s, top + titleH + 2.0f * s), U(t.muted), meta);
+    drawText(dl, f.small, ImVec2(tx + 1.0f * s, top + titleH + 2.0f * s), U(t.muted), ellipsize(f.small, meta, textW));
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy(ImVec2(width, iconR * 2.0f + 14.0f * s));
 }
@@ -461,7 +490,7 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
         ImGui::Dummy(ImVec2(0.0f, 6.0f * s));
     }
     (void)f;
-    if (beginCard("##plugin_page", 20.0f, 16.0f, false)) {
+    if (beginCard("##plugin_page", 20.0f, 16.0f, false, 240.0f * s)) {
         const ImVec2 room = ImGui::GetContentRegionAvail();
         g_metrics.pageW = room.x;
         g_metrics.pageH = room.y;
@@ -949,9 +978,13 @@ void drawFooter(const Model& model, float height) {
     dl->AddLine(ImVec2(p.x, p.y), ImVec2(p.x + width, p.y), W(0.07f), 1.0f);
     const float ty = p.y + (height - F(f.small)->FontSize) * 0.5f + 2.0f * s;
     const std::string key = model.menuKey.empty() ? std::string("Esc") : model.menuKey + " or Esc";
-    drawText(dl, f.small, ImVec2(p.x, ty), U(t.muted), key + " closes  \xC2\xB7  Ctrl + wheel: text size " + std::to_string(model.contentPct) + "%");
     const std::string right = "Horizon Client " + model.hostVersion;
-    drawText(dl, f.small, ImVec2(p.x + width - textSize(f.small, right).x, ty), U(t.muted), right);
+    const float rightW = textSize(f.small, right).x;
+    const float leftW = width - rightW - 16.0f * s;
+    std::string left = key + " closes  \xC2\xB7  Ctrl + wheel: text size " + std::to_string(model.contentPct) + "%";
+    if (textSize(f.small, left).x > leftW) left = key + " closes";
+    if (textSize(f.small, left).x <= leftW) drawText(dl, f.small, ImVec2(p.x, ty), U(t.muted), left);
+    drawText(dl, f.small, ImVec2(p.x + width - rightW, ty), U(t.muted), right);
     ImGui::Dummy(ImVec2(width, height));
 }
 
@@ -967,7 +1000,7 @@ void resolveSelection(const Model& model) {
 void drawPage(const Model& model, const Actions& actions, float height) {
     const float s = scale();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool scrolls = g.sel == "general" || g.sel == "about" || startsWith(g.sel, "other:");
+    const bool scrolls = g.sel == "general" || g.sel == "about" || startsWith(g.sel, "other:") || height < 360.0f * s;
     ImGui::BeginChild("##page", ImVec2(0.0f, height), 0, scrolls ? 0 : ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
     (void)s;
@@ -991,6 +1024,7 @@ void drawPage(const Model& model, const Actions& actions, float height) {
 
 void showPluginPage(const std::string& id) {
     g.sel = "plugin:" + id;
+    g.narrowPage = true;
 }
 
 bool pluginPageShown(const std::string& id) {
@@ -1006,6 +1040,7 @@ void selectPanelTab(const std::string& pluginId, const std::string& key) {
 void showPage(const char* page) {
     if (!page) return;
     g.sel = page;
+    g.narrowPage = std::strcmp(page, "mods") != 0;
 }
 
 void drawMenu(const Model& model, const Actions& actions, bool* open) {
@@ -1037,7 +1072,7 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
 
     // panel
     // the player's menu size: a share of the screen (General -> Display)
-    const float share = static_cast<float>(std::max(50, std::min(95, model.menuSizePct))) / 100.0f;
+    const float share = menuShare(model.menuSizePct, disp.x, disp.y);
     const float pw = std::floor(disp.x * share);
     const float ph = std::floor(disp.y * share);
     g_metrics.menuW = pw;
@@ -1066,10 +1101,29 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
 
     const float footerH = 36.0f * s;
     const float contentH = ImGui::GetContentRegionAvail().y - footerH;
+    const float contentW = ImGui::GetContentRegionAvail().x;
     const float gap = 24.0f * s;
-    drawSidebar(model, actions, contentH);
-    ImGui::SameLine(0.0f, gap);
-    drawPage(model, actions, contentH);
+    const float sideW = 260.0f * s;
+    // Narrow (small window): list or page, one at a time; a click on a row opens its page, Back returns.
+    const bool narrow = contentW < sideW + gap + kMinPageWidth * s;
+    if (narrow != g.narrow) g.narrowPage = false; // start on the list after a layout change
+    g.narrow = narrow;
+    if (!narrow) {
+        drawSidebar(model, actions, sideW, contentH);
+        ImGui::SameLine(0.0f, gap);
+        drawPage(model, actions, contentH);
+    } else if (!g.narrowPage) {
+        g.rowClicked = false;
+        drawSidebar(model, actions, contentW, contentH);
+        if (g.rowClicked) g.narrowPage = true;
+    } else {
+        const float backH = 30.0f * s;
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, 4.0f * s));
+        if (ImGui::Button(HZ_ICON_CHEVRON_LEFT_U8 " Back", ImVec2(0.0f, backH)) ) g.narrowPage = false;
+        ImGui::PopStyleVar();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        drawPage(model, actions, std::max(1.0f, contentH - backH - ImGui::GetStyle().ItemSpacing.y - 4.0f * s));
+    }
     drawFooter(model, footerH);
 
     const ImVec2 wpos = ImGui::GetWindowPos();
@@ -1089,6 +1143,23 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
 }
 
 const MenuMetrics& menuMetrics() { return g_metrics; }
+
+float menuShare(int menuSizePct, float displayW, float displayH) {
+    // small windows (TMUF at 640x480, ESWC at 800x600) get nearly the whole window
+    if (displayW < 1000.0f || displayH < 700.0f) return 0.96f;
+    return static_cast<float>(std::max(50, std::min(95, menuSizePct))) / 100.0f;
+}
+
+float fitScale(float userScale, float displayW, float displayH, int menuSizePct) {
+    if (displayW <= 0.0f || displayH <= 0.0f) return userScale;
+    const float share = menuShare(menuSizePct, displayW, displayH);
+    // the menu at scale 1 wants about kFitWidth x kFitHeight (header, list, a page beside it, footer)
+    float fit = std::min(displayW * share / kFitWidth, displayH * share / kFitHeight);
+    fit = std::floor(fit * 20.0f) / 20.0f; // steps of 0.05: a window drag does not rebuild the fonts every pixel
+    float s = std::min(userScale, fit);
+    s = std::max(s, std::min(kMinUiScale, userScale)); // readable minimum; below it the menu scrolls
+    return s;
+}
 
 // ---- free plugin windows ---------------------------------------------------------------------------
 

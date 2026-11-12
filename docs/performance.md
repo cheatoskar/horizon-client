@@ -73,7 +73,7 @@ Default sets: `baseline` (all off), `limiter+vsync-off` (limit 120, V-Sync off),
 
 ## Where the frame time goes (static analysis, test copies only)
 
-From the exes in `C:\Users\osaro\Games\*-test` (imports, call sites with capstone, TMNF symbols from `TmForever.map`), and TM Vibrant Shaders' notes. Measured in the game: nothing yet.
+From the exes of my test copies of the games (imports, call sites with capstone, TMNF symbols from `TmForever.map`), and TM Vibrant Shaders' notes. Measured in the game: nothing yet.
 
 | Finding | Meaning |
 |---|---|

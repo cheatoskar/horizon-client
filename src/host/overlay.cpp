@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 #include "common/hotkeys.h"
@@ -67,6 +68,19 @@ int contentSetting() {
 }
 int menuSizePct() { return menuSizeSetting() ? menuSizeSetting() : menuSizeAuto(); }
 int contentPctWanted() { return contentSetting() ? contentSetting() : contentAuto(); }
+
+// The UI scale in use: the player's (screen height x text size), made smaller when the menu would not fit
+// the game window (TMUF at 640x480 on a 1440p screen). Plugins get the same through style() and ui_metrics().
+long g_fitW = 0, g_fitH = 0; // the window size the current scale was fitted to
+float effectiveScale(int contentPct) {
+    const float user = g_baseScale * static_cast<float>(contentPct) / 100.0f;
+    RECT rc = {};
+    // no size (minimised, Alt+Tab): keep what is in use
+    if (!g_hwnd || !GetClientRect(g_hwnd, &rc) || rc.right <= 0 || rc.bottom <= 0) return g_fitW ? ui::scale() : user;
+    g_fitW = rc.right - rc.left;
+    g_fitH = rc.bottom - rc.top;
+    return ui::fitScale(user, static_cast<float>(g_fitW), static_cast<float>(g_fitH), menuSizePct());
+}
 
 // The game is in a race (or the editor's test drive): no input taken on TMNF/TMUF then.
 bool racing() {
@@ -221,18 +235,20 @@ void menuHotkey(void*) {
 }
 void layoutHotkey(void*) { setLayoutMode(!g_layout, "its key"); }
 
-// The content scale the player wants now applied: fonts rebuilt in place, style and metrics updated.
-// Between frames only (no ImGui frame open).
+// The content scale the player wants, fitted to the window, now applied: fonts rebuilt in place, style and
+// metrics updated. Cheap when nothing changed (called every frame). Between frames only (no ImGui frame open).
 void applyContentScale(bool force) {
     const int want = contentPctWanted();
-    if (!force && want == g_contentPct) return;
+    const float s = effectiveScale(want);
+    if (!force && want == g_contentPct && std::fabs(s - ui::scale()) < 0.001f) return;
     g_contentPct = want;
-    const float s = g_baseScale * static_cast<float>(want) / 100.0f;
     ui::reloadFonts(s);
     ui::applyStyle(s);
     fillStyle();
     ImGui_ImplDX9_InvalidateDeviceObjects(); // the font texture is made again by the next NewFrame
-    HLOG("menu: text and icons %d%% (UI scale %.2f)", want, s);
+    const float user = g_baseScale * static_cast<float>(want) / 100.0f;
+    HLOG("menu: text and icons %d%% (UI scale %.2f%s, window %ldx%ld)", want, s, s < user - 0.001f ? ", made smaller to fit" : "",
+         g_fitW, g_fitH);
 }
 
 ui::Model buildModel() {
@@ -599,14 +615,14 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
         g_baseScale = std::clamp(static_cast<float>(height) / 1080.0f, 1.0f, 2.0f);
         // the player's content scale (General -> Display, Ctrl + wheel) on top: 90 % by default at 1440p and up
         g_contentPct = contentPctWanted();
-        const float scale = g_baseScale * static_cast<float>(g_contentPct) / 100.0f;
+        const float scale = effectiveScale(g_contentPct); // fitted to the window (small windows: smaller)
         ui::loadFonts(scale);
         ui::applyStyle(scale);
         fillStyle();
         ImGui_ImplWin32_Init(window);
         g_origProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&wndProc)));
         hotkeysDetectExternal();
-        HLOG("overlay: ready on window %p (%ldx%ld, UI scale %.2f = %.2f x %d%%, menu %d%% of the screen); menu key %s, layout key %s",
+        HLOG("overlay: ready on window %p (%ldx%ld, UI scale %.2f of %.2f x %d%%, menu %d%% of the screen); menu key %s, layout key %s",
              static_cast<void*>(window), rc.right - rc.left, rc.bottom - rc.top, scale, g_baseScale, g_contentPct, menuSizePct(),
              hotkeyText(g_menuHotkey).c_str(), hotkeyText(g_layoutHotkey).c_str());
     }
@@ -654,10 +670,9 @@ void overlayFrame(void* device) {
         hostSetSettingInt("ui.content_scale", pct);
         g_reloadFonts = true;
     }
-    if (g_reloadFonts) {
-        g_reloadFonts = false;
-        applyContentScale(false);
-    }
+    // a new content scale, or a window size the menu no longer fits (Reset, resize): fonts again
+    g_reloadFonts = false;
+    applyContentScale(false);
     if (g_reloadIcons) {
         g_reloadIcons = false;
         texturesReloadPluginIcons();

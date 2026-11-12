@@ -1,6 +1,6 @@
-# Testplan Horizon Host 0.1.0 (11.11.2026)
+# Testplan Horizon Client (seit 0.1.0, Stand 0.3.0 vom 12.11.2026)
 
-Nur die Testkopien, nie die echten Ordner. Bei jedem Test entsteht `horizon\logs\<Datum_Uhrzeit>.log` im Spielordner. Wenn etwas nicht geht: genau diese Datei schicken.
+Nur die Testkopien, nie die echten Ordner. Die Testkopien liegen bei mir unter `%USERPROFILE%\Games\`. Bei jedem Test entsteht `horizon\logs\<Datum_Uhrzeit>.log` im Spielordner. Wenn etwas nicht geht: genau diese Datei schicken.
 
 **Tasten:** Menü **Einfg (Insert)**. Die Num-0-Taste (Einfg bei ausgeschaltetem NumLock) zählt absichtlich nicht, weil TM das Ziffernfeld für Kameras nutzt. Die Taste lässt sich im Menü unter Horizon › General ändern: auf Change klicken und die neue Taste drücken, oder eine der Vorschläge wählen (F2, #, +, Strg+Tab). Esc schließt das Menü, ohne dass das Spiel das Esc bekommt. Maus an den oberen Bildschirmrand: die schmale Horizon-Leiste.
 
@@ -8,7 +8,7 @@ Nur die Testkopien, nie die echten Ordner. Bei jedem Test entsteht `horizon\logs
 
 ## 1. ESWC so wie installiert (mit altem Autosave in der Kette)
 
-Ordner `C:\Users\osaro\Games\TMN-ESWC-horizon-test`, Start `TmNationsESWC.exe`.
+Ordner `%USERPROFILE%\Games\TMN-ESWC-horizon-test`, Start `TmNationsESWC.exe`.
 Was dort liegt: `dinput8.dll` = Horizon Legacy Loader, `dinput8.chain.dll` = dein alter Autosave-Loader 1.2 (vorher dinput8.dll), `d3d9.dll` = TMVS wie in deinem Ordner, `horizon\` = Host + Autosave-Plugin.
 
 1. Spiel starten, Login wie immer. Im Hauptmenü Einfg drücken: großes Menü mit Seitenleiste (MODS, HORIZON, OTHER MODS).
@@ -36,7 +36,7 @@ Im Log: `[eswc-autosave] started`, `hook: ... OnFinishLine ... installed`, `[esw
 
 ## 2b. ESWC Entwicklerstand (Horizon 0.2.0 + TMVS mit Handshake + Node Explorer)
 
-Ordner: `C:\Users\osaro\Games\TMN-ESWC-horizon-next` (Kopie von TMN-ESWC-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (gleicher Build wie in TMSunrise-horizon-next), das alte Autosave weiter als `dinput8.chain.dll`, TM Vibrant Shaders vom Branch horizon-coop (8e2a099 + a3dcd02) als `d3d9.dll` (das bisherige liegt als `d3d9.dll.tmvs-1.5-test` daneben), Node Explorer 0.1.0, TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0. ESWC meldet sich beim Start online an wie sonst auch.
+Ordner: `%USERPROFILE%\Games\TMN-ESWC-horizon-next` (Kopie von TMN-ESWC-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (gleicher Build wie in TMSunrise-horizon-next), das alte Autosave weiter als `dinput8.chain.dll`, TM Vibrant Shaders vom Branch horizon-coop (8e2a099 + a3dcd02) als `d3d9.dll` (das bisherige liegt als `d3d9.dll.tmvs-1.5-test` daneben), Node Explorer 0.1.0, TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0. ESWC meldet sich beim Start online an wie sonst auch.
 
 1. Spiel starten. Horizon-Log (`horizon\logs\`, neueste Datei): `[node-explorer] started: Node Explorer 0.1.0 ...`, unter Other mods steht TM Vibrant Shaders. TMVS-Log (`tmvs.log`, Ordner über das TMVS-Menü): `horizon: Horizon Host 0.2.0 found (host.dll): our menu gives way to its menu, ...`.
 2. TMVS-Menü (F8) öffnen, dann Insert: das TMVS-Menü verschwindet, solange das Horizon-Menü offen ist (tmvs.log: `menu: hidden while the Horizon menu is open`), und kommt nach dem Schließen zurück. F7 (Effekte an/aus) geht weiter, auch bei offenem Horizon-Menü.
@@ -48,14 +48,14 @@ Ordner: `C:\Users\osaro\Games\TMN-ESWC-horizon-next` (Kopie von TMN-ESWC-horizon
 
 ## 3. Sunrise
 
-Ordner `C:\Users\osaro\Games\TMSunrise-horizon-test`, Start `TmSunrise.exe` (hat seinen eigenen d3d9.dll-Wrapper, Horizon arbeitet damit).
+Ordner `%USERPROFILE%\Games\TMSunrise-horizon-test`, Start `TmSunrise.exe` (hat seinen eigenen d3d9.dll-Wrapper, Horizon arbeitet damit).
 Kurz von mir automatisch getestet (ohne Online-Login, Prozess danach beendet): Gerät gehookt, Overlay bereit, Reset auf 2560x1440 ok, Spielzustand „Main menu“ erkannt. Bitte prüfen:
 1. Einfg: Menü erscheint (keine Plugins installiert, also leere MODS-Liste mit Hinweis), Leiste am oberen Rand.
 2. Ein Rennen starten: Log zeigt `event: map loaded "<Name>"` und `event: game state Solo race`. Ziel/Checkpoints gibt es auf Sunrise noch nicht (steht so im Log).
 
 ## 3b. Sunrise mit Ziel-Ereignissen (Entwicklerstand)
 
-Ordner: `C:\Users\osaro\Games\TMSunrise-horizon-next` (Kopie von TMSunrise-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (Commit 46759cc), Legacy Randomizer 0.2.0 aus legacy-randomizer 3348e97 (nutzt echte Rennereignisse, wenn der Host sie liefert), TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0.
+Ordner: `%USERPROFILE%\Games\TMSunrise-horizon-next` (Kopie von TMSunrise-horizon-test). Darin: Horizon Host 0.2.0 vom Branch `next` (Commit 46759cc), Legacy Randomizer 0.2.0 aus legacy-randomizer 3348e97 (nutzt echte Rennereignisse, wenn der Host sie liefert), TMX Upload (aus). Die getesteten Ordner bleiben auf 0.1.0.
 
 Neu in Sunrise: Start, Checkpoint, Ziel und Ende des Solo-Rennens kommen aus dem Spiel selbst (statische Adressen, beim Start nur gesetzt, wenn die Bytes genau passen). Respawn und das Ende eines Netzwerk-Rennens gibt es auf Sunrise noch nicht.
 
@@ -70,7 +70,7 @@ Automatischer Kurztest (ohne Anmeldung, 30 s, nur Hauptmenü): alle vier Stellen
 
 ## 4. Forever über TMLoader (experimentell, nur wenn Zeit ist)
 
-Nicht installiert (dein TMLoader-Ordner bleibt unberührt). Zum Testen: `C:\Users\osaro\Downloads\horizon-host\dist\tmloader\Horizon Host` nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren, im TMLoader „Horizon Host“ anhaken, starten. Erwartet: Menü und Leiste, keine Spiel-Hooks, Eingabe wird nie blockiert (Competition Patch). Log: `...\products\Horizon Host\logs\`. Danach wieder abhaken. Mit TMVS + CenterSpeed zusammen: sag mir, ob beide Overlays laufen.
+Nicht installiert (dein TMLoader-Ordner bleibt unberührt). Zum Testen: `dist\tmloader\Horizon Host` (im Repo nach `build.cmd package`) nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren, im TMLoader „Horizon Host“ anhaken, starten. Erwartet: Menü und Leiste, keine Spiel-Hooks, Eingabe wird nie blockiert (Competition Patch). Log: `...\products\Horizon Host\logs\`. Danach wieder abhaken. Mit TMVS + CenterSpeed zusammen: sag mir, ob beide Overlays laufen.
 
 ## 5. Forever über TMLoader: Ereignisse (Entwicklerstand)
 
@@ -88,7 +88,7 @@ Im Log (`...\products\Horizon Host\logs\`, neueste Datei) prüfen:
 
 ## Horizon Performance (Branch `perf`, Plugin `performance`)
 
-Nur Testkopien (`C:\Users\osaro\Games\TMNF-test`, `TMN-ESWC-test`, `TMS-test`; TMUF optional). Horizon-Build aus `horizon-host-wt-perf\dist` über TM Horizon installieren (Quelle: lokaler Build-Ordner), dann im Horizon-Menü „Horizon Performance“ einschalten (ist neu und daher aus). Was alles bedeutet: `docs/performance.md`. Ergebnisse liegen in `horizon\data\performance\bench\` (Forever: `...\products\Horizon Host\data\performance\bench\`), der Hänger-Log in `...\performance\hangs.log`.
+Nur Testkopien (`%USERPROFILE%\Games\TMNF-test`, `TMN-ESWC-test`, `TMS-test`; TMUF optional). Horizon-Build aus `horizon-host-wt-perf\dist` über TM Horizon installieren (Quelle: lokaler Build-Ordner), dann im Horizon-Menü „Horizon Performance“ einschalten (ist neu und daher aus). Was alles bedeutet: `docs/performance.md`. Ergebnisse liegen in `horizon\data\performance\bench\` (Forever: `...\products\Horizon Host\data\performance\bench\`), der Hänger-Log in `...\performance\hangs.log`.
 
 ### A. Messen (pro Spiel einmal, ca. 5 min)
 
@@ -144,16 +144,27 @@ Nur Testkopien (ESWC, einmal Sunrise). Das Modul ist neu und standardmäßig an.
 
 ## TM Original (Branch `tmo`)
 
-Nur eine Testkopie des Spiels mit der `TMORIGINAL.EXE` aus dem Online Patch v2 von GreffMASTER (SHA-256 beginnt mit `75e129d7`, 7.883.264 Bytes). Jede andere TM-Original-Exe lehnt der Host ab; im Log steht dann `TrackMania Original, but not the supported exe`. Alles ist bisher nur aus den Adressen gelesen, noch nie im Spiel gelaufen. Das Paket ist `Horizon-Host-<Version>-Original.zip`, Einrichtung wie bei Sunrise (`Horizon-Install.cmd`).
+Nur eine Testkopie des Spiels mit der `TMORIGINAL.EXE` aus dem Online Patch v2 von GreffMASTER (SHA-256 beginnt mit `75e129d7`, 7.883.264 Bytes). Jede andere TM-Original-Exe lehnt der Host ab; im Log steht dann `TrackMania Original, but not the supported exe`. Alles ist bisher nur aus den Adressen gelesen, noch nie im Spiel gelaufen. Das Paket ist `Horizon-Client-<Version>-Original.zip`, Einrichtung wie bei Sunrise (`Horizon-Install.cmd`).
 
 1. Spiel starten (die mitgelieferte dgVoodoo-`d3d9.dll` bleibt im Ordner). Im Log (`horizon\logs\`, neueste Datei) prüfen: Exe erkannt als TM Original, `d3d: device ... hooked`, `overlay: ready ... menu key Insert`, danach die Zeile mit den Original-Ereignissen (Start, Ziel, Checkpoint, Ende des Solo-Rennens: an oder aus).
-2. Im Hauptmenü Einfg: Menü und Leiste am oberen Rand erscheinen. Jedes aktive Modul einmal öffnen: Input Display, WR Hunter, TMX Browser, Horizon Performance, Horizon Scripts, Controller nachträglich erkennen. Autosave & Login-Fix ist auf Original nicht dabei.
+2. Im Hauptmenü Einfg: Menü und Leiste am oberen Rand erscheinen. Jedes aktive Modul einmal öffnen: Input Display, WR Hunter, TMX Browser, Horizon Performance, Horizon Scripts, Controller nachträglich erkennen. Autosave & Login-Fix ist ab 0.3.0 dabei (Test: Abschnitt „Autosave auf Sunrise und Original“).
 3. Ein Solo-Rennen fahren: im Log `event: map loaded`, `event: race start`, bei jedem Checkpoint `event: checkpoint` (Zeit gegen die Anzeige im Spiel prüfen), im Ziel `event: finish`, danach `race end`. Respawn wird nicht gemeldet. Input Display und WR Hunter zeigen ihre Werte.
 4. TMX Browser im Hauptmenü: suchen (Seite original.tm-exchange.com), eine Strecke mit „Play“ starten. Sie lädt über die Spielsteuerung des Hosts und geht nur aus dem Hauptmenü.
 5. Controller-Modul: Spiel ohne Pad starten, dann das Pad anstecken: Toast, das Pad erscheint in den Eingabe-Einstellungen. Geht es nicht, die Log-Datei schicken.
 6. Online-Login: Login-Fix steht auf General an. Anmelden und sagen, ob es ohne die Windows-Internetoptionen (TLS 1.0, Sperrprüfung) klappt; im Log steht, ob der Fix aktiv ist. Das ist noch nicht gegen den Server getestet.
 7. Start mit Shift gehalten: keine Plugins (Safe-Modus). Start mit Strg+Shift: Horizon wird gar nicht geladen. Beides im Log nachsehen.
 8. Wenn etwas hängt oder abstürzt: die neueste Log-Datei schicken.
+
+## Autosave auf Sunrise und Original (0.3.0, Modul `eswc-autosave` 2.1.0)
+
+Nur Testkopien. Das Modul ist auf Sunrise und Original neu, alles nur aus den Adressen gelesen, noch nie im Spiel gelaufen. Was es tut: `docs/plugins/eswc-autosave.md`.
+
+1. Sunrise starten. Im Log: `[eswc-autosave] ready: saving the solo race replay after every new best finish ...`. Steht dort `refusing to load: not the supported ... exe`, ist es eine andere Exe: Log schicken.
+2. Eine Solo-Strecke fahren und ins Ziel kommen (erste Fahrt = neue Bestzeit). Auf dem Endbildschirm: im Log `[Solo] SAVED (...)`, die Datei liegt in `GameData\Tracks\Replays\My Replays\` als `<Map>(mm'ss''cc).Replay.Gbx`. Im Spiel unter Replays öffnen: sie spielt ab.
+3. Eine langsamere Fahrt: nichts wird gespeichert (Modus „New best only“). Auf „Every finish“ stellen, langsamer fahren: wird gespeichert, ohne eine vorhandene Datei zu überschreiben (` (2)`).
+4. F9 im Solo-Endbildschirm: speichert den letzten Lauf. Online oder im LAN: F9 tut nichts, nach dem Ziel wird nichts gespeichert.
+5. Dasselbe auf Original (Online-Patch-v2-Exe): Schritte 1 bis 4.
+6. ESWC einmal gegenprüfen: speichert wie vorher (auch die TMX-Kopie).
 
 ## Entfernen
 

@@ -391,7 +391,8 @@ typedef struct HorizonHostApi {
     void (HORIZON_CALL* release_texture)(HorizonPluginHandle plugin, uint64_t texture);
     /* Saves the replay of the current/last run like the game's "Save replay", without dialogs.
      * name_utf8: file name without extension ("" = the game's default name). HORIZON_ERR_NOT_SUPPORTED
-     * where the host does not do it yet (host 0.1.0: everywhere; the ESWC Autosave plugin saves on ESWC). */
+     * where the host does not do it (host 0.2.0 and later: ESWC only; Sunrise, Original and Forever return it.
+     * The Autosave plugin saves on ESWC, Sunrise and Original with its own copy of the game's calls). */
     HorizonResult (HORIZON_CALL* save_replay)(HorizonPluginHandle plugin, const char* name_utf8);
 
     /* ---- ABI minor 2 (check host->abi_minor >= 2 before use) ------------------------------------ */

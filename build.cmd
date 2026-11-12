@@ -9,6 +9,8 @@ setlocal
 set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsamd64_x86.bat"
 if not exist "%VCVARS%" goto novc
 call "%VCVARS%" >nul 2>nul || exit /b 1
+rem shipped DLLs name only their PDB file, not the build folder (no user paths in release files)
+set "LINK=/PDBALTPATH:%%_PDB%%"
 cd /d "%~dp0"
 for %%d in (build build\loader build\host build\imgui build\common build\test build\plugins dist dist\legacy dist\legacy\horizon dist\legacy\horizon\plugins) do if not exist %%d mkdir %%d
 
