@@ -248,11 +248,11 @@ HorizonResult HORIZON_CALL f_bridge_request(HorizonPluginHandle, const char* met
     return HORIZON_OK;
 }
 int32_t HORIZON_CALL f_bridge_state(void) { return bridgeStateValue; }
-// ABI 1.4: fixed metrics of a 1080p screen with the menu at 80 %
-const HorizonUiMetrics* HORIZON_CALL f_ui_metrics(void) {
-    static const HorizonUiMetrics m = {sizeof(HorizonUiMetrics), 1.0f, 1.0f, 1920.0f, 1080.0f, 1536.0f, 864.0f, 1100.0f, 700.0f};
-    return &m;
-}
+} // namespace
+HorizonUiMetrics metrics = {sizeof(HorizonUiMetrics), 1.0f, 1.0f, 1920.0f, 1080.0f, 1536.0f, 864.0f, 1100.0f, 700.0f};
+namespace {
+// ABI 1.4: chost::metrics (the previews set page_w/page_h to the window the plugin draws in)
+const HorizonUiMetrics* HORIZON_CALL f_ui_metrics(void) { return &metrics; }
 
 uint64_t HORIZON_CALL f_create_texture(HorizonPluginHandle, uint32_t w, uint32_t h, const void* rgba) {
     if (!w || !h || !rgba) return 0;

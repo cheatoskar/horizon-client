@@ -138,6 +138,31 @@ inline bool isForever(const HorizonHostApi* h) {
     const HorizonGameInfo* g = h && h->game_info ? h->game_info() : nullptr;
     return g && (g->game & HORIZON_GAME_FOREVER) != 0;
 }
+
+#ifdef IMGUI_VERSION
+// ---------------------------------------------------------------- room (ABI 1.4 ui_metrics)
+// Width of the place the plugin is drawn in right now: the host's page_w (menu page, popped-out window or
+// free window, set right before each draw call), never more than ImGui's content region (the ground truth).
+inline float roomWidth(const HorizonHostApi* h) {
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (abiAtLeast(h, 4) && h->ui_metrics) {
+        const HorizonUiMetrics* m = h->ui_metrics();
+        if (m && m->size >= sizeof(HorizonUiMetrics) && m->page_w > 0.0f && m->page_w < avail) avail = m->page_w;
+    }
+    return avail;
+}
+// The compact layout: narrower than 560 px at UI scale 1 (a pop-out, a 640x480 game window).
+inline bool narrow(const HorizonHostApi* h, float below = 560.0f) { return roomWidth(h) < below * uiScale(h); }
+// SameLine() when an item w pixels wide still fits after the last item, else the next item starts a new line.
+inline void sameLineIfFits(float w) {
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= right) ImGui::SameLine();
+}
+inline float checkboxWidth(const char* label) {
+    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
+}
+inline float buttonWidth(const char* label) { return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f; }
+#endif
 // URL query value escaping (RFC 3986 unreserved kept).
 inline std::string urlEscape(const std::string& s) {
     static const char* hex = "0123456789ABCDEF";
