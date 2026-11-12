@@ -43,7 +43,7 @@ build\test\perf_test.exe host "%CD%\%P%\stall" "%CD%\%P%\stall.txt" stall || set
 
 call :setup series
 mkdir %P%\series\horizon\data\performance
-> %P%\series\horizon\settings\performance.json echo {"overlay": 0, "hang_log": 0}
+> %P%\series\horizon\settings\performance.json echo {"overlay": 0, "hang_log": 0, "preset": 2}
 > %P%\series\horizon\data\performance\bench-request.json echo {"version": 1, "series": {"mode": "now", "startAfter": 1, "seconds": 1, "settle": 0.3, "runs": 2, "warmup": 1, "sets": [{"label": "baseline"}, {"label": "prio", "options": {"priority": 2}}, {"label": "filt", "options": {"filter": 1}}, {"label": "vs", "options": {"vsync": 1}}]}}
 echo === benchmark series: 4 sets (one needs a restart), warm-up + 2 runs, options restored
 build\test\perf_test.exe host "%CD%\%P%\series" "%CD%\%P%\series.txt" series || set FAIL=1

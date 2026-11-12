@@ -664,6 +664,7 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
         unsigned api, size, flags;
         const wchar_t* path;
     };
+    const DWORD startPriority = GetPriorityClass(GetCurrentProcess()); // the test may itself run below normal
     SetEnvironmentVariableW(L"HORIZON_TEST_MENU", shot.empty() ? L"0" : L"1");
     SetEnvironmentVariableW(L"HORIZON_TEST_PAGE", L"plugin:performance");
     // the test window is rarely the foreground window (run from a console or in the background): count it as in front
@@ -799,8 +800,8 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
         const std::string base = readAll(benchDir + file.substr(benchDir.size(), 15) + L"_series_baseline_w1.json");
         CHECK(has(base, "\"priority\": 0") && has(base, "\"avgFps\""));
         CHECK(has(log, "benchmark series started") && has(log, "benchmark series done"));
-        // the user's own settings are back: priority class normal again
-        CHECK(GetPriorityClass(GetCurrentProcess()) == NORMAL_PRIORITY_CLASS);
+        // the user's own settings (Custom, priority as the game set it) are back: the priority class from the start
+        CHECK(GetPriorityClass(GetCurrentProcess()) == startPriority);
     }
     if (stall) {
         const std::string hangs = readAll(dir + L"\\horizon\\data\\performance\\hangs.log");
