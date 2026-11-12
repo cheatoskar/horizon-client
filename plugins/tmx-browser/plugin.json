@@ -1,7 +1,7 @@
 {
   "id": "tmx-browser",
   "name": "TMX Browser",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "dll": "tmx-browser.dll",
   "games": [
     "eswc",

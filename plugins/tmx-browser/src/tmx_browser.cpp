@@ -40,7 +40,7 @@ using tmx::Track;
 
 namespace {
 
-constexpr char kVersion[] = "0.2.0";
+constexpr char kVersion[] = "0.2.1";
 constexpr size_t kMaxTextures = 48;
 constexpr int kMaxThumbsInFlight = 6;
 constexpr size_t kThumbCacheFiles = 600;
@@ -361,7 +361,7 @@ void doPlayLater(const Track& t) {
         g_mapBusy = true;
         netSend(p, apiJob(tmx::gbxUrl(g_site, t.id), tmx::kMaxMapBytes));
     }
-    setMsg("Plays in the main menu", 0);
+    setMsg("", 0); // the map's page says "Plays in the main menu" next to Cancel while it waits
 }
 
 void cancelLater() {
