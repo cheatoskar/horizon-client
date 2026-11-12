@@ -14,5 +14,6 @@ if exist %PD%\icon-alt.png copy /y %PD%\icon-alt.png "%OD%\icon-alt.png" >nul
 for %%f in (input-display.dll plugin.json icon.png) do copy /y "%OD%\%%f" "%PK%\%%f" >nul || exit /b 1
 set "TD=build\client\test"
 %CXX% /Iplugins\client-common /Iplugins\client-common\tests /Fo"%TD%\\" /Fd"%TD%\inp.pdb" %PD%\tests\input_display_fakehost.cpp || exit /b 1
-link /nologo /DEBUG /MACHINE:X86 /OUT:"%TD%\input_display_fakehost.exe" "%TD%\input_display_fakehost.obj" build\client\clienthost.lib build\imgui_core.lib user32.lib kernel32.lib || exit /b 1
+rem large address aware like TMLoader's TmForever.exe: the test puts the car above 2 GB
+link /nologo /DEBUG /MACHINE:X86 /LARGEADDRESSAWARE /OUT:"%TD%\input_display_fakehost.exe" "%TD%\input_display_fakehost.obj" build\client\clienthost.lib build\imgui_core.lib user32.lib kernel32.lib || exit /b 1
 exit /b 0

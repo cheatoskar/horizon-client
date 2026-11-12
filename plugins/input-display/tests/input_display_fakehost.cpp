@@ -1,7 +1,8 @@
 // input-display.dll in the client test host for ESWC, Sunrise, Original, TMNF and TMUF: the car's steer/gas/brake read
 // from the fake world (by the default offsets, like when reflection has no member), speed/gear/RPM where the
 // game has them, garbage refused, no race, every style drawn. The plugin never writes: the test checks the
-// fake car's memory is unchanged afterwards.
+// fake car's memory is unchanged afterwards. TMNF/TMUF once more with the engine reflection as in the game (the car's
+// classes without a name) and the car above 2 GB.
 //   input_display_fakehost.exe <input-display.dll> [games]
 #include <windows.h>
 
@@ -85,6 +86,52 @@ void runGame(uint32_t game, const char* name) {
     check(state().find("car=1") == 0 && state().find("brake=1.00") != std::string::npos, "shown online too");
     g_shutdown();
 }
+
+// TMNF/TMUF with the engine reflection there, as in the game: the car's classes CSceneVehicleCar and CSceneVehicle are
+// registered WITHOUT a name, so a check by name never finds the car ("No car data" while driving, Horizon Client
+// 0.3.0-rc.1 on TMLoader 2.12.0). The local player through race players[0] (no target player info), then the car
+// at the top of the address space (TMLoader's exe is large address aware).
+void runForeverReflection(uint32_t game, const char* name) {
+    printf("===== input-display, game %s, engine reflection with the unnamed car classes\n", name);
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string root = exe;
+    root.resize(root.find_last_of('\\') + 1);
+    root += std::string("inp-") + name + "-reflect\\";
+    chost::setup(game, root, "input-display");
+    chost::online = false;
+    chost::buildWorld(true, "UidOfTheTestMap000000000aB", L"Test");
+    chost::setReflection(true);
+    const HorizonHostApi api = chost::api();
+    check(g_init(&api) == 0, "Init returns 0");
+    check(chost::logs.find("reflection ready") != std::string::npos, "the plugin sees the engine reflection");
+    chost::setTargetInfo(false);
+    chost::setRun(1, 4200, {});
+    chost::setCar(0.5f, 1.0f, 0.0f, 212, 3, 6100.0f);
+    frame();
+    std::string s = state();
+    check(s.find("car=1 race=1") == 0 && s.find("steer=0.50") != std::string::npos && s.find("gas=1.00") != std::string::npos,
+          "car found by class id (players[0] path): " + s);
+    chost::setTargetInfo(true);
+    chost::setCar(-1.0f, 0.0f, 1.0f, 90, 2, 4000.0f);
+    frame();
+    s = state();
+    check(s.find("car=1 race=1") == 0 && s.find("steer=-1.00") != std::string::npos && s.find("brake=1.00") != std::string::npos,
+          "car found by class id (target player path): " + s);
+    const uintptr_t high = chost::moveCarHigh();
+    chost::setCar(0.25f, 1.0f, 0.0f, 300, 5, 9000.0f);
+    std::vector<unsigned char> before(0x800);
+    memcpy(before.data(), reinterpret_cast<const void*>(chost::world.vehicle), before.size());
+    frame();
+    s = state();
+    if (high >= 0x80000000u)
+        check(s.find("car=1") == 0 && s.find("steer=0.25") != std::string::npos, "car above 2 GB read: " + s);
+    else
+        printf("SKIP  car above 2 GB (no memory there, %08x)\n", static_cast<unsigned>(high));
+    check(memcmp(before.data(), reinterpret_cast<const void*>(chost::world.vehicle), before.size()) == 0, "the car's memory is untouched");
+    g_shutdown();
+    chost::setReflection(false);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -107,9 +154,12 @@ int main(int argc, char** argv) {
     std::vector<std::string> games;
     for (int i = 2; i < argc; i++) games.push_back(argv[i]);
     if (games.empty()) games = {"eswc", "sunrise", "original", "tmnf", "tmuf"};
-    for (const std::string& g : games)
-        runGame(g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "original" ? HORIZON_GAME_ORIGINAL
-                : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF, g.c_str());
+    for (const std::string& g : games) {
+        const uint32_t game = g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "original" ? HORIZON_GAME_ORIGINAL
+                              : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF;
+        runGame(game, g.c_str());
+        if (game & HORIZON_GAME_FOREVER) runForeverReflection(game, g.c_str());
+    }
     printf("input_display_fakehost: %s (%d failed)\n", g_fail ? "FAILED" : "all passed", g_fail);
     ImGui::DestroyContext();
     return g_fail;
