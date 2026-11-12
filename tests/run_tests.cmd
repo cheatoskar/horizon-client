@@ -14,6 +14,9 @@ build\test\ui_input_test.exe || set FAIL=1
 echo === controller hot-plug: tracker and game side against a fake input port
 build\test\hp_tests.exe || set FAIL=1
 
+echo === game settings: volumes and window mode against a fake game, the Windows audio session
+build\test\gs_tests.exe || set FAIL=1
+
 echo === loader + chain + unknown exe
 set "T=build\test\run-loader"
 if exist %T% rmdir /s /q %T%
