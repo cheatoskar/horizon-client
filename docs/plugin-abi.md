@@ -429,7 +429,7 @@ Rule: every Horizon module that makes sense on its own must also work without Ho
 | Module | Standalone build |
 |---|---|
 | `eswc-autosave` (Autosave & Login-Fix, module 2.1.0: ESWC, Sunrise and Original) | own repo `cheatoskar/eswc-autosave` (not built here): `dinput8.dll` loader + `eswc_autosave.dll` (1.2: ESWC, Sunrise and Original) |
-| `controller-hotplug` (Controller nachträglich erkennen) | built here: `dist\standalone\controller-hotplug\`, zip `standalone\Controller-Hotplug-<version>-standalone.zip` made by `tools\package.py` (loader `dinput8.dll` + `controller_hotplug.dll`, own install script) |
+| `controller-hotplug` (Controller fix) | built here: `dist\standalone\controller-hotplug\`, zip `standalone\Controller-Hotplug-<version>-standalone.zip` made by `tools\package.py` (loader `dinput8.dll` + `controller_hotplug.dll`, own install script) |
 
 `tools\package.py` zips every folder `dist\standalone\<id>\` into `dist\release\standalone\<Name>-<version>-standalone.zip` (version from the module's `plugin.json`) and lists it under `standalone` in `manifest.json`. The module's build script fills the folder from `plugins\<id>\standalone\`.
 
@@ -437,7 +437,7 @@ How they live together with the Legacy Loader:
 
 - Both use `dinput8.dll`. The Horizon install renames a foreign `dinput8.dll` to `dinput8.chain.dll`, and the Legacy Loader loads it first. So the standalone starts before the host.
 - The standalone loader chains the same way: if `dinput8.chain.dll` lies next to it and is not the loader itself, it passes DirectInput on to that file, else to the system `dinput8.dll`. Its install script handles all three cases (nothing there, Horizon there, another mod there) and never overwrites or deletes a foreign `dinput8.dll`.
-- The module checks whether the standalone is there (its DLL is loaded; for `eswc-autosave` also `eswc_autosave.dll` together with `dinput8.chain.dll` in the folder). If so it stays passive: no thread, no hook, no game call. It shows the toast "Eigenständiges … gefunden – Modul pausiert" (for example "Eigenständiges Controller-Hotplug gefunden – Modul pausiert") and the same text on its page. It never touches the standalone's files.
+- The module checks whether the standalone is there (its DLL is loaded; for `eswc-autosave` also `eswc_autosave.dll` together with `dinput8.chain.dll` in the folder). If so it stays passive: no thread, no hook, no game call. It shows the toast "Eigenständiges … gefunden – Modul pausiert" (Controller fix: "Controller fix paused: standalone active") and the same text on its page. It never touches the standalone's files.
 - Same code, one copy running: with both installed, only the standalone does the work.
 
 ## ABI versioning

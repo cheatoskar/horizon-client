@@ -295,23 +295,27 @@ uint32_t GameBackend::deviceCount() {
     return n;
 }
 
-bool GameBackend::guidOf(void* dev, void* iface, Guid& out) {
+bool GameBackend::guidOf(void* dev, void* iface, Guid& out, std::wstring& name) {
     for (const auto& c : cache_)
         if (c.dev == dev && c.iface == iface) {
             out = c.g;
+            name = c.name;
             return true;
         }
     DIDEVICEINSTANCEW inst;
     memset(&inst, 0, sizeof(inst));
     if (!iface || !deviceInfo(iface, &inst)) return false;
     out = toGuid(inst.guidInstance);
+    inst.tszProductName[MAX_PATH - 1] = 0;
+    name = inst.tszProductName;
     for (auto& c : cache_)
         if (c.dev == dev) {
             c.iface = iface;
             c.g = out;
+            c.name = name;
             return true;
         }
-    cache_.push_back(CacheEntry{dev, iface, out});
+    cache_.push_back(CacheEntry{dev, iface, out, name});
     return true;
 }
 
@@ -330,8 +334,9 @@ void GameBackend::slots(std::vector<Slot>& out) {
         if (!rd(arr + i * 4, dev) || !dev || !rd(dev, vt) || vt != rb(table_->padVtable)) continue;
         if (!rd(dev + kDevIface, iface) || !rd(dev + kDevLost, lost)) continue;
         Guid g;
-        if (!guidOf(reinterpret_cast<void*>(dev), reinterpret_cast<void*>(iface), g)) continue;
-        out.push_back(Slot{static_cast<int>(i), g, lost != 0});
+        std::wstring name;
+        if (!guidOf(reinterpret_cast<void*>(dev), reinterpret_cast<void*>(iface), g, name)) continue;
+        out.push_back(Slot{static_cast<int>(i), g, lost != 0, name});
     }
 }
 
@@ -357,7 +362,8 @@ bool GameBackend::add(const Attached& d) {
     inst.dwSize = sizeof(inst);
     inst.guidInstance = fromGuid(d.instance);
     inst.guidProduct = fromGuid(d.product);
-    inst.dwDevType = DI8DEVTYPE_GAMEPAD;
+    // what DirectInput reported for it (the game's callback does not look at it today; a pad if unknown)
+    inst.dwDevType = d.devType ? d.devType : (DI8DEVTYPE_GAMEPAD | (DI8DEVTYPEGAMEPAD_STANDARD << 8) | DIDEVTYPE_HID);
     wcsncpy_s(inst.tszInstanceName, d.name.c_str(), _TRUNCATE);
     wcsncpy_s(inst.tszProductName, d.name.c_str(), _TRUNCATE);
     if (!callEnum(rb(table_->enumCallback), &inst, p)) {

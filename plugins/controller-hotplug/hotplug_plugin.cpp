@@ -1,4 +1,4 @@
-// Controller nachträglich erkennen (controller-hotplug) - a Horizon Host module for TrackMania Nations ESWC 1.80
+// Controller fix (controller-hotplug) - a Horizon Host module for TrackMania Nations ESWC 1.80
 // TrackMania Sunrise (Win10 repack) and TrackMania Original (Online Patch v2 exe).
 //
 // The games enumerate DirectInput game controllers once, at start. This module watches for controllers that
@@ -23,13 +23,13 @@
 
 namespace {
 
-constexpr char kVersion[] = "1.0.0";
+constexpr char kVersion[] = "1.1.0";
 constexpr char kId[] = "controller-hotplug";
-constexpr char kName[] = "Controller nachtr\xC3\xA4glich erkennen";
+constexpr char kName[] = "Controller fix";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
 constexpr char kSunriseSha[] = "e59dfc7eaa5314e85b2b0df6f40ef7ba01a23bd5a9525f84407f5dff301df4fe";
 constexpr char kOriginalSha[] = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
-constexpr char kStandaloneNote[] = "Eigenst\xC3\xA4ndiges Controller-Hotplug gefunden \xE2\x80\x93 Modul pausiert";
+constexpr char kStandaloneNote[] = "Controller fix paused: standalone active";
 
 const HorizonHostApi* g_host = nullptr;
 bool g_imgui = false;
@@ -166,16 +166,17 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (!g_imgui || !g_host) return;
     if (g_passive) {
-        ImGui::TextWrapped("%s", kStandaloneNote);
-        ImGui::TextDisabled("Remove controller_hotplug.dll to use the module.");
+        ImGui::TextUnformatted("Paused");
+        ImGui::TextDisabled("Standalone active");
         return;
     }
     if (!g_service) return;
     if (g_backend && g_backend->failed()) {
-        ImGui::TextWrapped("Unknown input code: off (see log)");
+        ImGui::TextUnformatted("Off");
+        ImGui::TextDisabled("Unknown game code");
         return;
     }
-    ImGui::TextDisabled("%s", g_service->notifications() ? "Watching: device events" : "Watching: every second");
+    ImGui::TextDisabled("%s", g_service->notifications() ? "Watching" : "Polling");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Set new controllers up in the game's input settings.");
     ImGui::Separator();
     std::vector<hp::Tracker::View> v;
@@ -183,10 +184,13 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     if (v.empty()) ImGui::TextDisabled("No controller");
     for (const auto& c : v) {
         const std::string name = hp::toUtf8(c.name);
-        const char* state = !c.present ? "unplugged" : c.inGame ? "in game" : "waiting";
+        const char* state = !c.present ? "Unplugged" : c.inGame ? "In game" : "Waiting";
         ImGui::Bullet();
         ImGui::TextWrapped("%s  (%s)", name.c_str(), state); // long device names wrap in narrow windows
     }
+    const hp::Hint h = g_service->hint();
+    if (h == hp::Hint::XboxOff) ImGui::TextDisabled("Xbox controller off");
+    if (h == hp::Hint::XInputNotListed) ImGui::TextDisabled("XInput only");
 }
 
 } // extern "C"

@@ -28,13 +28,16 @@ bool sameGuid(const Guid& a, const Guid& b);
 struct Attached { // one controller Windows reports as attached (DirectInput game controller)
     Guid instance;
     Guid product;
-    std::wstring name; // product name
+    std::wstring name;    // product name
+    uint32_t devType = 0; // DirectInput dwDevType (0 = unknown)
+    bool xinput = false;  // its HID path has IG_: the XInput HID device of an Xbox-class pad
 };
 
 struct Slot { // one pad the game knows
-    int index;     // position in the game's device list
-    Guid instance; // DirectInput instance GUID of its device
-    bool lost;     // the game could not acquire it (unplugged or not polled yet)
+    int index;         // position in the game's device list
+    Guid instance;     // DirectInput instance GUID of its device
+    bool lost;         // the game could not acquire it (unplugged or not polled yet)
+    std::wstring name; // product name (log only, may be empty)
 };
 
 class Game {
@@ -44,6 +47,7 @@ public:
     virtual void slots(std::vector<Slot>& out) = 0;             // pads only (no keyboard/mouse)
     virtual bool add(const Attached& d) = 0;                    // true when the game has a slot for it afterwards
     virtual bool refresh(int slotIndex, const Attached& d) = 0; // fresh DirectInput device for that slot
+    virtual uint32_t devices() { return 0; }                    // all input devices of the game (log only)
 };
 
 enum class Note {
@@ -90,6 +94,8 @@ private:
         Guid g;
         Guid product;
         std::wstring name;
+        uint32_t devType = 0;
+        bool xinput = false;
         bool present = false;
         bool inGame = false;
         uint32_t backAt = 0; // replug time, 0 = no replug check pending

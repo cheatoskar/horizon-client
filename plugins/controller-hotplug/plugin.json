@@ -1,7 +1,7 @@
 {
   "id": "controller-hotplug",
-  "name": "Controller nachträglich erkennen",
-  "version": "1.0.0",
+  "name": "Controller fix",
+  "version": "1.1.0",
   "dll": "controller-hotplug.dll",
   "games": [
     "eswc",

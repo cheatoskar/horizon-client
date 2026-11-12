@@ -1,4 +1,4 @@
-// Controller hot-plug: the glue used by the Horizon module and the standalone DLL alike.
+// Controller fix (controller-hotplug): the glue used by the Horizon module and the standalone DLL alike.
 // tick() runs on the game's main thread only (module: run_on_game_thread; standalone: a posted message seen by
 // a WH_GETMESSAGE hook of the game thread). The worker thread only calls kick().
 #pragma once
@@ -33,6 +33,7 @@ public:
     void view(std::vector<Tracker::View>& out) const { tracker_.view(out); }
     bool watching() const { return watcher_.running(); }
     bool notifications() const { return watcher_.notifications(); }
+    Hint hint() const { return watcher_.hint(); }
 
 private:
     static void onKick(void* self);
@@ -44,6 +45,8 @@ private:
     Watcher watcher_;
     bool enabled_ = true;
     bool waitingLogged_ = false;
+    bool gameLogged_ = false;
+    uint32_t devices_ = 0;
 };
 
 // One owner per process: the module and the standalone DLL claim it; the second one stays passive.

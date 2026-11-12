@@ -16,7 +16,7 @@
 
 namespace {
 constexpr unsigned kLoaderApi = 1;
-constexpr char kVersion[] = "1.0.0";
+constexpr char kVersion[] = "1.1.0";
 constexpr WPARAM kMarker = 0x48504C47; // 'HPLG'
 
 CRITICAL_SECTION g_logLock;
@@ -116,7 +116,7 @@ extern "C" __declspec(dllexport) int __cdecl ControllerHotplugInit(unsigned load
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(reinterpret_cast<const uint8_t*>(exe) + dos->e_lfanew);
     const hp::GameTable* table = hp::tableForTimestamp(nt->FileHeader.TimeDateStamp);
     if (!table) {
-        logf(1, "unknown exe (PE timestamp %08lX): only TmNationsESWC.exe 1.80 and TmSunrise.exe (Win10 repack) are supported; off",
+        logf(1, "unknown exe (PE timestamp %08lX): only TmNationsESWC.exe 1.80, TmSunrise.exe (Win10 repack) and TMORIGINAL.EXE (Online Patch v2) are supported; off",
              static_cast<unsigned long>(nt->FileHeader.TimeDateStamp));
         return 2;
     }

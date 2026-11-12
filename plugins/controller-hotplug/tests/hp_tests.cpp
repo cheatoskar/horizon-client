@@ -1,6 +1,8 @@
-// Unit tests of controller-hotplug: the tracker against a game in memory (add, remove, re-add same GUID keeps the
-// slot, no registration storm, replug refresh once) and the game backend against a fake input port laid out like
-// ESWC's (enumeration callback appends a pad, binding tables get an empty range, refresh swaps the device).
+// Unit tests of controller-hotplug (Controller fix): the tracker against a game in memory (add, remove, re-add same
+// GUID keeps the slot, no registration storm, replug refresh once), the worker's enumeration logic (list series after
+// a device change, device descriptions, diff, why the game cannot see a pad) and the game backend against a fake
+// input port laid out like ESWC's (enumeration callback appends a pad with DirectInput's device type, binding tables
+// get an empty range, refresh swaps the device).
 #define DIRECTINPUT_VERSION 0x0800
 #include <windows.h>
 
@@ -9,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../hp_enum.h"
 #include "../hp_game.h"
 #include "../hp_tracker.h"
 
@@ -170,6 +173,7 @@ static HRESULT STDMETHODCALLTYPE devSetCoop(FakeDev* d, HWND, DWORD c) {
 static HRESULT STDMETHODCALLTYPE devGetInfo(FakeDev* d, LPDIDEVICEINSTANCEW inst) {
     if (inst->dwSize != sizeof(DIDEVICEINSTANCEW)) return E_INVALIDARG;
     inst->guidInstance = d->g;
+    wcscpy_s(inst->tszProductName, L"Fake pad");
     return S_OK;
 }
 static void* g_devVtbl[32];
@@ -219,7 +223,11 @@ static uint8_t* newPad(const GUID& g, uint32_t lost) {
     U32(pad, 0x34) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(newDev(g)));
     return pad;
 }
+static DWORD g_cbType = 0;
+static wchar_t g_cbName[MAX_PATH];
 static BOOL CALLBACK fakeEnumCb(const DIDEVICEINSTANCEW* inst, void* port) {
+    g_cbType = inst->dwDevType;
+    wcscpy_s(g_cbName, inst->tszProductName);
     if (!g_enumFails) appendDevice(static_cast<uint8_t*>(port), newPad(inst->guidInstance, 1));
     return DIENUM_CONTINUE;
 }
@@ -325,9 +333,14 @@ static void backendTests() {
     std::vector<Slot> s;
     b.slots(s);
     check(s.size() == 1 && s[0].index == 2 && sameGuid(s[0].instance, G(1)) && !s[0].lost, "slots: only the pad (index 2), its GUID");
+    check(s[0].name == L"Fake pad" && b.devices() == 3, "slots: product name from the device; 3 input devices");
 
-    // add B through the game's callback
-    check(b.add(A(2, L"Pad B")), "add: true");
+    // add B through the game's callback, with the type DirectInput reported (a wheel)
+    Attached wheel = A(2, L"Pad B");
+    wheel.devType = DI8DEVTYPE_DRIVING | DIDEVTYPE_HID;
+    check(b.add(wheel), "add: true");
+    check(g_cbType == (DI8DEVTYPE_DRIVING | DIDEVTYPE_HID) && wcscmp(g_cbName, L"Pad B") == 0,
+          "the game's callback gets DirectInput's device type and the name");
     check(U32(g_port, 0x2c) == 4, "port has 4 devices");
     uint8_t** tables = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_port, 0x18)));
     for (int k = 0; k < 2; k++) {
@@ -343,6 +356,7 @@ static void backendTests() {
     // the callback adds nothing (CreateDevice failed in the game)
     g_enumFails = true;
     check(!b.add(A(3, L"Pad C")) && U32(g_port, 0x2c) == 4, "callback added nothing: false, tables untouched");
+    check(GET_DIDEVICE_TYPE(g_cbType) == DI8DEVTYPE_GAMEPAD && (g_cbType & DIDEVTYPE_HID), "type unknown: a HID gamepad");
     g_enumFails = false;
 
     // refresh slot 3
@@ -387,7 +401,7 @@ static void backendTests() {
 
 static void realTableTests() {
     printf("real tables in a process that is not the game\n");
-    const GameTable* tables[2] = {&eswcTable(), &sunriseTable()};
+    const GameTable* tables[3] = {&eswcTable(), &sunriseTable(), &originalTable()};
     for (const GameTable* t : tables) {
         GameBackend b(t, 0x400000, nullptr, nullptr);
         std::vector<Slot> s;
@@ -395,13 +409,113 @@ static void realTableTests() {
         check(!b.ready() && b.failed() && s.empty() && !b.add(A(1, L"x")) && !b.refresh(2, A(1, L"x")),
               "code bytes do not match here: off, no crash, no game call");
     }
-    check(tableForTimestamp(0x5ce7272f) == &eswcTable() && tableForTimestamp(0x5cc8f0cf) == &sunriseTable() && !tableForTimestamp(1),
+    check(tableForTimestamp(0x5ce7272f) == &eswcTable() && tableForTimestamp(0x5cc8f0cf) == &sunriseTable() &&
+              tableForTimestamp(0x5d337477) == &originalTable() && !tableForTimestamp(1),
           "exe timestamps pick the tables");
+}
+
+// ------------------------------------------------------------------ enumeration logic (worker)
+static Guid hidProduct(uint16_t vid, uint16_t pid) {
+    Guid g;
+    memset(g.b, 0, 16);
+    g.b[0] = static_cast<uint8_t>(vid);
+    g.b[1] = static_cast<uint8_t>(vid >> 8);
+    g.b[2] = static_cast<uint8_t>(pid);
+    g.b[3] = static_cast<uint8_t>(pid >> 8);
+    memcpy(g.b + 10, "PIDVID", 6);
+    return g;
+}
+
+static void enumTests() {
+    printf("enumeration logic\n");
+    {
+        Schedule s;
+        check(!s.pending() && !s.take(0) && s.waitMs(0) == 0xFFFFFFFFu, "schedule: idle");
+        s.trigger(1000);
+        check(s.pending() && s.waitMs(1000) == 500 && !s.take(1499), "after a change: first list 0.5 s later");
+        check(s.take(1500) && s.waitMs(1500) == 1500, "0.5 s: list, next at 2 s");
+        check(!s.take(2999) && s.take(3000), "2 s: list");
+        check(s.take(20000) && !s.pending(), "late wake-up: the steps that are due give one list, series done");
+        s.trigger(0xFFFFFF00u); // tick count wraps
+        check(s.take(0xFFFFFF00u + 500) && s.waitMs(0xFFFFFF00u + 500) == 1500, "schedule across the tick count wrap");
+        s.trigger(5000);
+        s.take(5500);
+        s.trigger(7000); // another change during a series starts it over
+        check(s.waitMs(7000) == 500, "a new change restarts the series");
+        int lists = 0;
+        for (uint32_t t = 7000; t <= 30000; t += 100)
+            if (s.take(t)) lists++;
+        check(lists == Schedule::kSteps && Schedule::kAfterMs[Schedule::kSteps - 1] >= 10000,
+              "one series = 4 lists, the last 10 s after the change");
+    }
+    {
+        uint16_t vid = 0, pid = 0;
+        check(productIds(hidProduct(0x045e, 0x02ff), vid, pid) && vid == 0x045e && pid == 0x02ff, "VID/PID from a HID product GUID");
+        check(!productIds(G(7), vid, pid), "not a HID product GUID: no VID/PID");
+        check(strcmp(typeName(DI8DEVTYPE_GAMEPAD | (2 << 8) | DIDEVTYPE_HID), "gamepad") == 0 &&
+                  strcmp(typeName(DI8DEVTYPE_DRIVING), "wheel") == 0 && strcmp(typeName(DI8DEVTYPE_SUPPLEMENTAL), "supplemental") == 0 &&
+                  strcmp(typeName(0), "controller") == 0,
+              "device type words");
+        Attached x{G(0x12345678), hidProduct(0x045e, 0x02ff), L"Controller (Xbox One For Windows)", DI8DEVTYPE_GAMEPAD | DIDEVTYPE_HID, true};
+        check(describe(x) == "Controller (Xbox One For Windows) (gamepad, VID 045E PID 02FF, XInput, id 12345678)", "describe: Xbox pad");
+        Attached w{G(5), G(6), L"", DI8DEVTYPE_DRIVING, false};
+        check(describe(w) == "(no name) (wheel, id 00000005)", "describe: no name, not HID");
+        Attached u{G(9), G(10), L"Pad \u00e4", DI8DEVTYPE_JOYSTICK, false};
+        check(describe(u).find("Pad \xC3\xA4 (joystick") == 0, "describe: names in UTF-8");
+    }
+    {
+        const Diff d = diff({A(1, L"a"), A(2, L"b")}, {A(2, L"b"), A(3, L"c")});
+        check(d.added.size() == 1 && sameGuid(d.added[0].instance, G(3)) && d.gone.size() == 1 && sameGuid(d.gone[0].instance, G(1)),
+              "diff: one new, one gone");
+        check(diff({A(1, L"a")}, {A(1, L"a")}).added.empty(), "diff: same list, nothing");
+    }
+    {
+        check(isXInputPath(L"\\\\?\\hid#vid_045e&pid_02ff&ig_00#8&39e3c7f0&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"),
+              "XInput HID path (IG_)");
+        check(!isXInputPath(L"\\\\?\\hid#vid_046d&pid_c08b&mi_01&col02#8&54eee94&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}") &&
+                  !isXInputPath(L"\\\\?\\hid#vid_1234&pid_big_00#x") && !isXInputPath(nullptr),
+              "other HID paths are not XInput");
+        check(idsFromPath(L"\\\\?\\HID#VID_045E&PID_02FF&IG_00#8&39e3") == "VID 045E PID 02FF" &&
+                  idsFromPath(L"\\\\?\\hid#vid_046d&pid_c08b&mi_01") == "VID 046D PID C08B" && idsFromPath(L"\\\\?\\root#x").empty(),
+              "VID/PID from a device path");
+    }
+    {
+        Environment e;
+        check(diagnose(e) == Hint::None, "nothing plugged in: no hint");
+        e.xboxUsb = 1; // the case of the report: Xbox pad on USB, switched off -> no game controller device
+        e.xinputKnown = true;
+        check(diagnose(e) == Hint::XboxOff, "Xbox pad on USB, no XInput pad, no DirectInput device: switched off");
+        e.lists.push_back(Attached{G(1), hidProduct(0x045e, 0x02ff), L"Controller (Xbox One For Windows)", DI8DEVTYPE_GAMEPAD, true});
+        e.xinputMask = 1;
+        check(diagnose(e) == Hint::None, "switched on: DirectInput lists it, no hint");
+        e.lists.clear();
+        check(diagnose(e) == Hint::XInputNotListed, "XInput pad that DirectInput does not list");
+        e.xinputKnown = false;
+        e.xboxUsb = 0;
+        check(diagnose(e) == Hint::None, "XInput unknown: no XInput hint");
+        Environment g;
+        g.lists.push_back(A(3, L"Generic pad"));
+        g.xinputKnown = true;
+        check(diagnose(g) == Hint::None, "generic HID pad, no Xbox: no hint");
+        check(hintText(Hint::XboxOff)[0] != 0 && hintText(Hint::None)[0] == 0, "hint texts");
+    }
+    {
+        // the tracker hands DirectInput's type to the game
+        FakeGame game;
+        Tracker t;
+        std::vector<Event> ev;
+        Attached wheel = A(3, L"Wheel");
+        wheel.devType = DI8DEVTYPE_DRIVING;
+        t.step(game, {wheel}, 1, 0, ev);
+        check(game.adds == 1 && game.lastAddType == DI8DEVTYPE_DRIVING && game.devices() == 3, "tracker: add with the device type");
+        check(game.pads.size() == 1 && game.pads[0].name == L"Wheel", "fake game: slot has the name");
+    }
 }
 
 int main() {
     realTableTests();
     trackerTests();
+    enumTests();
     backendTests();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

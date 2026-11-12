@@ -80,8 +80,19 @@ void Service::tick() {
     std::vector<Attached> list;
     const uint32_t gen = watcher_.list(list);
     std::vector<Event> events;
+    const bool ready = gen && game_->ready();
+    if (ready && !gameLogged_) {
+        // what the game found by itself at start (its own DirectInput enumeration)
+        gameLogged_ = true;
+        std::vector<Slot> pads;
+        game_->slots(pads);
+        devices_ = game_->devices();
+        logf(0, "game: %u input device(s), %u pad(s)%s", devices_, static_cast<unsigned>(pads.size()), pads.empty() ? "" : ":");
+        for (const auto& p : pads)
+            logf(0, "  device %d: %s%s", p.index, p.name.empty() ? "(no name)" : toUtf8(p.name).c_str(), p.lost ? " (not acquired yet)" : "");
+    }
     const bool more = tracker_.step(*game_, list, gen, GetTickCount(), events);
-    if (gen && !game_->ready()) {
+    if (gen && !ready) {
         if (!waitingLogged_) logf(0, "waiting for the game's input port");
         waitingLogged_ = true;
     }
@@ -89,13 +100,16 @@ void Service::tick() {
     for (const auto& e : events) {
         const std::string name = toUtf8(e.name);
         switch (e.what) {
-        case Note::Added:
-            logf(0, "registered: %s (device %d)", name.c_str(), e.slot);
-            if (cb_.toast) cb_.toast(cb_.user, ("Controller erkannt: " + name).c_str());
+        case Note::Added: {
+            const uint32_t before = devices_;
+            devices_ = game_->devices();
+            logf(0, "registered: %s (device %d; game input devices %u -> %u)", name.c_str(), e.slot, before, devices_);
+            if (cb_.toast) cb_.toast(cb_.user, ("Controller added: " + name).c_str());
             break;
+        }
         case Note::Back:
             logf(0, "plugged in again: %s (device %d, same bindings)", name.c_str(), e.slot);
-            if (cb_.toast) cb_.toast(cb_.user, ("Controller erkannt: " + name).c_str());
+            if (cb_.toast) cb_.toast(cb_.user, ("Controller back: " + name).c_str());
             break;
         case Note::Gone: logf(0, "unplugged: %s (device %d stays, the game keeps its bindings)", name.c_str(), e.slot); break;
         case Note::AddFailed: logf(1, "not registered yet: %s (next try in 30 s)", name.c_str()); break;

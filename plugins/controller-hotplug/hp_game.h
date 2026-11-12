@@ -71,12 +71,13 @@ public:
     bool failed() const { return failed_; }
     const GameTable* table() const { return table_; }
     uint32_t deviceCount(); // all devices of the port (keyboard, mouse, pads), 0 without a port
+    uint32_t devices() override { return deviceCount(); }
 
 private:
     uintptr_t rb(uintptr_t link) const { return base_ - 0x400000 + link; }
     uint8_t* port();
     void extendTables(uint8_t* port, uint32_t devices);
-    bool guidOf(void* dev, void* iface, Guid& out);
+    bool guidOf(void* dev, void* iface, Guid& out, std::wstring& name);
     void logf(int level, const char* fmt, ...);
 
     const GameTable* table_;
@@ -90,6 +91,7 @@ private:
         void* dev;
         void* iface;
         Guid g;
+        std::wstring name;
     };
     std::vector<CacheEntry> cache_;
 };
@@ -101,12 +103,15 @@ public:
     bool failAdds = false;
     std::vector<Slot> pads;
     int adds = 0, refreshes = 0;
+    uint32_t lastAddType = 0;
     bool ready() override { return readyFlag; }
+    uint32_t devices() override { return static_cast<uint32_t>(pads.size()) + 2; }
     void slots(std::vector<Slot>& out) override { out = pads; }
     bool add(const Attached& d) override {
         adds++;
+        lastAddType = d.devType;
         if (failAdds) return false;
-        pads.push_back(Slot{static_cast<int>(pads.size()) + 2, d.instance, true}); // after mouse and keyboard
+        pads.push_back(Slot{static_cast<int>(pads.size()) + 2, d.instance, true, d.name}); // after mouse and keyboard
         return true;
     }
     bool refresh(int slotIndex, const Attached&) override {

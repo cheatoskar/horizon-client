@@ -15,7 +15,7 @@ Was es ist
 Unterstuetzte Exe (alles andere: es tut nichts und schreibt den Grund ins Log)
   TmNationsESWC.exe, inoffiziell 1.80 (0.1.7.9)
   TmSunrise.exe, Win10-Repack (noch nicht im Spiel getestet)
-  TrackMania Original wird nicht unterstuetzt.
+  TMORIGINAL.EXE, Online Patch v2 (noch nicht im Spiel getestet)
 
 Installieren
   1. Den Inhalt des Zips in den Spielordner entpacken (neben die Exe).
@@ -38,9 +38,12 @@ Benutzen
   naechsten Rennstart. Abziehen und wieder anstecken: das Spiel behaelt den Platz
   und die Belegung. Ein Pad an einem anderen USB-Port kann als neues Geraet
   zaehlen und braucht dann eine neue Belegung.
+  Xbox-Controller: Das Spiel sieht ihn nur, solange er eingeschaltet ist. Steckt
+  er per USB, ist aber aus, steht das im Log; einschalten (Xbox-Taste) reicht,
+  er wird dann hinzugefuegt.
 
 Mit Horizon
-  Horizon Host hat das als eingebautes Modul "Controller nachtraeglich erkennen".
+  Horizon Client hat das als eingebautes Modul "Controller fix".
   Nimm dann das Modul. Sind beide da, pausiert das Modul sich selbst.
 
 Entfernen
@@ -61,7 +64,7 @@ What it is
 Supported exes (anything else: it does nothing and logs why)
   TmNationsESWC.exe, unofficial 1.80 (0.1.7.9)
   TmSunrise.exe, Win10 repack (not tested in game yet)
-  TrackMania Original is not supported.
+  TMORIGINAL.EXE, Online Patch v2 (not tested in game yet)
 
 Install
   1. Unzip into the game folder (next to the exe).
@@ -82,9 +85,12 @@ Use
   its bindings apply from the next race start. Unplug and plug in again: the game
   keeps the slot and the bindings. A pad in a different USB port can count as a new
   device and needs new bindings.
+  Xbox controllers: the game sees one only while it is switched on. If it is
+  plugged in by USB but off, the log says so; switch it on (Xbox button) and it
+  is added.
 
 With Horizon
-  Horizon Host has this built in as the module "Controller nachtraeglich erkennen".
+  Horizon Client has this built in as the module "Controller fix".
   Use the module then. If both are there, the module pauses itself.
 
 Remove

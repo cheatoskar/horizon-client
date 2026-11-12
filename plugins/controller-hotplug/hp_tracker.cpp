@@ -68,6 +68,8 @@ bool Tracker::step(Game& game, const std::vector<Attached>& attached, uint32_t g
             if (a) {
                 k.name = a->name;
                 k.product = a->product;
+                k.devType = a->devType;
+                k.xinput = a->xinput;
             }
         }
         for (const auto& a : attached) {
@@ -80,6 +82,8 @@ bool Tracker::step(Game& game, const std::vector<Attached>& attached, uint32_t g
             k.g = a.instance;
             k.product = a.product;
             k.name = a.name;
+            k.devType = a.devType;
+            k.xinput = a.xinput;
             k.present = true;
             known_.push_back(k);
         }
@@ -113,7 +117,7 @@ bool Tracker::step(Game& game, const std::vector<Attached>& attached, uint32_t g
         }
         adds++;
         k.attempts++;
-        Attached a{k.g, k.product, k.name};
+        Attached a{k.g, k.product, k.name, k.devType, k.xinput};
         bool ok = game.add(a);
         if (ok) {
             game.slots(slots);
@@ -150,7 +154,7 @@ bool Tracker::step(Game& game, const std::vector<Attached>& attached, uint32_t g
         }
         k.backPending = false;
         const int index = s->index;
-        Attached a{k.g, k.product, k.name};
+        Attached a{k.g, k.product, k.name, k.devType, k.xinput};
         const bool ok = game.refresh(index, a);
         events.push_back(Event{ok ? Note::Refreshed : Note::RefreshFailed, k.name, index});
     }

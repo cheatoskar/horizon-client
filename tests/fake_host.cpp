@@ -770,7 +770,7 @@ void autosaveScenarios(const char* dll, HorizonHostApi* host) {
     }
 }
 
-// Controller nachtraeglich erkennen: test mode (HORIZON_TEST_HOTPLUG=1) gives the module a game in memory and
+// Controller fix (controller-hotplug): test mode (HORIZON_TEST_HOTPLUG=1) gives the module a game in memory and
 // takes the attached controllers from HORIZON_TEST_HOTPLUG_DEVICES ("1:Name;2:Name"), read by its worker thread.
 bool toastHas(const char* part) {
     for (const auto& t : g_toasts)
@@ -808,7 +808,7 @@ void hotplugScenarios(const char* dll, HorizonHostApi* host) {
         check(r.init == 0 && logHas("ready: watching"), "Init ok, watching");
         check(g_toasts.empty() && !logHas("paused"), "no toast at start, not paused");
         SetEnvironmentVariableA("HORIZON_TEST_HOTPLUG_DEVICES", "1:Fake Pad A");
-        check(pumpUntil([] { return toastHas("Controller erkannt: Fake Pad A"); }, 3000), "toast: Controller erkannt: Fake Pad A");
+        check(pumpUntil([] { return toastHas("Controller added: Fake Pad A"); }, 3000), "toast: Controller added: Fake Pad A");
         check(g_toasts.size() == 1 && logHas("registered: Fake Pad A"), "one toast, registered once");
 
         printf("scenario 2: switched off, a second pad comes\n");
@@ -826,7 +826,7 @@ void hotplugScenarios(const char* dll, HorizonHostApi* host) {
         check(pumpUntil([] { return logHas("unplugged: Fake Pad A"); }, 3000), "unplugged: logged");
         check(g_toasts.empty(), "no toast for unplugging");
         SetEnvironmentVariableA("HORIZON_TEST_HOTPLUG_DEVICES", "1:Fake Pad A;2:Fake Pad B");
-        check(pumpUntil([] { return toastHas("Controller erkannt: Fake Pad A"); }, 3000), "plugged in again: toast");
+        check(pumpUntil([] { return toastHas("Controller back: Fake Pad A"); }, 3000), "plugged in again: toast");
         check(logHas("plugged in again: Fake Pad A") && g_toasts.size() == 1, "same slot (no second registration)");
         int registered = 0;
         for (const auto& l : g_logLines)
@@ -849,11 +849,11 @@ void hotplugScenarios(const char* dll, HorizonHostApi* host) {
         SetEnvironmentVariableA("HORIZON_TEST_HOTPLUG_DEVICES", "1:Fake Pad A");
         ScenarioRun r = scenarioStart(dll, host, true);
         check(r.init == 0 && logHas("module paused") && !logHas("ready: watching"), "Init ok, passive (no thread)");
-        check(pumpUntil([] { return toastHas("Modul pausiert"); }, 500) && g_toasts.size() == 1 &&
-                  g_toasts[0] == "Eigenst\xC3\xA4ndiges Controller-Hotplug gefunden \xE2\x80\x93 Modul pausiert",
-              "toast: Eigenstaendiges Controller-Hotplug gefunden - Modul pausiert");
+        check(pumpUntil([] { return toastHas("paused"); }, 500) && g_toasts.size() == 1 &&
+                  g_toasts[0] == "Controller fix paused: standalone active",
+              "toast: Controller fix paused: standalone active");
         pumpUntil([] { return false; }, 400);
-        check(!toastHas("Controller erkannt"), "passive: no pad registered");
+        check(!toastHas("Controller added"), "passive: no pad registered");
         drawPage(r.mod);
         scenarioStop(r);
         if (dummy) FreeLibrary(dummy);
@@ -1139,7 +1139,7 @@ int main(int argc, char** argv) {
         autosaveScenarios(dll, &host);
     }
     if (g_pluginId == "controller-hotplug" && g_gameInfo.game == HORIZON_GAME_ESWC) {
-        check(pluginName == "Controller nachtr\xC3\xA4glich erkennen", "display name: Controller nachtraeglich erkennen");
+        check(pluginName == "Controller fix", "display name: Controller fix");
         hotplugScenarios(dll, &host);
     }
     ImGui::DestroyContext();

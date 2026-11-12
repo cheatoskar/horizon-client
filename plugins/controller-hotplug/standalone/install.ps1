@@ -49,13 +49,13 @@ try {
         } elseif (Test-Horizon $target) {
             if (-not (Test-Path $chain)) {
                 Copy-Item $ours $chain -Force
-                Write-Host 'Horizon is installed here and has Controller Hotplug built in ("Controller nachtraeglich erkennen").'
+                Write-Host 'Horizon is installed here and has Controller Hotplug built in ("Controller fix").'
                 Write-Host 'Our loader is now dinput8.chain.dll: Horizon loads it first, its module then pauses itself.' -ForegroundColor Green
             } elseif (Test-Ours $chain) {
                 Copy-Item $ours $chain -Force
                 Write-Host 'Controller Hotplug updated (dinput8.chain.dll, loaded by Horizon).' -ForegroundColor Green
             } else {
-                Stop-With 'Horizon is installed and dinput8.chain.dll is another mod. Horizon has Controller Hotplug built in (menu: "Controller nachtraeglich erkennen"), so use that instead.'
+                Stop-With 'Horizon is installed and dinput8.chain.dll is another mod. Horizon has Controller Hotplug built in (menu: "Controller fix"), so use that instead.'
             }
         } else {
             if (Test-Path $chain) {
