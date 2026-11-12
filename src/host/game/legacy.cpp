@@ -47,6 +47,11 @@ const Exe kSunrise = {HORIZON_GAME_SUNRISE, 0x00bcce50, 0x0082aeb0, 0x007ec550, 
 const Exe kOriginal = {HORIZON_GAME_ORIGINAL, 0x00bc8084, 0x00829200, 0x007eab20, 0x007ead30, 0x007eab80, 0x007dc250};
 
 constexpr uint32_t kClassTrackMania = 0x24001000;
+// CTrackManiaEditorPuzzle (-> CTrackManiaEditorFree -> CTrackManiaEditor). ESWC 1.80 holds one in CTrackMania.Editor
+// (+0x2e4) for the whole of a campaign solo race (read in game 2026-11-12: Editor class 0x24017000 next to CurrentRace
+// CTrackManiaRace1P 0x24018000, on A-3, D-3, B-7, G-3); it is cleared with the race on the way back to the menu
+// (0x006c95c0). With a race of its own running it is a race, not the map editor.
+constexpr uint32_t kClassEditorPuzzle = 0x24017000;
 
 // ESWC 1.80 race/player members not exposed by reflection (TMVS engine.cpp, verified):
 constexpr size_t kEswcRaceStarts = 0x4dc, kEswcRaceRespawns = 0x4e0, kEswcRaceApp = 0x40;
@@ -89,6 +94,7 @@ struct Snapshot {
     void* editor = nullptr;
     int raceKind = kNone;
     bool editorIsReplay = false;
+    bool editorIsPuzzle = false; // CTrackManiaEditorPuzzle: ESWC keeps one in the Editor slot through every solo race
     bool clipViewer = false; // ESWC: a replay plays in the app's clip viewer
     void* info = nullptr; // local player info (ESWC: polled; Sunrise: from the race hooks)
     uint32_t starts = 0, respawns = 0, passed = 0;
@@ -251,8 +257,14 @@ private:
     int raceKind(void* race);
     void loadNames();
     void emitMapLoaded(void* challenge);
+    // The map editor (or its test drive): an editor that is not the replay editor, and not ESWC's puzzle editor
+    // under a solo or network race (that is a plain race).
+    static bool mapEditor(const Snapshot& s) {
+        if (!s.editor || s.editorIsReplay) return false;
+        return !(s.editorIsPuzzle && s.race && (s.raceKind == kSolo || s.raceKind == kNet));
+    }
     HorizonPlayMode playMode() const {
-        if (snap_.editor && !snap_.editorIsReplay) return HORIZON_MODE_EDITOR_TEST;
+        if (mapEditor(snap_)) return HORIZON_MODE_EDITOR_TEST;
         if (snap_.raceKind == kNet) return HORIZON_MODE_NET;
         if (snap_.raceKind == kSolo) return HORIZON_MODE_SOLO;
         if (snap_.editorIsReplay || (snap_.clipViewer && !snap_.race)) return HORIZON_MODE_REPLAY;
@@ -322,6 +334,7 @@ bool LegacyAdapter::read(Snapshot& s) {
             loadNames();
             auto n = classNames_.find(eid);
             s.editorIsReplay = n != classNames_.end() && n->second.find("Replay") != std::string::npos;
+            s.editorIsPuzzle = eid == kClassEditorPuzzle || (n != classNames_.end() && n->second == "CTrackManiaEditorPuzzle");
         }
     }
     if (o_.race >= 0) rd(app, static_cast<size_t>(o_.race), &s.race);
@@ -415,7 +428,7 @@ void LegacyAdapter::frame() {
     // state
     HorizonGameState st = HORIZON_STATE_UNKNOWN;
     if (!ok) st = HORIZON_STATE_LOADING;
-    else if (s.editor && !s.editorIsReplay) st = HORIZON_STATE_EDITOR;
+    else if (mapEditor(s)) st = HORIZON_STATE_EDITOR;
     else if (s.editor && s.editorIsReplay) st = HORIZON_STATE_REPLAY;
     else if (s.race && s.raceKind == kNet) st = HORIZON_STATE_NET_RACE;
     else if (s.race && s.raceKind == kSolo) st = s.infoState == 2 ? HORIZON_STATE_END_RACE : HORIZON_STATE_SOLO_RACE;
@@ -424,6 +437,15 @@ void LegacyAdapter::frame() {
     else if (s.clipViewer) st = HORIZON_STATE_REPLAY; // ESWC: a replay watched from the menu
     else st = HORIZON_STATE_LOADING;
     state_ = st;
+    if (ok && hadSnap && s.editor != prev.editor) {
+        uint32_t eid = 0;
+        const bool known = s.editor && classIdOf(s.editor, &eid);
+        auto n = known ? classNames_.find(eid) : classNames_.end();
+        if (!s.editor) HLOG("game: editor slot empty");
+        else
+            HLOG("game: editor slot holds %s (id %08x)%s", n != classNames_.end() ? n->second.c_str() : "?", eid,
+                 mapEditor(s) ? "" : s.editorIsReplay ? ": replay editor" : ": puzzle editor under a race, counted as the race");
+    }
     if (ok && s.clipViewer != prev.clipViewer && hadSnap)
         HLOG("game: %s", s.clipViewer ? "a replay plays (the app's clip viewer)" : "the replay's clip viewer is gone");
     char line[160];
