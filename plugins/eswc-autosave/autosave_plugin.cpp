@@ -1,4 +1,5 @@
-// ESWC Autosave 2.0 - a Horizon Host plugin for TrackMania Nations ESWC (unofficial 1.80, exe 0.1.7.9).
+// Autosave 2.1 - a Horizon Host plugin for TrackMania Nations ESWC (unofficial 1.80, exe 0.1.7.9), and
+// since 2.1 TrackMania Sunrise and TrackMania Original (solo only, see below).
 //
 // What the game does when the player picks "Save previous replay" in the in-game menu
 // (CGameCtnApp::SaveReplay, FUN_0070b2c0): it builds the default name "<challenge name>(mm'ss''cc)",
@@ -17,6 +18,15 @@
 // TMX copy: after a LAN/online save, a worker thread re-reads the file and, if it holds more than one
 // ghost, writes "<name> TMX.Replay.Gbx" with only the local player's ghost (tmxcopy.cpp). The worker
 // never touches the host: its result is queued to the game thread (run_on_game_thread).
+//
+// TrackMania Sunrise (Win10 repack) and TrackMania Original (Online Patch v2 exe), since 2.1: solo only.
+// Same steps with the Sunrise-engine addresses (LegacyGame below): after a FINISH of the local player in a
+// solo race that is a new best (Mode=best), the solo RACE_END (end_screen 1) saves the game's race replay
+// (CConstructionGame.ReplayRecord, app+0x130) into "My Replays" (app+0x1d8) as "<map>(mm'ss''cc).Replay.Gbx".
+// Network races, online and LAN are never saved there. Addresses: the standalone eswc-autosave 1.2
+// (src/games.h, src/legacy.cpp) and trackmania-internals games/tm-sunrise/replay-save.md; each checked
+// two ways (same calls in the game's SaveReplayRecord as ESWC's verified code, plus reflection offsets,
+// strings, vtable slots). Static, not run in game yet.
 #define HORIZON_PLUGIN_BUILD
 #include <windows.h>
 #include <errno.h>
@@ -34,10 +44,49 @@
 
 namespace {
 
-constexpr char kVersion[] = "2.0.0";
+constexpr char kVersion[] = "2.1.0";
 constexpr char kId[] = "eswc-autosave";
 constexpr char kExeSha256[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
 constexpr uintptr_t kPreferredBase = 0x00400000;
+
+// ---------------------------------------------------------------- Sunrise / Original ---------
+// Link addresses (image base 0x400000) of the calls CTrackMania::SaveReplayRecord makes after its dialog.
+struct LegacyGame {
+    uint32_t game; // HORIZON_GAME_*
+    const char* name;
+    const char* sha256;
+    uint32_t timestamp;
+    uintptr_t strSet;         // CFastStringInt::SetString(const SStringParamInt&), ret 4
+    uintptr_t strEmpty;       // CFastStringInt::Empty()
+    uintptr_t filterFileName; // cdecl (CFastStringInt& dst, const CFastStringInt& src, 0, 0)
+    uintptr_t fileExists;     // cdecl int (const CFastStringInt& name, CSystemFids* folder)
+    uintptr_t bestGhostTime;  // CGameCtnReplayRecord::GetBestGhostRaceTime(int&, int&), ret 8
+    uintptr_t bestStuntScore; // CGameCtnReplayRecord::GetBestGhostStuntsScore()
+    uintptr_t archiveCtor, archiveSave, archiveDtor; // CSystemArchiveNod; Save(name, nod, folder, 10, 7, 1, 1) ret 0x1c
+    uintptr_t unbindFid;       // CSystemEngine::UnbindFid(CMwNod*), ret 4
+    uintptr_t scanReplays;     // CTrackMania::ScanDiskForReplays()
+    uintptr_t emptyWideString; // wchar_t* of every empty CFastStringInt
+    uintptr_t mainEngine;      // CMwEngineMain*; ->+0x28 ->+0x2c = CSystemEngine*
+};
+const LegacyGame kSunrise = {HORIZON_GAME_SUNRISE, "TmSunrise (Win10 repack)",
+                             "e59dfc7eaa5314e85b2b0df6f40ef7ba01a23bd5a9525f84407f5dff301df4fe", 0x5cc8f0cf,
+                             0x0041a2a0, 0x00401280, 0x00480ae0, 0x0044e860, 0x007abd30, 0x007abe10,
+                             0x0041e220, 0x00421e60, 0x0041e330, 0x00414e00, 0x00821f30, 0x00abc0e8, 0x00b8b494};
+const LegacyGame kOriginal = {HORIZON_GAME_ORIGINAL, "TMOriginal (Online Patch v2)",
+                              "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e", 0x5d337477,
+                              0x004055b0, 0x00401280, 0x00480c10, 0x0044ea70, 0x007aaab0, 0x007aab90,
+                              0x0041e2b0, 0x00421ee0, 0x0041e3b0, 0x00414e60, 0x00820410, 0x00ab80e8, 0x00b866f4};
+// Members, the same in Sunrise and Original (reflection tables and the save code agree).
+constexpr size_t kLegRaceApp = 0x3c;            // CTrackManiaRace.Game
+constexpr size_t kLegAppReplay = 0x130;         // CConstructionGame.ReplayRecord (the run just recorded)
+constexpr size_t kLegAppMyReplays = 0x1d8;      // CSystemFids* "My Replays"
+constexpr size_t kLegReplayChallenge = 0x58;    // CConstructionReplayRecord.Challenge
+constexpr size_t kLegReplayRecording = 0xac;    // != 0 while recording (StopRecord clears it)
+constexpr size_t kLegChallengePlayMode = 0x11c; // 5 = stunts
+constexpr size_t kLegChallengeName = 0x128;     // CFastStringInt {len, ptr}
+constexpr size_t kLegFidsGetFullPath = 0xac;    // CSystemFids vtable slot (byte offset)
+
+const LegacyGame* g_legacy = nullptr; // set on Sunrise / Original
 
 // Functions (link addresses, rebased with the exe's base).
 constexpr uintptr_t kStrSet = 0x00405f40;         // void CFastStringInt::SetString(const SStringParamInt&)  ret 4
@@ -345,6 +394,98 @@ void saveReplaySeh(void* app, void* replay, bool solo, bool scanReplays, SaveRes
     }
 }
 
+// ---------------------------------------------------------------- Sunrise / Original save --
+// The same post-dialog calls with the Sunrise-engine addresses (g_legacy). Solo only: replay is the game's
+// finished race replay (app+0x130); it must no longer be recording. The replay object is only read.
+void legInitString(FastStringInt& s) {
+    s.len = 0;
+    s.ptr = *reinterpret_cast<wchar_t**>(rebase(g_legacy->emptyWideString));
+}
+
+void legEmpty(FastStringInt& s) { fn<FnStrEmpty>(g_legacy->strEmpty)(&s, nullptr); }
+
+void saveLegacySeh(void* app, void* replay, bool scanReplays, SaveResult* r) {
+    __try {
+        r->ok = -1;
+        r->fromFile = false;
+        if (!replay) { r->why = "no race replay"; return; }
+        if (field<int>(replay, kLegReplayRecording) != 0) { r->why = "replay is still recording"; return; }
+        void* challenge = field<void*>(replay, kLegReplayChallenge);
+        if (!challenge) { r->why = "replay has no map"; return; }
+        void* folder = field<void*>(app, kLegAppMyReplays);
+        if (!folder) { r->why = "no My Replays folder"; return; }
+
+        // Default name exactly as the game builds it: map name + "(mm'ss''cc)" (stunts: "(score)").
+        wchar_t base[300];
+        copyOut(field<FastStringInt>(challenge, kLegChallengeName), base, 200);
+        wchar_t suffix[40];
+        if (field<int>(challenge, kLegChallengePlayMode) == 5) {
+            const int score = fn<FnBestScore>(g_legacy->bestStuntScore)(replay, nullptr);
+            swprintf_s(suffix, L"(%d)", score);
+            r->time = score;
+        } else {
+            int time = -1, other = 0;
+            fn<FnBestTime>(g_legacy->bestGhostTime)(replay, nullptr, &time, &other);
+            r->time = time;
+            int t = time < 0 ? -time : time;
+            const int mm = t / 60000;
+            const unsigned ss = static_cast<unsigned>(t - mm * 60000) / 1000;
+            const unsigned cc = static_cast<unsigned>(t - static_cast<int>(ss) * 1000 - mm * 60000) / 10;
+            swprintf_s(suffix, L"(%.2d'%.2d''%.2d)", mm, ss, cc);
+        }
+
+        FastStringInt raw, filtered;
+        legInitString(raw);
+        legInitString(filtered);
+        const FnExists exists = fn<FnExists>(g_legacy->fileExists);
+        bool found = false;
+        wchar_t stem[260];
+        swprintf_s(stem, L"%s%s", base, suffix);
+        for (int attempt = 1; attempt <= 20 && !found; attempt++) {
+            wchar_t full[360];
+            if (attempt == 1) swprintf_s(full, L"%s.Replay.Gbx", stem);
+            else swprintf_s(full, L"%s (%d).Replay.Gbx", stem, attempt);
+            StringParamInt p = {full, static_cast<uint32_t>(wcslen(full)), 0};
+            fn<FnStrSet>(g_legacy->strSet)(&raw, nullptr, &p);
+            fn<FnFilter>(g_legacy->filterFileName)(&filtered, &raw, 0, 0);
+            if (!exists(&filtered, folder)) found = true; // the game would ask "Overwrite?"; we never overwrite
+        }
+        copyOut(filtered, r->name, 300);
+        if (!found) {
+            legEmpty(raw);
+            legEmpty(filtered);
+            r->why = "file exists (20 names tried)";
+            return;
+        }
+
+        alignas(16) static unsigned char archive[0x400];
+        memset(archive, 0, sizeof(archive));
+        fn<FnArchCtor>(g_legacy->archiveCtor)(archive, nullptr);
+        const int saved = fn<FnArchSave>(g_legacy->archiveSave)(archive, nullptr, &filtered, replay, folder, 10, 7, 1, 1);
+        fn<FnArchDtor>(g_legacy->archiveDtor)(archive, nullptr);
+
+        void* engineMain = *reinterpret_cast<void**>(rebase(g_legacy->mainEngine));
+        void* systemEngine = field<void*>(field<void*>(engineMain, 0x28), 0x2c);
+        fn<FnUnbind>(g_legacy->unbindFid)(systemEngine, nullptr, replay);
+
+        FastStringInt path;
+        legInitString(path);
+        void** fvt = field<void**>(folder, 0);
+        reinterpret_cast<FnGetFullPath>(fvt[kLegFidsGetFullPath / 4])(folder, nullptr, &path);
+        copyOut(path, r->folder, 300);
+        legEmpty(path);
+        legEmpty(raw);
+        legEmpty(filtered);
+
+        if (saved && scanReplays) fn<FnScan>(g_legacy->scanReplays)(app, nullptr); // as the game does after a save
+        r->ok = saved ? 1 : 0;
+        r->why = saved ? "" : "CSystemArchiveNod save returned 0";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        r->ok = 0;
+        r->why = "exception inside the game's save code";
+    }
+}
+
 // Reads the header the game wrote (the XML chunk) and reports what matters for validation.
 void checkHeader(const wchar_t* path, char* out, size_t cap) {
     out[0] = 0;
@@ -467,7 +608,8 @@ void saveNow(void* replay, bool solo, const char* reason, int localTime) {
     g_saving = true;
     SaveResult r = {};
     const DWORD t0 = GetTickCount();
-    saveReplaySeh(app, replay, solo, g_cfg.scanReplays, &r);
+    if (g_legacy) saveLegacySeh(app, replay, g_cfg.scanReplays, &r); // Sunrise / Original: solo only
+    else saveReplaySeh(app, replay, solo, g_cfg.scanReplays, &r);
     const DWORD ms = GetTickCount() - t0;
     g_saving = false;
     char name[600], folder[600];
@@ -489,7 +631,7 @@ void saveNow(void* replay, bool solo, const char* reason, int localTime) {
         char fullUtf8[1300];
         toUtf8(full, fullUtf8, sizeof(fullUtf8));
         g_host->post_replay_saved(g_host->plugin, fullUtf8);
-        if (!solo && g_cfg.tmxCopy) startTmxCopy(full, localTime); // network race: maybe several ghosts
+        if (!solo && !g_legacy && g_cfg.tmxCopy) startTmxCopy(full, localTime); // network race: maybe several ghosts
     } else if (r.ok == 0) {
         LOGE("[%s] ERROR (%s): %s  [%s]", mode, reason, r.why, name);
         setLast("Failed: %s", r.why);
@@ -504,7 +646,19 @@ void saveNowManual() {
     void* app = g_host->engine_pointer(HORIZON_ENGINE_APP);
     void* replay = nullptr;
     bool solo = false;
-    if (app) {
+    if (app && g_legacy) {
+        // Sunrise / Original: the race replay, once the game has stopped recording it
+        if (g_host->is_online && g_host->is_online()) {
+            setLast("Skipped: online");
+            return;
+        }
+        __try {
+            replay = field<void*>(app, kLegAppReplay);
+            solo = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            replay = nullptr;
+        }
+    } else if (app) {
         __try {
             replay = field<void*>(app, kAppPrevReplay);
             if (!replay) {
@@ -532,11 +686,11 @@ static const HorizonPluginInfo kInfo = {
     kId,
     "Autosave & Login-Fix",
     kVersion,
-    HORIZON_GAME_ESWC,
+    HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL,
     HORIZON_CAP_MENU | HORIZON_CAP_GAME_EVENTS,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Saves your replay after each finish. The ESWC login fix (error 12157) is part of Horizon.",
+    "Saves your replay after a finish (Sunrise, Original: solo bests). The login fix for ESWC and Original is part of Horizon.",
     HORIZON_ABI_MINOR,
 };
 
@@ -545,13 +699,26 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) { 
 HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* host) {
     if (!host || host->abi != HORIZON_ABI) return 1;
     g_host = host;
+    g_legacy = nullptr;
     const HorizonGameInfo* gi = host->game_info ? host->game_info() : nullptr;
-    if (!gi || gi->game != HORIZON_GAME_ESWC || !gi->exe_sha256 || _stricmp(gi->exe_sha256, kExeSha256) != 0) {
-        LOGW("refusing to load: not TmNationsESWC 1.80 (sha256 %s)", gi && gi->exe_sha256 ? gi->exe_sha256 : "?");
+    const char* sha = gi && gi->exe_sha256 ? gi->exe_sha256 : "";
+    const char* gameName = "TmNationsESWC 1.80";
+    if (gi && gi->game == HORIZON_GAME_ESWC && _stricmp(sha, kExeSha256) == 0) {
+        // ESWC: as in 2.0
+    } else if (gi && (gi->game == HORIZON_GAME_SUNRISE || gi->game == HORIZON_GAME_ORIGINAL)) {
+        const LegacyGame* lg = gi->game == HORIZON_GAME_SUNRISE ? &kSunrise : &kOriginal;
+        if (_stricmp(sha, lg->sha256) != 0 || gi->exe_timestamp != lg->timestamp) {
+            LOGW("refusing to load: not the supported %s exe (sha256 %s)", lg->name, *sha ? sha : "?");
+            return 2;
+        }
+        g_legacy = lg;
+        gameName = lg->name;
+    } else {
+        LOGW("refusing to load: not a supported exe (sha256 %s)", *sha ? sha : "?");
         return 2;
     }
     g_base = gi->exe_base ? gi->exe_base : kPreferredBase;
-    LOGI("---- eswc-autosave %s start, TmNationsESWC 1.80 recognised, base %08X ----", kVersion, (unsigned)g_base);
+    LOGI("---- eswc-autosave %s start, %s recognised, base %08X ----", kVersion, gameName, (unsigned)g_base);
     g_passive = standaloneFound(gi);
     if (g_passive) {
         LOGW("standalone ESWC Autosave found (eswc_autosave.dll): module paused, nothing hooked or subscribed");
@@ -567,7 +734,10 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     if (!g_hotkey) LOGW("could not register the save hotkey");
     host->subscribe(host->plugin, HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) | HORIZON_EVENT_BIT(HORIZON_EVENT_RACE_END) |
                                       HORIZON_EVENT_BIT(HORIZON_EVENT_RACE_START) | HORIZON_EVENT_BIT(HORIZON_EVENT_MAP_LOADED));
-    LOGI("ready: saving after every %s of the local player", g_cfg.bestOnly ? "new best finish" : "finish");
+    if (g_legacy)
+        LOGI("ready: saving the solo race replay after every %s of the local player; LAN/online races are not saved",
+             g_cfg.bestOnly ? "new best finish" : "finish");
+    else LOGI("ready: saving after every %s of the local player", g_cfg.bestOnly ? "new best finish" : "finish");
     return 0;
 }
 
@@ -592,6 +762,11 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
         break;
     case HORIZON_EVENT_FINISH: {
         if (!e->is_local_player) break;
+        if (g_legacy && (e->play_mode != HORIZON_MODE_SOLO || e->is_online)) {
+            // Sunrise / Original: solo races only, never online or LAN
+            g_pending = false;
+            break;
+        }
         const bool isPb = e->is_pb != 0;
         LOGI("finish: local player, time=%d%s", e->time_ms, isPb ? "  NEW BEST" : "");
         if (g_cfg.bestOnly && !isPb) {
@@ -606,6 +781,31 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
     case HORIZON_EVENT_RACE_END: {
         if (!g_pending) break; // not after a finish of ours
         g_pending = false;
+        if (g_legacy) {
+            // Sunrise / Original: the solo race end (end_screen 1). The host passes no replay there; it is the
+            // game's ReplayRecord (app+0x130), the app taken from the race (CTrackManiaRace.Game) and checked
+            // against the host's app pointer.
+            if (e->end_screen == 0 || e->is_online) {
+                LOGI("[Solo] race end is not a solo end-race screen, not saving");
+                break;
+            }
+            void* app = g_host->engine_pointer(HORIZON_ENGINE_APP);
+            void* replay = e->engine_replay;
+            __try {
+                if (e->engine_race && field<void*>(e->engine_race, kLegRaceApp) != app) app = nullptr;
+                if (app && !replay) replay = field<void*>(app, kLegAppReplay);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                app = nullptr;
+            }
+            if (!app) {
+                LOGW("[Solo] race end: race and game app do not match, not saving");
+                setLast("Skipped: game not ready");
+                break;
+            }
+            LOGI("[Solo] race end after the finish (time=%d), saving the race replay", g_pendingTime);
+            saveNow(replay, true, "finish", g_pendingTime);
+            break;
+        }
         const bool solo = e->end_screen != 0;
         LOGI("[%s] race end after the finish (time=%d), saving %s", solo ? "Solo" : "LAN", g_pendingTime,
              solo ? "the race replay" : "the previous replay");
@@ -632,8 +832,12 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     g_cfg.bestOnly = mode == 0;
     if (ImGui::Checkbox("Refresh replay list", &g_cfg.scanReplays)) changed = true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan the game's replay list after each save.");
-    if (ImGui::Checkbox("TMX copy", &g_cfg.tmxCopy)) changed = true;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("After a LAN/online save, also write a copy with only your ghost.");
+    if (!g_legacy) {
+        if (ImGui::Checkbox("TMX copy", &g_cfg.tmxCopy)) changed = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("After a LAN/online save, also write a copy with only your ghost.");
+    } else {
+        ImGui::TextDisabled("Solo races only.");
+    }
     if (changed) saveConfig();
 
     ImGui::Separator();

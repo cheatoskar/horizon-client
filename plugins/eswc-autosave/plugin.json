@@ -1,14 +1,16 @@
 {
   "id": "eswc-autosave",
   "name": "Autosave & Login-Fix",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "dll": "eswc-autosave.dll",
   "games": [
-    "eswc"
+    "eswc",
+    "sunrise",
+    "original"
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Saves your replay after each finish. The ESWC login fix (error 12157) is part of Horizon.",
+  "description": "Saves your replay after a finish (Sunrise, Original: solo bests). The login fix for ESWC and Original is part of Horizon.",
   "author": "cheatoskar",
   "icon": "icon.png"
 }
