@@ -22,9 +22,9 @@ enum class State : uint32_t {
 enum class Result : int32_t {
     Ok = 0,
     NotSupported = -1,   // unknown exe (TM Original: only the Online Patch v2 exe is known)
-    WrongState = -2,     // e.g. PlayMapFile outside the main menu
+    WrongState = -2,     // e.g. PlayMapFile outside the main menu, or the menu is handling a button press
     FileError = -3,      // map file missing or copy into the game's Tracks folder failed
-    NotFound = -4,       // the game did not list the map after rescanning its folders
+    NotFound = -4,       // after the rescan no challenge info (or more than one) has the copy's file name
     GameError = -5,      // an exception inside a game call (logged), nothing else changed if possible
 };
 
@@ -52,10 +52,11 @@ bool isOnline();
 // unknown exe. Read only.
 void* appObject();
 
-// Copies the map into GameData\Tracks\Challenges\Downloaded\_Horizon\ (unique name), makes the game rescan its
-// track folders (once before the copy, so other new files there do not count), picks the new entry and sets the
-// main menu to "Play Track > Solo > OK" with it.
-// Main menu only. The race starts within the next frames; watch state() / the host's MapLoaded event.
+// Copies the map into GameData\Tracks\Challenges\Downloaded\_Horizon\ under a unique name, makes the game rescan
+// its track folders once, finds the challenge info whose file is the copy (gamectl_pick.h) and does what the
+// game's track browser does when a map is activated: SelectedChallengeInfo = info, ChallengeType 3 (solo), menu
+// result 1 (see the comment above kSpecs in gamectl.cpp). Any menu page; not while a race, the editor or a network
+// game is loaded. The race starts within the next frames; watch state() / the host's MapLoaded event.
 Result playMapFile(const wchar_t* path);
 
 // Presses the solo race's own quit button (CTrackManiaRace::ButtonQuitOnClick). SoloRace only.
