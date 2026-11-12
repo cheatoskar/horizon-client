@@ -59,6 +59,23 @@ copy /y build\test\abi12\abi12.dll %T%\horizon\plugins\abi12\ >nul
 > %T%\horizon\plugins\abi12\plugin.json echo {"id": "abi12", "name": "ABI 1.2 test", "version": "1.0.0", "dll": "abi12.dll", "online": "online-ok", "abi": 1, "startup_only": true}
 build\test\host_test.exe host "%CD%\%T%" runtime-load "%CD%\screens\host-test-late.png" || set FAIL=1
 
+echo === modules that throw while drawing: only they stop, the menu and the game input stay usable
+set "T=build\test\run-crash"
+if exist %T% rmdir /s /q %T%
+mkdir %T%\horizon\plugins\sample
+copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
+copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
+for %%M in (menu overlay) do (
+  mkdir %T%\horizon\plugins\crash%%M
+  copy /y build\test\crash%%M\crash%%M.dll %T%\horizon\plugins\crash%%M\ >nul
+  > %T%\horizon\plugins\crash%%M\plugin.json echo {"id": "crash%%M", "name": "Crash %%M", "version": "1.0.0", "dll": "crash%%M.dll", "games": ["eswc", "sunrise", "original", "tmnf", "tmuf"], "online": "online-ok", "abi": 1}
+)
+build\test\host_test.exe host "%CD%\%T%" expect-plugin crash page=plugin:crashmenu || set FAIL=1
+
 echo === safe mode: no plugins
 set "T=build\test\run-safe"
 if exist %T% rmdir /s /q %T%

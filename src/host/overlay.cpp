@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <stdexcept>
 
 #include "common/hotkeys.h"
 #include "common/util.h"
@@ -19,6 +20,7 @@
 #include "host/plugins.h"
 #include "host/ui/ui.h"
 #include "imgui.h"
+#include "imgui_internal.h" // ErrorRecoveryStoreState / TryToRecoverState after a plugin threw
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
 
@@ -28,6 +30,8 @@ namespace horizon {
 namespace {
 
 ImGuiContext* g_ctx = nullptr;
+bool g_uiOff = false;      // the host's own frame threw three times: no Horizon UI, no input taken
+bool g_testFault = false;  // tests\host_test.cpp: the next frame throws in host code
 bool g_backends = false;   // ImGui's DX9/Win32 backends set up on the game's device
 bool g_lost = false;       // between Reset before/after
 HWND g_hwnd = nullptr;
@@ -157,7 +161,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         hostConfigSave(true);
     }
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) hotkeysKeyMessage(msg, w, l);
-    if (g_backends && g_ctx && !captureActive()) {
+    if (g_backends && g_ctx && !g_uiOff && !captureActive()) {
         ImGui::SetCurrentContext(g_ctx);
         bool take = false;
         if (g_menu && msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(w) & MK_CONTROL)) {
@@ -481,6 +485,7 @@ bool layoutAllowed(std::string* why) {
 
 void setLayoutMode(bool on, const char* why) {
     if (on == g_layout) return;
+    if (on && g_uiOff) return;
     std::string no;
     if (on && !layoutAllowed(&no)) {
         HorizonToast t = {};
@@ -536,6 +541,7 @@ bool menuOpen() { return g_menu && !captureActive(); }
 
 void setMenuOpen(bool open, const char* why) {
     if (open == g_menu) return;
+    if (open && g_uiOff) return; // no frames are drawn any more: an open menu would only hold the input
     g_menu = open;
     HLOG("menu: %s (%s)", open ? "open" : "closed", why ? why : "");
     if (!open) {
@@ -579,6 +585,7 @@ void overlayCreateContext() {
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.ConfigErrorRecoveryEnableAssert = false;
+    io.ConfigErrorRecoveryEnableTooltip = false; // no ImGui debug tooltip in the game after a plugin threw
     g_barEnabled = hostSettingInt("bar", profile().valid ? (profile().bar ? 1 : 0) : 1) != 0;
     const std::string key = profile().valid && !profile().menuKey.empty() ? profile().menuKey : std::string("Insert");
     g_menuHotkey = hotkeyAdd("host", "Horizon", "menu", "Open menu", key.c_str(), &menuHotkey, nullptr);
@@ -668,6 +675,11 @@ void overlayFrame(void* device) {
     const bool pluginCaptureNow = (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0;
     toastsStep(captureActive() || pluginCaptureNow);
     if (!g_backends || g_lost || !g_ctx) return;
+    if (g_uiOff) {
+        // the UI is off after repeated errors; game work and plugin events above keep running
+        if (game().usesDirectInputBlock()) dinputSetBlocked(false);
+        return;
+    }
     ImGui::SetCurrentContext(g_ctx);
     // modules switched on in the menu last frame: loaded now, outside the ImGui frame
     pluginsLoadPending();
@@ -726,6 +738,13 @@ void overlayFrame(void* device) {
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = g_menu || g_layout || g_barShown || g_pluginWinShown;
     pluginsDrawOverlays();
+    if (g_testFault) {
+        // tests\host_test.cpp: host code throws inside an open window, as a broken host draw would
+        g_testFault = false;
+        ImGui::Begin("##hz-test-fault");
+        ImGui::PushID("fault");
+        throw std::runtime_error("test fault");
+    }
     panelsBeginFrame();
     PanelsFrame pf;
     pf.layout = g_layout;
@@ -753,14 +772,83 @@ void overlayFrame(void* device) {
     pluginsSaveSettings(false);
 }
 
+namespace {
+bool sehRecover(const ImGuiErrorRecoveryState* s) {
+    __try {
+        ImGui::ErrorRecoveryTryToRecoverState(s);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool sehEndFrame() {
+    __try {
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        if (g.WithinFrameScope) {
+            ImGui::ErrorRecoveryTryToRecoverState(&g.StackSizesInNewFrame);
+            ImGui::EndFrame(); // nothing rendered this frame; the next NewFrame starts clean
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool imguiGuardedCall(bool (*call)(void*), void* ctx) {
+    ImGuiContext* c = ImGui::GetCurrentContext();
+    if (!c || !c->WithinFrameScope) return call(ctx);
+    ImGuiErrorRecoveryState before;
+    ImGui::ErrorRecoveryStoreState(&before);
+    if (call(ctx)) return true;
+    if (!sehRecover(&before)) HERR("overlay: ImGui state not repaired after a plugin error");
+    return false;
+}
+
+void overlayAfterFault(bool giveUp) {
+    HERR("overlay: error while drawing: menu closed, input back to the game%s",
+         giveUp ? "; Horizon UI off until the next start" : "");
+    // first the input: the game must never stay frozen behind a menu that is no longer drawn
+    g_menu = false;
+    g_layout = false;
+    g_barShown = g_panelsShown = g_pluginWinShown = false;
+    for (bool& s : g_swallowed) s = false;
+    dinputSetBlocked(false);
+    if (giveUp) g_uiOff = true;
+    if (g_ctx) {
+        ImGui::SetCurrentContext(g_ctx);
+        if (!sehEndFrame()) {
+            HERR("overlay: ImGui frame not repaired: Horizon UI off until the next start");
+            g_uiOff = true;
+        }
+    }
+    HorizonToast t = {};
+    t.size = sizeof(t);
+    t.kind = HORIZON_TOAST_ERROR;
+    t.title = g_uiOff ? "Horizon menu off" : "Menu closed";
+    t.text = g_uiOff ? "After an error. Back after a restart." : "After an error. Details in the log.";
+    toastsPush("Horizon", t);
+}
+
 } // namespace horizon
+
+// Test program only (tests\host_test.cpp). action 1: the next frame throws in host code; 2: open the menu;
+// 0: state. Returns bits 1 = menu open, 2 = layout mode, 4 = game input held back, 8 = Horizon UI off.
+// -1 in a game.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestOverlayFault(int action) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test) return -1;
+    if (action == 1) g_testFault = true;
+    if (action == 2) setMenuOpen(true, "test program");
+    return (g_menu ? 1 : 0) | (g_layout ? 2 : 0) | (dinputBlocked() ? 4 : 0) | (g_uiOff ? 8 : 0);
+}
 
 // ---- for mods that are not plugins (TMVS): stable C exports, see docs/plugin-abi.md -------------
 // Bits: 1 = menu open, 2 = bar visible, 4 = a detached panel visible, 8 = layout mode ("Edit layout");
 // 0 = nothing of Horizon on screen.
 extern "C" __declspec(dllexport) uint32_t __cdecl HorizonHost_GetUiState(void) {
     using namespace horizon;
-    if (captureActive()) return 0;
+    if (captureActive() || g_uiOff) return 0;
     return (g_menu ? 1u : 0u) | (g_barShown ? 2u : 0u) | (g_panelsShown ? 4u : 0u) | (g_layout ? 8u : 0u);
 }
 

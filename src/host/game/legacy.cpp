@@ -77,6 +77,10 @@ struct Offsets {
 void* g_sunRace = nullptr;
 void* g_sunInfo = nullptr;
 int g_sunCheckpoints = 0;
+// Original calls OnCheckpoint ~50 times within ~0.13 s for one checkpoint (log 2026-11-12, RaceA1):
+// calls closer than this to the previous one belong to the same checkpoint.
+constexpr ULONGLONG kSunCheckpointBurstMs = 300;
+ULONGLONG g_sunCheckpointTick = 0;
 
 struct Snapshot {
     void* app = nullptr;
@@ -518,6 +522,7 @@ void LegacyAdapter::onSunStart(void* race, void* player) {
     g_sunRace = race;
     g_sunInfo = info;
     g_sunCheckpoints = 0;
+    g_sunCheckpointTick = 0;
     HorizonEvent e = {};
     e.type = HORIZON_EVENT_RACE_START;
     const int kind = raceKind(race);
@@ -529,8 +534,13 @@ void LegacyAdapter::onSunStart(void* race, void* player) {
 void LegacyAdapter::onSunCheckpoint(void* race, void* player) {
     void* info = nullptr;
     if (!player || !rd(player, kEswcPlayerInfo, &info) || !info || localInfo(race) != info) return;
+    const bool sameRace = g_sunRace == race;
     g_sunRace = race;
     g_sunInfo = info;
+    const ULONGLONG nowTick = GetTickCount64();
+    const bool burst = sameRace && g_sunCheckpointTick && nowTick - g_sunCheckpointTick < kSunCheckpointBurstMs;
+    g_sunCheckpointTick = nowTick;
+    if (burst) return; // the same checkpoint again: one event per checkpoint
     // race time at the checkpoint: CurrentTime - RaceStartTime (not verified in game yet; -1 if implausible)
     int32_t now = 0, start = 0, t = -1;
     if (o_.piCurTime >= 0 && o_.piStartTime >= 0 && rd(info, static_cast<size_t>(o_.piCurTime), &now) &&

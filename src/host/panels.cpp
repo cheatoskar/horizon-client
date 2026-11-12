@@ -97,13 +97,23 @@ bool validKey(const char* k) {
     return true;
 }
 
-bool sehDraw(HorizonPanelDrawFn fn, void* user) {
+struct PanelCall {
+    HorizonPanelDrawFn fn;
+    void* user;
+};
+bool sehPanel(void* c) {
+    PanelCall* pc = static_cast<PanelCall*>(c);
     __try {
-        fn(user);
+        pc->fn(pc->user);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+// a throw closes what the panel left open on the ImGui stacks, so the host's window still ends cleanly
+bool sehDraw(HorizonPanelDrawFn fn, void* user) {
+    PanelCall c{fn, user};
+    return imguiGuardedCall(&sehPanel, &c);
 }
 
 bool usable(const HostPanel& q) { return q.plugin->running && q.plugin->enabled && !pluginGated(q.plugin); }

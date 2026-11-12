@@ -116,6 +116,27 @@ void crashed(Plugin* p, const char* where) {
     p->status = ui::PluginStatus::Failed;
     p->statusText = std::string("crashed in ") + where + ": switched off until the next start";
     logLine(HORIZON_LOG_ERROR, p->id.c_str(), "crashed in %s: switched off until the next start", where);
+    // its set_host_flag bits (input capture, photo) end with it: hostFlagsAll only reads running plugins
+    const std::string title = (p->name.empty() ? p->id : p->name) + " stopped after an error";
+    HorizonToast t = {};
+    t.size = sizeof(t);
+    t.kind = HORIZON_TOAST_ERROR;
+    t.title = title.c_str();
+    t.text = "Details in the log.";
+    toastsPush("Horizon", t);
+}
+
+struct DrawCall {
+    void(HORIZON_CALL* fn)(void);
+};
+bool guardedDrawCall(void* c) { return sehVoid(static_cast<DrawCall*>(c)->fn); }
+
+// DrawMenu/DrawOverlay: a throw switches only this plugin off; the ImGui stacks it left open are closed.
+bool drawPlugin(Plugin* p, void(HORIZON_CALL* fn)(void), const char* where) {
+    DrawCall c{fn};
+    if (imguiGuardedCall(&guardedDrawCall, &c)) return true;
+    crashed(p, where);
+    return false;
 }
 
 // ---------------------------------------------------------------- the API table
@@ -781,14 +802,14 @@ void pluginDrawMenu(const std::string& id) {
     Plugin* p = findPlugin(id);
     if (!p) return;
     if (!p->running || !p->drawMenu) return;
-    if (!sehVoid(p->drawMenu)) crashed(p, "DrawMenu");
+    drawPlugin(p, p->drawMenu, "DrawMenu");
 }
 
 void pluginsDrawOverlays() {
     for (auto& up : g_plugins) {
         Plugin* p = up.get();
         if (!p->running || !p->enabled || !p->drawOverlay || pluginGated(p)) continue;
-        if (!sehVoid(p->drawOverlay)) crashed(p, "DrawOverlay");
+        drawPlugin(p, p->drawOverlay, "DrawOverlay");
     }
 }
 

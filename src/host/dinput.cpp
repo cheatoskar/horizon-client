@@ -164,6 +164,8 @@ void dinputSetBlocked(bool blocked) {
     if (InterlockedExchange(&g_blocked, v) != v) HLOG("input: game keyboard/mouse %s", blocked ? "held back (menu open)" : "back to the game");
 }
 
+bool dinputBlocked() { return g_blocked != 0; }
+
 void dinputHoldUntilReleased(int vk) {
     const UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
     if (!sc) return;

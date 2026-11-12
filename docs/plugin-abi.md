@@ -140,6 +140,8 @@ bool ok = horizon_imgui_attach(host); // version check, host allocator, host con
 
 The allocator matters: memory ImGui allocates inside my DLL is freed by the host and the other way round. Without the host's allocator that crashes. If attach returns false I log it and still work without a page (return early in `DrawMenu`). `host->style()` gives the TM Horizon colours and fonts (fonts are NULL until the first frame has been drawn).
 
+If my `DrawMenu`, `DrawOverlay` or a panel draw function throws (C++ exception or access violation), the host switches only my plugin off until the next start, closes the ImGui windows, child windows, IDs, style vars and colours I left open, logs "crashed in DrawMenu" (or wherever it was) and shows the toast "<name> stopped after an error". The menu and the other plugins keep working, and my `set_host_flag` bits end with me.
+
 Draw in `DrawMenu` with normal widgets. For an overlay I use `ImGui::GetForegroundDrawList()` or my own borderless window.
 
 ### Icons

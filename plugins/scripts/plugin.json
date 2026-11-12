@@ -14,5 +14,6 @@
   "abi": 1,
   "description": "Runs scripts from horizon\\scripts.",
   "author": "cheatoskar",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "ui": { "min_w": 420, "min_h": 300, "pref_w": 760, "pref_h": 560 }
 }

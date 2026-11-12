@@ -19,4 +19,10 @@ copy /y tests\abi12\plugin.json build\test\abi12\plugin.json >nul || exit /b 1
 rem headless menu input test (the dim layer must not take the pointer)
 %CXX% /Fo"build\test\\" /Fd"build\test\t.pdb" /Ithird_party\imgui tests\ui_input_test.cpp src\host\ui\ui_style.cpp src\host\ui\ui_menu.cpp src\host\ui\ui_bar.cpp || exit /b 1
 link /nologo /MACHINE:X86 /OUT:build\test\ui_input_test.exe build\test\ui_input_test.obj build\test\ui_style.obj build\test\ui_menu.obj build\test\ui_bar.obj build\imgui_core.lib user32.lib gdi32.lib kernel32.lib ole32.lib windowscodecs.lib || exit /b 1
+rem crash test: two modules that throw while drawing (tests\crashy, one source, ids crashmenu and crashoverlay)
+for %%M in (menu overlay) do (
+  if not exist build\test\crash%%M mkdir build\test\crash%%M
+  %CXX% /DCRASH_%%M /Fo"build\test\crash%%M\\" /Fd"build\test\crash%%M\p.pdb" tests\crashy\crashy_plugin.cpp || exit /b 1
+  link /nologo /DLL /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:build\test\crash%%M\crash%%M.dll /IMPLIB:build\test\crash%%M\crash%%M.lib build\test\crash%%M\crashy_plugin.obj build\imgui_core.lib user32.lib kernel32.lib gdi32.lib || exit /b 1
+)
 exit /b 0

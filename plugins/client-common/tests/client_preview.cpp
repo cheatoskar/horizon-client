@@ -581,8 +581,10 @@ void tmxBrowser(const std::string& dir) {
     p.cmd("search");
     p.cmd("pump");
     menuShot("tmx-browser-grid", m, a, "plugin:tmx-browser", 24, nullptr);
+    popoutShots("tmx-browser-grid", pv, a, "TrackMania Nations Forever");
     p.cmd("select 2");
     menuShot("tmx-browser-detail", m, a, "plugin:tmx-browser", 6, nullptr);
+    popoutShots("tmx-browser-detail", pv, a, "TrackMania Nations Forever");
     p.cmd("back");
     p.cmd("fav 1");
     p.cmd("fav 4");

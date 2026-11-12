@@ -116,6 +116,13 @@ static bool savePng(IDirect3DDevice9* dev, const wchar_t* path) {
 
 static int g_w = 1600, g_h = 900; // size=WxH: back buffer (UI screens at other resolutions)
 static bool g_runtimeLoad = false; // runtime-load: switch modules on after the device exists
+static bool g_crash = false;       // crash: crashmenu/crashoverlay throw while drawing, then the host's own frame throws
+
+static size_t countOf(const std::string& log, const char* text) {
+    size_t n = 0;
+    for (size_t at = log.find(text); at != std::string::npos; at = log.find(text, at + 1)) n++;
+    return n;
+}
 
 static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
     struct Info {
@@ -243,6 +250,47 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
             check((uiState() & 1u) != 0, "menu back after capture");
         }
     }
+    if (g_crash) {
+        // the plugins: crashmenu threw in DrawMenu (its page is open), crashoverlay in DrawOverlay
+        using FaultFn = int(__cdecl*)(int);
+        using U32Fn = uint32_t(__cdecl*)(void);
+        auto fault = reinterpret_cast<FaultFn>(GetProcAddress(host, "HorizonHost_TestOverlayFault"));
+        auto uiState = reinterpret_cast<U32Fn>(GetProcAddress(host, "HorizonHost_GetUiState"));
+        check(fault && uiState, "crash: test export HorizonHost_TestOverlayFault");
+        if (fault && uiState) {
+            frames(5);
+            std::string l = hostLog(dir);
+            check(has(l, "[crashmenu] crashed in DrawMenu"), "crash: DrawMenu throw caught");
+            check(has(l, "[crashoverlay] crashed in DrawOverlay"), "crash: DrawOverlay access violation caught");
+            check(countOf(l, "stopped after an error") == 2, "crash: one toast per module");
+            check(!has(l, "[sample] crashed"), "crash: the sample keeps running");
+            check(!has(l, "error while drawing") && !has(l, "exception while drawing"), "crash: the host frame never failed");
+            check((fault(0) & 9) == 1 && (uiState() & 1u) != 0, "crash: the menu stays open and usable");
+            check((uiState() & 4u) != 0, "crash: the sample's Clock window is still drawn");
+            // the host's own frame throws inside an open window: menu closed, input back, UI keeps going
+            fault(1);
+            frames(3);
+            l = hostLog(dir);
+            check(countOf(l, "overlay: error while drawing: menu closed, input back to the game") == 1, "host fault: logged once");
+            check(has(l, "toast: Menu closed"), "host fault: toast");
+            check((fault(0) & 15) == 0, "host fault: menu and layout closed, game input not held");
+            fault(2);
+            frames(3);
+            check((fault(0) & 1) == 1 && (uiState() & 1u) != 0, "host fault: the menu opens again");
+            check((uiState() & 4u) != 0, "host fault: widgets drawn again");
+            // three host faults: the UI stays off, the menu no longer opens, nothing holds the input
+            fault(1);
+            frames(2);
+            fault(1);
+            frames(2);
+            fault(2);
+            frames(2);
+            l = hostLog(dir);
+            check(has(l, "Horizon UI off until the next start"), "host fault x3: UI off logged");
+            check((fault(0) & 15) == 8, "host fault x3: UI off, menu closed, input not held");
+            check(uiState() == 0, "host fault x3: UI state 0");
+        }
+    }
     log = hostLog(dir);
     check(has(log, "CreateDevice hooked in the factory table"), "factory CreateDevice slot hooked");
     check(has(log, "Present and Reset in its method table"), "device Present/Reset hooked");
@@ -258,7 +306,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         check(has(log, "test: save_replay -> Not supported"), "save_replay: NOT_SUPPORTED outside ESWC");
         check(has(log, "panel \"events\" (Events)"), "panel Events registered");
         check(has(log, "panel \"clock\" (Clock), in its own window"), "HUD panel Clock starts in its own window");
-        check(!has(log, "crashed"), "no plugin crashed");
+        if (!g_crash) check(!has(log, "crashed"), "no plugin crashed");
     }
     if (expectAbi12) {
         // tests/abi12: built against the 1.2 header, loaded by this 1.3 host
@@ -292,6 +340,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"expect-no-plugin") expect = 0;
         else if (a == L"expect-abi12") abi12 = true;
         else if (a == L"runtime-load") g_runtimeLoad = true;
+        else if (a == L"crash") g_crash = true;
         else if (a == L"layout") SetEnvironmentVariableW(L"HORIZON_TEST_LAYOUT", L"1"); // screens of layout mode
         else if (a.rfind(L"size=", 0) == 0) swscanf_s(a.c_str() + 5, L"%dx%d", &g_w, &g_h);
         else if (a.rfind(L"page=", 0) == 0) SetEnvironmentVariableW(L"HORIZON_TEST_PAGE", a.c_str() + 5);

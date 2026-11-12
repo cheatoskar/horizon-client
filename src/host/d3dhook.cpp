@@ -85,10 +85,13 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* dev, const RECT* src, const REC
     if (t_inPresent) return (t->firstPresent ? t->firstPresent : t->nextPresent)(dev, src, dst, wnd, dirty);
     t_inPresent++;
     if (dev == g_game) {
-        static bool s_failed = false;
-        if (!s_failed && !sehFrame(dev)) {
-            s_failed = true;
-            HERR("overlay: exception while drawing: the menu is off until the next start");
+        // A plugin that throws is caught where it is called and switched off alone. An exception that
+        // still gets here is the host's: close the menu, hand the input back, keep going. Three times:
+        // the Horizon UI stays off until the next start (the game keeps running with its input).
+        static int s_faults = 0;
+        if (!sehFrame(dev) && s_faults < 3) {
+            s_faults++;
+            overlayAfterFault(s_faults >= 3);
         }
     }
     const HRESULT hr = t->nextPresent(dev, src, dst, wnd, dirty);

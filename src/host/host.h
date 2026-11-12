@@ -174,6 +174,13 @@ HWND overlayWindow(); // the game window the device was made for (nullptr before
 void overlayBeforeReset();
 void overlayAfterReset(bool ok);
 void overlayFrame(void* device); // in Present, before the call on
+// An exception left overlayFrame (host code; plugin calls are caught one by one). Closes the menu and
+// layout mode, gives the game its keyboard and mouse back and repairs the ImGui frame. giveUp: the third
+// time; the Horizon UI stays off until the next start and takes no input.
+void overlayAfterFault(bool giveUp);
+// Runs a guarded plugin draw (call returns false when the plugin threw). When it threw, the ImGui stacks
+// go back to how they were before the call (open windows, IDs, style, fonts). Game thread.
+bool imguiGuardedCall(bool (*call)(void*), void* ctx);
 bool menuOpen();
 void setMenuOpen(bool open, const char* why);
 // ABI minor 3 open_page: menu on the plugin's page (and panel tab), or closed again when it already shows it.
@@ -194,6 +201,7 @@ void releaseTexture(uint64_t id);
 void dinputInstall();
 // While true, the game's DirectInput keyboard/mouse reads return nothing.
 void dinputSetBlocked(bool blocked);
+bool dinputBlocked();
 void dinputHoldUntilReleased(int vk); // keeps one key away from the game until it is released
 
 // ------------------------------------------------------------------ helpers (inlinehook.cpp)
