@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
     pv.name = "Node Explorer";
     pv.version = "0.1.0";
     pv.author = "cheatoskar";
-    pv.description = "Browse the engine's classes and live objects. Read-only.";
+    pv.description = "Browse the engine's classes and live objects.";
     pv.status = PluginStatus::On;
     pv.enabled = true;
     pv.hasMenu = true;

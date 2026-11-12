@@ -11,8 +11,9 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Browse the engine's classes and live objects. Read-only.",
+  "description": "Browse the engine's classes and live objects.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": false
+  "enabled_by_default": false,
+  "ui": { "min_w": 480, "min_h": 360, "pref_w": 900, "pref_h": 640 }
 }
