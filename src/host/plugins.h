@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "common/modules.h"
 #include "common/profile.h"
 #include "common/settings.h"
 #include "host/host.h"
@@ -48,6 +49,7 @@ struct Plugin {
 
 std::vector<std::unique_ptr<Plugin>>& plugins();
 const Profile& profile();
+const ModulesConfig& modulesConfig(); // modules.json next to host.dll (groups, first-start defaults)
 Plugin* findPlugin(const std::string& id);
 bool pluginGated(const Plugin* p);
 void pluginSetEnabled(const std::string& id, bool on);

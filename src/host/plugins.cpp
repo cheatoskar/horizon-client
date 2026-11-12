@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 
+#include "common/modules.h"
 #include "common/profile.h"
 #include "common/util.h"
 #include "reflect/reflect.h"
@@ -19,6 +20,7 @@ namespace {
 
 std::vector<std::unique_ptr<Plugin>> g_plugins;
 Profile g_profile;
+ModulesConfig g_modules;
 
 struct Queued {
     Plugin* plugin;
@@ -545,6 +547,7 @@ bool pluginGated(const Plugin* p) { return p->soloOnly && (!game().onlineKnown()
 
 std::vector<std::unique_ptr<Plugin>>& plugins() { return g_plugins; }
 const Profile& profile() { return g_profile; }
+const ModulesConfig& modulesConfig() { return g_modules; }
 
 Plugin* findPlugin(const std::string& id) {
     for (auto& p : g_plugins)
@@ -623,14 +626,41 @@ void pluginsLoadAll() {
     for (const auto& e : g_profile.plugins)
         if (e.enabled && !findPlugin(e.id)) HWARN("profile: \"%s\" is enabled but not installed in %s", e.id.c_str(), utf8(root).c_str());
 
+    // modules.json next to host.dll: module groups (menu) and first-start defaults over plugin.json
+    {
+        std::string mt;
+        if (readFile(s.baseFolder + L"modules.json", mt)) {
+            g_modules = parseModulesConfig(mt);
+            if (!g_modules.valid) HWARN("modules.json: %s (no groups)", g_modules.error.c_str());
+            else HLOG("modules.json: %zu group(s), %zu default(s)", g_modules.groups.size(), g_modules.defaults.size());
+        }
+    }
+    // An install from before 0.3.1 keeps the switches 0.3.0 gave it: modules whose default changed get that
+    // value written once (only where the player never switched them, never with a profile.json).
+    if (!g_profile.present && hostSetting("setup.defaults", "").empty()) {
+        if (!hostConfigNewInstall()) {
+            for (const auto& d : g_modules.previousDefaults) {
+                const std::string key = "plugin." + d.first + ".enabled";
+                if (findPlugin(d.first) && hostSetting(key, "").empty()) {
+                    hostSetSettingInt(key, d.second ? 1 : 0);
+                    logLine(HORIZON_LOG_INFO, d.first.c_str(), "kept %s as in 0.3.0 (the default changed in 0.3.1)", d.second ? "on" : "off");
+                }
+            }
+        }
+        hostSetSettingInt("setup.defaults", 2);
+    }
+
     for (auto& up : g_plugins) {
         Plugin* p = up.get();
         const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
         // default when the menu never switched it: on, unless plugin.json says enabled_by_default false (only
-        // without profile.json). The Autosave plugin checks for the standalone ESWC Autosave itself and pauses.
-        const bool localDefault = g_profile.present || p->manifest.enabledByDefault;
+        // without profile.json), "paired" (on once this game is paired with TM Horizon) or modules.json "defaults"
+        // says otherwise. The Autosave plugin checks for the standalone ESWC Autosave itself and pauses.
+        bool byDefault = p->manifest.enabledByDefault || (p->manifest.defaultWhenPaired && !hostSetting("bridge.key", "").empty());
+        if (const int over = g_modules.defaultFor(p->id); over >= 0) byDefault = over == 1;
+        const bool localDefault = g_profile.present || byDefault;
         std::string offWhy = "switched off in the menu";
-        if (!g_profile.present && !p->manifest.enabledByDefault) offWhy = "off by default: switch it on to try it";
+        if (!g_profile.present && !byDefault) offWhy = "off by default: switch it on to try it";
         const bool local = hostSettingInt("plugin." + p->id + ".enabled", localDefault ? 1 : 0) != 0;
         p->enabled = inProfile && local;
         if (p->status == ui::PluginStatus::Failed) {

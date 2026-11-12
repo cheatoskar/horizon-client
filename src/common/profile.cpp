@@ -145,7 +145,13 @@ PluginManifest parsePluginManifest(const std::string& text, const std::string& f
             if (g.type == Json::String) m.games |= gameBitFromName(g.str);
     }
     m.soloOnly = lower(getString(root, "online")) != "online-ok";
-    m.enabledByDefault = getBool(root, "enabled_by_default", true);
+    const Json* ebd = root.get("enabled_by_default");
+    if (ebd && ebd->type == Json::String && lower(ebd->str) == "paired") {
+        m.enabledByDefault = false;
+        m.defaultWhenPaired = true;
+    } else {
+        m.enabledByDefault = getBool(root, "enabled_by_default", true);
+    }
     m.startupOnly = getBool(root, "startup_only", false);
     const Json* abi = root.get("abi");
     m.abi = abi && abi->type == Json::Number ? static_cast<int>(abi->num) : 0;

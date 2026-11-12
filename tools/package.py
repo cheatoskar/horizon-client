@@ -17,7 +17,9 @@ packaging\\; writes:
 
 Only the modules in SHIP go into the user packages, each into the games its plugin.json lists. Not shipped:
 the sample plugin, porting-kit examples, other people's mods. Extra plugins (e.g. the Legacy Randomizer, built
-in its own repo) in extra-plugins\\<id>\\ are added only with --with-extra (test builds).
+in its own repo) in extra-plugins\\<id>\\ are added only with --with-extra (test builds). Developer tools
+(DEV_ONLY: Node Explorer) only with --dev. Next to host.dll: modules.json (module groups, first-start
+defaults) and icons\\ from packaging\\; manifest.json repeats "groups" and "defaults" for the launcher.
 
 The zips are reproducible: entries sorted, fixed timestamp, text files with CRLF.
 """
@@ -39,7 +41,12 @@ STANDALONE = os.path.join(DIST, "standalone")
 STANDALONE_NAMES = {"controller-hotplug": "Controller-Hotplug"}
 # the modules players get; anything else in the build folders stays out of the zips
 SHIP = ["eswc-autosave", "controller-hotplug", "game-settings", "input-display", "wr-hunter", "tmx-browser", "tmx-upload",
-        "performance", "scripts", "node-explorer"]
+        "performance", "scripts"]
+# developer tools: only with --dev (a dev build for my own tests, never in a release)
+DEV_ONLY = ["node-explorer"]
+# module groups and first-start defaults (packaging\modules.json + its icons), next to host.dll
+MODULES_JSON = os.path.join(PACK, "modules.json")
+MODULE_ICONS = os.path.join(PACK, "icons")
 # where the build leaves a plugin folder (DLL, plugin.json, icons), first match wins
 PLUGIN_BASES = [os.path.join(LEGACY, "horizon", "plugins"), os.path.join(ROOT, "build", "plugins")]
 SCRIPT_EXAMPLES = os.path.join(ROOT, "plugins", "scripts", "examples")
@@ -77,10 +84,10 @@ def plugin_files(folder):
     return out
 
 
-def plugin_dirs(with_extra):
+def plugin_dirs(with_extra, dev=False):
     """(id, folder, games) for every plugin to ship."""
     out = []
-    for pid in SHIP:
+    for pid in SHIP + (DEV_ONLY if dev else []):
         folder = next((os.path.join(b, pid) for b in PLUGIN_BASES
                        if os.path.isfile(os.path.join(b, pid, "plugin.json"))), None)
         if not folder:
@@ -130,6 +137,12 @@ def stage_common(stage, version):
     write_text(os.path.join(stage, "THIRD-PARTY.txt"), fill("THIRD-PARTY.txt", version))
 
 
+def stage_modules(folder):
+    """modules.json and the group icons next to host.dll (HorizonHost.dll on TMLoader)."""
+    shutil.copy2(MODULES_JSON, os.path.join(folder, "modules.json"))
+    copy_tree(MODULE_ICONS, os.path.join(folder, "icons"))
+
+
 def stage_legacy(stage, game_key, version, plugins):
     """Legacy Loader layout: dinput8.dll lives in horizon\\loader\\ and Horizon-Install.cmd puts it in place
     (an existing dinput8.dll of another mod becomes dinput8.chain.dll). Unzipping never overwrites a
@@ -146,6 +159,7 @@ def stage_legacy(stage, game_key, version, plugins):
             shipped.append(pid)
     if "scripts" in shipped:
         copy_tree(SCRIPT_EXAMPLES, os.path.join(hz, "scripts"))
+    stage_modules(hz)
     for name in ("Horizon-Install.cmd", "Horizon-Uninstall.cmd"):
         shutil.copy2(os.path.join(PACK, name), os.path.join(stage, name))
     write_text(os.path.join(stage, "README.txt"), fill("README.txt", version))
@@ -168,6 +182,7 @@ def stage_tmloader(stage, version, plugins):
         if "tmnf" in games or "tmuf" in games:
             copy_plugin(folder, os.path.join(ver, "plugins", pid))
             shipped.append(pid)
+    stage_modules(ver)
     return prod, shipped
 
 
@@ -216,11 +231,12 @@ def standalone_packages():
 
 def main():
     with_extra = "--with-extra" in sys.argv[1:]
+    dev = "--dev" in sys.argv[1:]
     version = host_version()
     for need in (os.path.join(LEGACY, "dinput8.dll"), os.path.join(LEGACY, "horizon", "host.dll")):
         if not os.path.isfile(need):
             sys.exit("missing %s: run build.cmd first" % need)
-    plugins = plugin_dirs(with_extra)
+    plugins = plugin_dirs(with_extra, dev)
     staging = os.path.join(DIST, "staging")
     release = os.path.join(DIST, "release")
     for d in (staging, release, os.path.join(DIST, "tmloader")):
@@ -239,6 +255,10 @@ def main():
 
     manifest = {"name": "Horizon Client", "folder_name": "Horizon Host", "version": version,
                 "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "plugin_abi": 1, "packages": []}
+    # groups (one entry for several modules) and first-start defaults, for the launcher's module list
+    modules = json.load(open(MODULES_JSON, encoding="utf-8"))
+    manifest["groups"] = modules.get("groups", [])
+    manifest["defaults"] = modules.get("defaults", {})
     sums = []
     for name, key, stage, shipped in packages:
         zip_path = os.path.join(release, "Horizon-Client-%s-%s.zip" % (version, name))

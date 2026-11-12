@@ -142,6 +142,8 @@ int hostSettingInt(const std::string& key, int fallback);
 void hostSetSetting(const std::string& key, const std::string& value);
 void hostSetSettingInt(const std::string& key, int value);
 void hostConfigSave(bool force);
+// No settings\host.json existed at this start (a new install): first-start defaults apply.
+bool hostConfigNewInstall();
 // The shared setup (docs/shared-setup.md): one setup for every game install of this Windows user.
 struct Plugin;
 // settings\<id>.json, or the shared folder's <id>.json while the shared setup is on (modules made for every game).

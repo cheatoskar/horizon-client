@@ -331,6 +331,36 @@ ui::Model buildModel() {
     m.menuHotkey = g_menuHotkey;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
     m.onlineFix = (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
+    // module groups (modules.json): only the features that apply to this game; a group without any is left out
+    for (const ModuleGroup& grp : modulesConfig().groups) {
+        ui::GroupView gv;
+        gv.id = grp.id;
+        gv.name = grp.name;
+        gv.description = grp.description;
+        for (const GroupMember& mem : grp.members) {
+            ui::GroupFeatureView fv;
+            fv.label = mem.label;
+            if (mem.host) {
+                if (mem.id != "login-fix" || m.onlineFix < 0) continue;
+                fv.hostFeature = mem.id;
+                fv.enabled = m.onlineFix == 1;
+                fv.statusText = "Next start";
+            } else {
+                const ui::PluginView* pv = nullptr;
+                for (const ui::PluginView& v : m.plugins)
+                    if (v.id == mem.id) pv = &v;
+                if (!pv || pv->status == ui::PluginStatus::WrongGame) continue;
+                fv.pluginId = mem.id;
+                fv.enabled = pv->enabled;
+                fv.usable = pv->status != ui::PluginStatus::Failed && !s.safeMode;
+                if (pv->status == ui::PluginStatus::Failed || pv->status == ui::PluginStatus::Blocked) fv.statusText = pv->statusText;
+                else if (pv->status == ui::PluginStatus::NeedsRestart) fv.statusText = "Restart to apply";
+            }
+            gv.enabled = gv.enabled || fv.enabled;
+            gv.features.push_back(fv);
+        }
+        if (!gv.features.empty()) m.groups.push_back(gv);
+    }
     m.dnd = toastsDnd();
     m.holdToasts = toastsHold();
     m.bridgeEnabled = bridgeState() != HORIZON_BRIDGE_OFF || hostSettingInt("bridge.enabled", 1) != 0;
@@ -378,6 +408,20 @@ ui::Actions makeActions() {
     a.openLogFolder = &openLogFolder;
     a.openLauncher = &openLauncher;
     a.closeMenu = []() { setMenuOpen(false, "the menu"); };
+    a.setGroupEnabled = [](const std::string& groupId, bool on) {
+        const ModuleGroup* grp = modulesConfig().group(groupId);
+        if (!grp) return;
+        const uint32_t gameBit = state().game.game;
+        for (const GroupMember& mem : grp->members) {
+            if (mem.host) {
+                if (mem.id == "login-fix" && (gameBit == HORIZON_GAME_ESWC || gameBit == HORIZON_GAME_ORIGINAL)) hostSetSettingInt("OnlineFix", on ? 1 : 0);
+                continue;
+            }
+            const Plugin* p = findPlugin(mem.id);
+            if (p && p->status != ui::PluginStatus::WrongGame && p->status != ui::PluginStatus::Failed) pluginSetEnabled(mem.id, on);
+        }
+        HLOG("menu: %s %s", grp->name.c_str(), on ? "on" : "off");
+    };
     a.setOnlineFix = [](bool on) {
         hostSetSettingInt("OnlineFix", on ? 1 : 0);
         HLOG("menu: online login fix %s from the next start", on ? "on" : "off");

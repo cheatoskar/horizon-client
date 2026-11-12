@@ -108,6 +108,22 @@ struct LogLine {
 
 // A mod in the game that is not a Horizon plugin (TMVS, TMInterface, CenterSpeed, Twinkie, another
 // TMLoader mod, the chained dinput8.dll): shown under "Other mods" for orientation, no control.
+// Several modules shown as one entry (modules.json "groups", e.g. Legacy Essentials): one row, one icon, one
+// switch; its page has a switch per feature and the members' own pages as tabs. Members are not listed alone.
+struct GroupFeatureView {
+    std::string pluginId;     // a member module, "" for a host feature
+    std::string hostFeature;  // "login-fix"
+    std::string label;        // "Autosave"
+    bool enabled = false;
+    bool usable = true;       // false: cannot be switched now (status, safe mode)
+    std::string statusText;
+};
+struct GroupView {
+    std::string id, name, description; // icon: iconFor("group:" + id)
+    std::vector<GroupFeatureView> features; // only those that apply to this game
+    bool enabled = false;                    // any feature on
+};
+
 struct OtherModView {
     std::string name;     // "TM Vibrant Shaders"
     std::string version;  // "1.5.0" or ""
@@ -129,6 +145,7 @@ struct Model {
     bool runGate = false;     // Competition Patch run in progress
     std::string gameState;    // "Main menu", "Solo race", ...
     std::vector<PluginView> plugins;
+    std::vector<GroupView> groups;            // module groups (their members are in plugins too, not listed alone)
     std::vector<HotkeyView> hotkeys;
     const std::vector<LogLine>* log = nullptr; // newest last, at most ~500
     std::vector<std::string> notes;            // e.g. "Changes apply after a restart: Clips"
@@ -188,6 +205,7 @@ struct Actions {
     std::function<void()> closeMenu;
     std::function<void(bool on)> setBarEnabled;
     std::function<void(bool on)> setOnlineFix;
+    std::function<void(const std::string& groupId, bool on)> setGroupEnabled; // every feature of the group
     std::function<void(const std::string& pluginId, const std::string& key)> drawPanelTab; // body or window options
     std::function<void(bool on)> setDnd;
     std::function<void(bool on)> setHoldToasts;

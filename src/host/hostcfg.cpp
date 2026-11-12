@@ -80,6 +80,7 @@ namespace {
 SettingsFile g_shared;
 std::wstring g_setupRoot;     // ...\Horizon Client\ with trailing backslash; "" = no shared setup (test program)
 bool g_sharedActive = false;  // this start reads the shared setup
+bool g_newInstall = false;    // no settings\host.json at this start
 bool g_setupChanged = false;  // copied, reset or imported this start: restart to apply
 
 bool gameSpecificPlugin(const std::string& id, void*) {
@@ -117,6 +118,7 @@ bool pluginShared(const Plugin& p) { return !setup::pluginGameSpecific(p.manifes
 void hostConfigLoad() {
     const std::wstring path = localSettingsDir() + L"host.json";
     const bool existed = fileExists(path);
+    g_newInstall = !existed;
     if (!g_host.load(path)) HWARN("settings: %s is not a JSON object, using defaults", utf8(path).c_str());
     g_setupRoot = setupRootFolder();
     if (g_setupRoot.empty()) {
@@ -150,6 +152,8 @@ void hostConfigSave(bool force) {
     if (g_host.dirty() && !g_host.saveIfDirty()) HWARN("settings: could not write host.json");
     if (g_sharedActive && g_shared.dirty() && !g_shared.saveIfDirty()) HWARN("setup: could not write the shared host.json");
 }
+
+bool hostConfigNewInstall() { return g_newInstall; }
 
 std::wstring pluginSettingsPath(const Plugin& p, bool* shared) {
     const bool s = g_sharedActive && pluginShared(p);

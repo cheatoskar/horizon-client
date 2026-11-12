@@ -45,6 +45,18 @@ const PluginView* findPlugin(const Model& m, const std::string& id) {
     }
     return nullptr;
 }
+const GroupView* findGroup(const Model& m, const std::string& id) {
+    for (const GroupView& gv : m.groups)
+        if (gv.id == id) return &gv;
+    return nullptr;
+}
+// The group a module is shown in (nullptr: listed alone).
+const GroupView* groupOfPlugin(const Model& m, const std::string& pluginId) {
+    for (const GroupView& gv : m.groups)
+        for (const GroupFeatureView& fv : gv.features)
+            if (fv.pluginId == pluginId) return &gv;
+    return nullptr;
+}
 const OtherModView* findOther(const Model& m, const std::string& file) {
     for (const OtherModView& o : m.otherMods) {
         if (o.file == file) return &o;
@@ -318,6 +330,42 @@ void pluginRow(const PluginView& p, const Actions& actions) {
     ImGui::PopID();
 }
 
+// A module group (Legacy Essentials): like a module row, one switch for all of its features.
+void groupRow(const GroupView& gv, const Actions& actions) {
+    const float s = scale();
+    const Fonts& f = fonts();
+    const Tokens& t = tokens();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, 40.0f * s);
+    const std::string key = "group:" + gv.id;
+    ImGui::PushID(key.c_str());
+    const bool selected = g.sel == key;
+    bool hov = false;
+    if (rowButton("##row", size, selected, &hov)) g.sel = key;
+    const float iconR = 13.0f * s;
+    drawIcon(dl, ImVec2(pos.x + 14.0f * s + iconR, pos.y + size.y * 0.5f), iconR, key, gv.name, f.small);
+    const float textX = pos.x + 14.0f * s + iconR * 2.0f + 10.0f * s;
+    const ImVec2 swSize(36.0f * s, 20.0f * s);
+    const ImVec2 swPos(pos.x + size.x - 12.0f * s - swSize.x, pos.y + (size.y - swSize.y) * 0.5f);
+    const float textW = swPos.x - 10.0f * s - textX;
+    const float bodyH = F(f.body)->FontSize, smallH = F(f.small)->FontSize;
+    const float top = pos.y + (size.y - bodyH - smallH - 1.0f * s) * 0.5f;
+    drawText(dl, selected ? f.bodyBold : f.body, ImVec2(textX, top), U(t.text), ellipsize(f.body, gv.name, textW));
+    int on = 0;
+    for (const GroupFeatureView& fv : gv.features) on += fv.enabled ? 1 : 0;
+    const Rgba sc = statusColour(gv.enabled ? PluginStatus::On : PluginStatus::Off);
+    const std::string sub = gv.enabled ? std::to_string(on) + " of " + std::to_string(gv.features.size()) + " on" : std::string("Off");
+    dl->AddCircleFilled(ImVec2(textX + 3.0f * s, top + bodyH + 1.0f * s + smallH * 0.5f + 1.0f * s), 3.0f * s, U(sc), 12);
+    drawText(dl, f.small, ImVec2(textX + 11.0f * s, top + bodyH + 1.0f * s), U(sc), sub);
+    bool swHov = false;
+    if (inlineSwitch("##sw", swPos, swSize, gv.enabled, true, &swHov) && actions.setGroupEnabled) actions.setGroupEnabled(gv.id, !gv.enabled);
+    if (hov && !swHov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + size.y));
+    ImGui::Dummy(ImVec2(1.0f, 2.0f * s));
+    ImGui::PopID();
+}
+
 void otherRow(const OtherModView& o) {
     const float s = scale();
     const Fonts& f = fonts();
@@ -372,7 +420,9 @@ void drawSidebar(const Model& model, const Actions& actions, float width, float 
             }
             ImGui::Dummy(ImVec2(1.0f, static_cast<float>(lines.size()) * lh + 10.0f * s));
         }
-        for (const PluginView& p : model.plugins) pluginRow(p, actions);
+        for (const GroupView& gv : model.groups) groupRow(gv, actions);
+        for (const PluginView& p : model.plugins)
+            if (!groupOfPlugin(model, p.id)) pluginRow(p, actions);
 
         sectionLabel("HORIZON");
         horizonRow("General", "general", HZ_ICON_SETTINGS_U8);
@@ -471,6 +521,8 @@ void pageHeader(const std::string& id, const std::string& name, bool greyIcon, c
     ImGui::Dummy(ImVec2(width, iconR * 2.0f + 14.0f * s));
 }
 
+void drawPluginBody(const PluginView& plugin, const Actions& actions);
+
 void drawPluginPage(const PluginView& plugin, const Actions& actions) {
     const float s = scale();
     const Fonts& f = fonts();
@@ -489,7 +541,84 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
         ImGui::Dummy(ImVec2(0.0f, 6.0f * s));
     }
     (void)f;
-    if (beginCard("##plugin_page", 20.0f, 16.0f, false, 240.0f * s)) {
+    if (beginCard("##plugin_page", 20.0f, 16.0f, false, 240.0f * s)) drawPluginBody(plugin, actions);
+    endCard();
+}
+
+// A group's page: one switch per feature, then the members' own pages as tabs.
+void drawGroupPage(const Model& model, const GroupView& gv, const Actions& actions) {
+    const float s = scale();
+    const Fonts& f = fonts();
+    const Tokens& t = tokens();
+    const Rgba sc = statusColour(gv.enabled ? PluginStatus::On : PluginStatus::Off);
+    pageHeader("group:" + gv.id, gv.name, false, gv.enabled ? "On" : "Off", &sc, "");
+    if (!gv.description.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, toVec(t.text2));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(gv.description.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0.0f, 6.0f * s));
+    }
+    // the features, one switch each
+    if (beginCard("##group_features", 20.0f, 12.0f, true)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (const GroupFeatureView& fv : gv.features) {
+            ImGui::PushID(fv.label.c_str());
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            const float rowH = 34.0f * s;
+            drawText(dl, f.body, ImVec2(p.x, p.y + (rowH - F(f.body)->FontSize) * 0.5f), U(fv.usable ? t.text : t.muted), fv.label);
+            if (!fv.statusText.empty()) {
+                const float lx = p.x + textSize(f.body, fv.label).x + 12.0f * s;
+                drawText(dl, f.small, ImVec2(lx, p.y + (rowH - F(f.small)->FontSize) * 0.5f), U(t.muted),
+                         ellipsize(f.small, fv.statusText, std::max(0.0f, p.x + w - 60.0f * s - lx)));
+            }
+            const ImVec2 swSize(36.0f * s, 20.0f * s);
+            const ImVec2 swPos(p.x + w - swSize.x, p.y + (rowH - swSize.y) * 0.5f);
+            if (inlineSwitch("##fsw", swPos, swSize, fv.enabled, fv.usable, nullptr)) {
+                if (!fv.pluginId.empty() && actions.setPluginEnabled) actions.setPluginEnabled(fv.pluginId, !fv.enabled);
+                else if (fv.hostFeature == "login-fix" && actions.setOnlineFix) actions.setOnlineFix(!fv.enabled);
+            }
+            ImGui::SetCursorScreenPos(p);
+            ImGui::Dummy(ImVec2(w, rowH));
+            ImGui::PopID();
+        }
+    }
+    endCard();
+    ImGui::Dummy(ImVec2(0.0f, 6.0f * s));
+    // the members' pages
+    std::vector<const PluginView*> pages;
+    for (const GroupFeatureView& fv : gv.features)
+        if (const PluginView* pv = fv.pluginId.empty() ? nullptr : findPlugin(model, fv.pluginId))
+            if (pv->hasMenu || !pv->panels.empty()) pages.push_back(pv);
+    if (pages.empty()) return;
+    if (beginCard("##group_pages", 20.0f, 16.0f, false, 200.0f * s)) {
+        const ImVec2 room = ImGui::GetContentRegionAvail();
+        g_metrics.pageW = room.x;
+        g_metrics.pageH = room.y;
+        if (ImGui::BeginTabBar("##members")) {
+            for (const PluginView* pv : pages) {
+                std::string label = pv->name;
+                for (const GroupFeatureView& fv : gv.features)
+                    if (fv.pluginId == pv->id) label = fv.label;
+                const bool pick = g.tabPending && g.tabPlugin == pv->id;
+                if (ImGui::BeginTabItem((label + "###m_" + pv->id).c_str(), nullptr, pick ? ImGuiTabItemFlags_SetSelected : 0)) {
+                    if (pick && g.tabKey.empty()) g.tabPending = false;
+                    ImGui::Spacing();
+                    drawPluginBody(*pv, actions);
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+    }
+    endCard();
+}
+
+// The plugin's own page inside its card: its DrawMenu, or Settings + one tab per panel.
+void drawPluginBody(const PluginView& plugin, const Actions& actions) {
+    {
         const ImVec2 room = ImGui::GetContentRegionAvail();
         g_metrics.pageW = room.x;
         g_metrics.pageH = room.y;
@@ -526,7 +655,6 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
         }
         ImGui::PopID();
     }
-    endCard();
 }
 
 void drawOtherPage(const OtherModView& o) {
@@ -731,7 +859,10 @@ void drawGeneral(const Model& model, const Actions& actions) {
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
 
         // online login fix (ESWC and Original)
-        if (model.onlineFix >= 0) {
+        bool loginFixGrouped = false; // shown in its group (Legacy Essentials) instead
+        for (const GroupView& gv : model.groups)
+            for (const GroupFeatureView& fv : gv.features) loginFixGrouped = loginFixGrouped || fv.hostFeature == "login-fix";
+        if (model.onlineFix >= 0 && !loginFixGrouped) {
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const float w = ImGui::GetContentRegionAvail().x;
             drawText(dl, f.bodyBold, p, U(t.text), "Login-Fix (Fehler 12157)");
@@ -1046,8 +1177,21 @@ void drawFooter(const Model& model, float height) {
 // Makes sure sel points at something that exists.
 void resolveSelection(const Model& model) {
     if (g.sel.empty() || g.sel == "mods") {
-        g.sel = model.plugins.empty() ? "general" : "plugin:" + model.plugins[0].id;
+        if (!model.groups.empty()) g.sel = "group:" + model.groups[0].id;
+        else g.sel = model.plugins.empty() ? "general" : "plugin:" + model.plugins[0].id;
     }
+    // a module shown inside a group: the group's page, on that module's tab
+    if (startsWith(g.sel, "plugin:")) {
+        if (const GroupView* gv = groupOfPlugin(model, g.sel.substr(7))) {
+            if (!(g.tabPending && g.tabPlugin == g.sel.substr(7))) {
+                g.tabPlugin = g.sel.substr(7);
+                g.tabKey.clear();
+                g.tabPending = true;
+            }
+            g.sel = "group:" + gv->id;
+        }
+    }
+    if (startsWith(g.sel, "group:") && !findGroup(model, g.sel.substr(6))) g.sel = "general";
     if (startsWith(g.sel, "plugin:") && !findPlugin(model, g.sel.substr(7))) g.sel = "general";
     if (startsWith(g.sel, "other:") && !findOther(model, g.sel.substr(6))) g.sel = "general";
 }
@@ -1059,7 +1203,9 @@ void drawPage(const Model& model, const Actions& actions, float height) {
     ImGui::BeginChild("##page", ImVec2(0.0f, height), 0, scrolls ? 0 : ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
     (void)s;
-    if (startsWith(g.sel, "plugin:")) {
+    if (startsWith(g.sel, "group:")) {
+        if (const GroupView* gv = findGroup(model, g.sel.substr(6))) drawGroupPage(model, *gv, actions);
+    } else if (startsWith(g.sel, "plugin:")) {
         if (const PluginView* p = findPlugin(model, g.sel.substr(7))) drawPluginPage(*p, actions);
     } else if (startsWith(g.sel, "other:")) {
         if (const OtherModView* o = findOther(model, g.sel.substr(6))) drawOtherPage(*o);

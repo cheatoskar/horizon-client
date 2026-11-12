@@ -8,6 +8,7 @@
 
 #include "common/hotkeys.h"
 #include "common/json.h"
+#include "common/modules.h"
 #include "common/profile.h"
 #include "common/settings.h"
 #include "common/setup.h"
@@ -300,6 +301,32 @@ static void testSharedSetup() {
     setup::placeAt(mid, 150, 100, 1280, 960, x, y);
     CHECK(x == 565.0f && y == 400.0f);
     CHECK(!setup::anchorOf(-1, -1, 10, 10, 1280, 960).valid && !setup::anchorOf(10, 10, 10, 10, 0, 0).valid);
+}
+
+// modules.json: groups and first-start defaults; plugin.json "enabled_by_default": "paired".
+static void testModulesConfig() {
+    std::string text;
+    CHECK(readFile(L"packaging\\modules.json", text) || readFile(L"..\\packaging\\modules.json", text));
+    ModulesConfig c = parseModulesConfig(text);
+    CHECK(c.valid);
+    const ModuleGroup* le = c.group("legacy-essentials");
+    CHECK(le && le->name == "Legacy Essentials" && le->icon == "icons/legacy-essentials.png");
+    CHECK(le && le->members.size() == 4 && le->members[2].host && le->members[2].id == "login-fix" && le->members[0].label == "Autosave");
+    CHECK(c.groupOf("controller-hotplug") == le && c.groupOf("game-settings") == le && !c.groupOf("wr-hunter") && !c.groupOf("login-fix"));
+    CHECK(c.defaultFor("legacy-randomizer") == 0 && c.defaultFor("wr-hunter") == -1);
+    bool prevScripts = false;
+    for (const auto& d : c.previousDefaults) prevScripts = prevScripts || (d.first == "scripts" && d.second);
+    CHECK(prevScripts);
+    // a module in two groups stays in the first; bad ids and empty groups are dropped; newer format refused
+    ModulesConfig two = parseModulesConfig(R"({"format":1,"groups":[{"id":"a","name":"A","members":[{"id":"x"}]},
+        {"id":"b","name":"B","members":[{"id":"x"},{"id":"Bad Id"}]},{"id":"c","name":"C","icon":"../x.png","members":[{"id":"y"}]}]})");
+    CHECK(two.valid && two.groups.size() == 1 && two.groupOf("x") && two.groupOf("x")->id == "a");
+    CHECK(!parseModulesConfig(R"({"format":2})").valid && !parseModulesConfig("nope").valid);
+    // "paired": off until this game is paired with TM Horizon
+    PluginManifest up = parsePluginManifest(R"({"id":"tmx-upload","enabled_by_default":"paired"})", "tmx-upload");
+    CHECK(up.valid && !up.enabledByDefault && up.defaultWhenPaired);
+    PluginManifest on = parsePluginManifest(R"({"id":"x"})", "x");
+    CHECK(on.enabledByDefault && !on.defaultWhenPaired);
 }
 
 static void testJsonRoundTrip() {
@@ -873,6 +900,7 @@ int main() {
     testHotkeys();
     testSettings();
     testSharedSetup();
+    testModulesConfig();
     testJsonRoundTrip();
     testIds();
     testForeverObserve();

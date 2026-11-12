@@ -15,6 +15,6 @@
   "description": "Search TMX and play maps in the game.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": false,
+  "enabled_by_default": true,
   "ui": { "min_w": 420, "min_h": 320, "pref_w": 900, "pref_h": 620 }
 }

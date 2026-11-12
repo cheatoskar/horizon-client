@@ -12,6 +12,7 @@
   ],
   "online": "online-ok",
   "abi": 1,
+  "enabled_by_default": false,
   "description": "Runs scripts from horizon\\scripts.",
   "author": "cheatoskar",
   "icon": "icon.png",

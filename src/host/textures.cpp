@@ -74,6 +74,21 @@ int loadPluginIcons() {
             logLine(HORIZON_LOG_WARN, p->id.c_str(), "icon \"%s\" not loaded (a PNG in the plugin's folder)", p->manifest.icon.c_str());
         }
     }
+    // module groups (modules.json "icon", a PNG next to host.dll): one icon in either style
+    for (const ModuleGroup& grp : modulesConfig().groups) {
+        if (grp.icon.empty()) continue;
+        std::wstring rel = wide(grp.icon);
+        for (wchar_t& c : rel)
+            if (c == L'/') c = L'\\';
+        const uint64_t t = fromFile(state().baseFolder + rel);
+        ui::setIcon("group:" + grp.id, t);
+        if (t) {
+            g_pluginIcons.push_back(t);
+            icons++;
+        } else {
+            HWARN("modules.json: icon %s of %s not loaded", grp.icon.c_str(), grp.name.c_str());
+        }
+    }
     return icons;
 }
 
