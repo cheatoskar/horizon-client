@@ -2,7 +2,8 @@
 // (Win10 repack) and TrackMania Original (Online Patch v2 exe).
 //
 // Volume (the game's Windows audio session), Music and Sounds (the game's own volumes, heard at once) and the
-// window mode (the game's own setting, applies at the next start) from the menu. How and why: gs_game.h.
+// window mode (switched at once with the game's own StartFullscreen / StopFullscreen, between two frames) from
+// the menu. How and why: gs_game.h.
 //
 // The chosen values are this module's settings (horizon\settings\game-settings.json: Music, Sounds, WindowMode;
 // -1 = the game's own) and are written into the game's settings at every start, in Init: the host starts inside
@@ -23,7 +24,7 @@
 
 namespace {
 
-constexpr char kVersion[] = "1.0.1";
+constexpr char kVersion[] = "1.1.0";
 constexpr char kId[] = "game-settings";
 constexpr char kName[] = "Game settings";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
@@ -35,7 +36,17 @@ bool g_imgui = false;
 gs::Game* g_game = nullptr;
 gs::MasterVolume* g_master = nullptr;
 gs::Prefs g_prefs;
-int g_windowAtStart = -1; // the mode the game started in (0/1), -1 unknown
+int g_windowWanted = -1; // the mode asked for in the menu, switched between two frames
+
+// game thread, between two frames (gs::runBetweenFrames)
+void switchWindow(void*) {
+    if (!g_game || !g_host || g_windowWanted < 0) return;
+    const int mode = g_windowWanted;
+    g_windowWanted = -1;
+    if (!g_game->switchWindowMode(mode == 1)) return; // logged
+    g_prefs.window = mode;
+    g_host->set_int(g_host->plugin, "WindowMode", mode);
+}
 
 void logCb(void*, int level, const char* text) {
     if (!g_host) return;
@@ -138,14 +149,14 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     const int w = host->get_int(host->plugin, "WindowMode", -1);
     g_prefs.window = w == 0 || w == 1 ? w : -1;
     g_game->applyStart(g_prefs);
-    bool fs = false;
-    if (g_game->readFullscreen(&fs)) g_windowAtStart = fs ? 1 : 0;
+    g_game->toggleOk(); // logs the check once
     g_master = new gs::MasterVolume();
     g_master->start(&logCb, nullptr);
     return 0;
 }
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
+    gs::stopBetweenFrames();
     delete g_master;
     g_master = nullptr;
     delete g_game;
@@ -171,25 +182,20 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
     volumeRow("Music", "##music", true);
     volumeRow("Sounds", "##sounds", false);
 
-    // Window mode: the game's setting, read when it starts
+    // Window mode: the game's own switch, between two frames
     ImGui::Separator();
     bool fs = false;
-    const bool fsOk = g_game->readFullscreen(&fs);
+    const bool fsOk = g_game->fullscreenNow(&fs);
     rowLabel("Window mode");
     if (!fsOk) {
         ImGui::TextDisabled("Unavailable");
     } else {
         static const char* kModes[] = {"Windowed", "Fullscreen"};
         int mode = fs ? 1 : 0;
-        if (ImGui::Combo("##window", &mode, kModes, 2) && (mode == 1) != fs) {
-            if (g_game->setFullscreen(mode == 1)) {
-                g_prefs.window = mode;
-                g_host->set_int(g_host->plugin, "WindowMode", mode);
-                g_host->log(g_host->plugin, HORIZON_LOG_INFO, "window mode %s (next start)", kModes[mode]);
-                if (mode != g_windowAtStart && g_host->request_restart_note) g_host->request_restart_note(g_host->plugin, "Window mode");
-            }
+        if (ImGui::Combo("##window", &mode, kModes, 2) && (mode == 1) != fs && g_windowWanted < 0) {
+            g_windowWanted = mode;
+            if (!gs::runBetweenFrames(&switchWindow, nullptr)) g_windowWanted = -1;
         }
-        if (g_windowAtStart >= 0 && mode != g_windowAtStart) ImGui::TextDisabled("Restart game");
     }
     ImGui::PopID();
 }

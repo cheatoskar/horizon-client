@@ -43,10 +43,11 @@ struct Fake {
     uint8_t engines[0x60] = {};
     uint8_t audioEngine[0x40] = {};
     uint8_t port[0x40] = {};
+    uint8_t viewport[0x300] = {};
 
     explicit Fake(const gs::GameTable* table) : t(table) {
-        img = static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-        for (const gs::Part* p : {&t->audio, &t->display}) {
+        img = static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+        for (const gs::Part* p : {&t->audio, &t->display, &t->toggle}) {
             for (int i = 0; i < p->codeCount; i++) memcpy(at(p->code[i].addr), p->code[i].bytes, p->code[i].len);
             for (int i = 0; i < p->ptrCount; i++) put(at(p->ptrs[i].addr), rel(p->ptrs[i].value));
             for (int i = 0; i < p->paramCount; i++) {
@@ -68,6 +69,14 @@ struct Fake {
         put(audioEngine + 0x2c, ptr(port));
         setF(port + 0x14, 0.8f);
         setF(port + 0x18, 0.6f);
+        // the viewport with the game's vtable; at StartFullscreen / StopFullscreen tiny stand-ins (before the
+        // checked bytes at +0x18): mov dword [ecx+0x260],1 (0); mov eax,1; ret
+        put(app + t->vpOffset, ptr(viewport));
+        put(viewport, rel(t->vpVtable));
+        static const uint8_t kStart[] = {0xc7, 0x81, 0x60, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3};
+        static const uint8_t kStop[] = {0xc7, 0x81, 0x60, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc3};
+        memcpy(at(t->toggle.ptrs[0].value), kStart, sizeof(kStart));
+        memcpy(at(t->toggle.ptrs[1].value), kStop, sizeof(kStop));
     }
     ~Fake() { VirtualFree(img, 0, MEM_RELEASE); }
     uintptr_t base() const { return reinterpret_cast<uintptr_t>(img); }
@@ -218,6 +227,73 @@ static void gameTests(const gs::GameTable& t) {
     }
 }
 
+static void toggleTests(const gs::GameTable& t) {
+    printf("===== window mode switch, %s\n", t.name);
+    {
+        Fake f(&t);
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        bool fs = true;
+        check(g.toggleOk(), "switch: signatures match (relocated image)");
+        check(g.fullscreenNow(&fs) && !fs, "switch: windowed now (the viewport's flag)");
+        check(g.switchWindowMode(true) && Fake::get(f.viewport + 0x260) == 1 && Fake::get(f.display + 0x34) == 1,
+              "switch: StartFullscreen called, config follows");
+        check(g.fullscreenNow(&fs) && fs, "switch: fullscreen now");
+        check(g.switchWindowMode(true), "switch: already fullscreen -> nothing to do");
+        check(g.switchWindowMode(false) && Fake::get(f.viewport + 0x260) == 0 && Fake::get(f.display + 0x34) == 0,
+              "switch: StopFullscreen called, back to windowed");
+    }
+    {
+        // the game refuses (StartFullscreen returns 0 and stays windowed)
+        Fake f(&t);
+        static const uint8_t kRefuse[] = {0xb8, 0x00, 0x00, 0x00, 0x00, 0xc3};
+        memcpy(f.at(t.toggle.ptrs[0].value), kRefuse, sizeof(kRefuse));
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(!g.switchWindowMode(true) && Fake::get(f.display + 0x34) == 0, "switch refused by the game: reported, config untouched");
+    }
+    {
+        // the viewport is another class: never called
+        Fake f(&t);
+        Fake::put(f.viewport, f.rel(t.vpVtable) + 4);
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        bool fs = false;
+        check(!g.fullscreenNow(&fs) && !g.switchWindowMode(true) && Fake::get(f.viewport + 0x260) == 0, "other viewport class: not called");
+    }
+    {
+        // StopFullscreen's code differs: the switch is off, the volumes are not affected
+        Fake f(&t);
+        f.at(t.toggle.code[1].addr)[3] ^= 0xff;
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        bool fs = false;
+        check(!g.toggleOk() && !g.fullscreenNow(&fs) && !g.switchWindowMode(true), "changed switch code: window mode off");
+        check(g.audioOk(), "changed switch code: volumes still on");
+    }
+    {
+        // a vtable slot that leads elsewhere
+        Fake f(&t);
+        Fake::put(f.at(t.toggle.ptrs[1].addr), f.rel(0x00401000));
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(!g.toggleOk(), "changed vtable slot: window mode off");
+    }
+}
+
+static int g_ran = 0;
+static void countRun(void* user) { g_ran += *static_cast<int*>(user); }
+
+static void betweenFramesTest() {
+    int one = 1;
+    MSG m;
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {}
+    check(gs::runBetweenFrames(&countRun, &one), "between frames: posted");
+    check(!gs::runBetweenFrames(&countRun, &one), "between frames: a second call waits for the first");
+    check(g_ran == 0, "between frames: nothing runs before the game takes its messages");
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {}
+    check(g_ran == 1, "between frames: runs once when the message is taken");
+    check(gs::runBetweenFrames(&countRun, &one), "between frames: posted again");
+    gs::stopBetweenFrames();
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {}
+    check(g_ran == 1, "between frames: stopped: a waiting call is dropped");
+}
+
 static void masterTest() {
     gs::MasterVolume mv;
     check(mv.start(&logCb, nullptr), "volume: worker starts");
@@ -243,6 +319,10 @@ int main() {
     gameTests(gs::eswcTable());
     gameTests(gs::sunriseTable());
     gameTests(gs::originalTable());
+    toggleTests(gs::eswcTable());
+    toggleTests(gs::sunriseTable());
+    toggleTests(gs::originalTable());
+    betweenFramesTest();
     masterTest();
     printf("gs_tests: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

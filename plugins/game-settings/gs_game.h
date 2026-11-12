@@ -12,14 +12,20 @@
 //   into the audio port (CAudioPort SoundVolume +0x14, MusicVolume +0x18).
 //   Every frame the port's update computes each playing buffer's DirectSound volume from those two fields
 //   (music or sound), so a new value is heard at once.
-//   The game has no own path to switch the window mode while it runs (the only one is a developer menu command
-//   whose id is never set), so the window mode is written to the config before the viewport reads it, i.e. it
-//   applies at the next start.
+//   Window mode: the viewport (app+0x3c ESWC, +0x44 Sunrise/Original) has StartFullscreen (vtable +0x9c) and
+//   StopFullscreen (+0xa0); viewport+0x260 is "fullscreen now". The game's own start calls StopFullscreen then
+//   StartFullscreen when the config says fullscreen (retrying with other modes if it fails); the window
+//   procedure's developer command "ToggleFullscreen" calls one or the other while the game runs (that command's
+//   id is never set in the shipped games). StartFullscreen saves the window's style and rectangle, builds the
+//   fullscreen present parameters from the configured fullscreen mode and resets the device through the game's
+//   own reset path (the one it uses after a lost device: resources released and made again); on failure it logs
+//   "-> Fail" and goes back to windowed. StopFullscreen resets to windowed and restores style and rectangle.
 // So:
 //   at start   applyStart(): the chosen values go into the config the game is about to use (its own init applies
 //              them to the audio port and the Direct3D device);
 //   live       setMusic()/setSounds(): config field + port field (what ApplySystemConfig does), heard at once;
-//              setFullscreen(): config field only, "Restart game".
+//              switchWindowMode(): the game's own StartFullscreen / StopFullscreen, like its developer command,
+//              called on the game thread between two frames, and the config field so the next start matches.
 // The game never writes these back to Default.SystemConfig.Gbx while it runs, so the caller keeps the chosen
 // values (Horizon: module settings; Legacy Essentials: its ini) and they are applied again at every start.
 // The launcher's own dialog keeps showing its value.
@@ -70,6 +76,9 @@ struct GameTable {
     uint32_t cfgMusic;    // CSystemConfig AudioMusicVolume
     Part audio;
     Part display;
+    uint32_t vpOffset;    // app -> viewport (CHmsViewportDx9)
+    uintptr_t vpVtable;   // its vtable; +0x9c StartFullscreen, +0xa0 StopFullscreen
+    Part toggle;          // the live switch: both functions' code and the two vtable slots
 };
 
 const GameTable& eswcTable();
@@ -105,8 +114,16 @@ public:
     bool readSounds(float* v);
     bool setMusic(float v);
     bool setSounds(float v);
-    bool readFullscreen(bool* fs);
-    bool setFullscreen(bool fs); // config only: applies at the next start
+    bool readFullscreen(bool* fs);   // the config's value (what the next start uses)
+    bool setFullscreen(bool fs);     // config only
+
+    // Live window mode. toggleOk: signatures of the game's switch. fullscreenNow: the viewport's own flag.
+    bool toggleOk();
+    bool fullscreenNow(bool* fs);
+    // Game thread, between two frames (not inside BeginScene/EndScene, not inside a Reset): switches with the
+    // game's own StartFullscreen / StopFullscreen and writes the config to match. Returns true if the game is in
+    // the wanted mode afterwards (false: the game refused or went back; logged).
+    bool switchWindowMode(bool fullscreen);
 
     const GameTable* table() const { return table_; }
 
@@ -116,6 +133,7 @@ private:
     uint8_t* config();
     uint8_t* display();
     uint8_t* port();
+    uint8_t* viewport();
     bool readVolume(bool music, float* v);
     bool setVolume(bool music, float v);
     void logf(int level, const char* fmt, ...);
@@ -126,6 +144,7 @@ private:
     void* logUser_;
     bool audioDone_ = false, audioOk_ = false;
     bool displayDone_ = false, displayOk_ = false;
+    bool toggleDone_ = false, toggleOk_ = false;
     bool loggedPort_ = false;
 };
 
@@ -164,5 +183,13 @@ private:
     int applied_ = -1;
     bool any_ = false;
 };
+
+// Runs fn(user) on the game's main thread the next time it takes a message from its queue, i.e. between two
+// frames, where the game's own window procedure (and its developer "ToggleFullscreen" command) runs. Call it on
+// the game thread (the first call installs a message hook for that thread). One call at a time: false while one
+// is still waiting (for at most 2 s).
+bool runBetweenFrames(void (*fn)(void* user), void* user);
+// Before the DLL unloads (game thread): removes the hook, drops a call still waiting.
+void stopBetweenFrames();
 
 } // namespace gs

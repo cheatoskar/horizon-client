@@ -37,6 +37,13 @@ const uint8_t kAfterInput[] = {0x8b, 0x4e, 0x18}; // mov ecx,[esi+18] (the confi
 // call [edx+init]
 const uint8_t kViewportEswc[] = {0x8b, 0x4e, 0x3c, 0x8b, 0x11, 0x50, 0x8b, 0x46, 0x18, 0x50, 0xff, 0x92, 0x1c, 0x01, 0x00, 0x00};
 const uint8_t kViewportTms[] = {0x8b, 0x4e, 0x44, 0x8b, 0x11, 0x50, 0x8b, 0x46, 0x18, 0x50, 0xff, 0x92, 0x10, 0x01, 0x00, 0x00};
+// StartFullscreen / StopFullscreen after their SEH prologue (+0x18): push; push esi; mov esi,ecx;
+// mov eax,[esi+260] (fullscreen now); ...
+const uint8_t kStartFsEswc[] = {0x55, 0x56, 0x8b, 0xf1, 0x8b, 0x86, 0x60, 0x02, 0x00, 0x00, 0x33, 0xed, 0x3b, 0xc5, 0x74, 0x13};
+const uint8_t kStartFs[] = {0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x86, 0x60, 0x02, 0x00, 0x00, 0x33, 0xdb, 0x3b, 0xc3, 0x74, 0x13};
+const uint8_t kStopFs[] = {0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x86, 0x60, 0x02, 0x00, 0x00, 0x33, 0xdb, 0x3b, 0xc3,
+                           0x0f, 0x84, 0x15, 0x01, 0x00, 0x00, 0x89, 0x9e, 0x60, 0x02, 0x00, 0x00};
+constexpr uint32_t kFsNow = 0x260; // viewport: fullscreen now
 
 // ---- ESWC 1.80 (TmNationsESWC.exe, timestamp 5ce7272f)
 const CodeSig kEswcAudioCode[] = {
@@ -66,10 +73,21 @@ const ParamSig kEswcDisplayParams[] = {
     {0x00c08a5c, 0x05, 0x0b005001, kCfgDisplay},
     {0x00c0a7c0, 0x01, 0x0b013000, kFullScreen},
 };
+// StartFullscreen 0x007d3f70 ("[Dx9] StartFullscreen %dx%d in %db (%s)"), StopFullscreen 0x007d41b0, vtable 0x00af5cd8
+const CodeSig kEswcToggleCode[] = {
+    {0x007d3f88, sizeof(kStartFsEswc), kStartFsEswc},
+    {0x007d41c8, sizeof(kStopFs), kStopFs},
+};
+const PtrSig kEswcTogglePtrs[] = {
+    {0x00af5d74, 0x007d3f70}, // vtable +0x9c
+    {0x00af5d78, 0x007d41b0}, // vtable +0xa0
+};
 const GameTable kEswc = {
     "TmNationsESWC 1.80", 0x5ce7272f, 0x00c96140, 0x00c945e0, 0xec, 0xf0,
     {kEswcAudioCode, _countof(kEswcAudioCode), kEswcPtrs, _countof(kEswcPtrs), kEswcAudioParams, _countof(kEswcAudioParams)},
     {kEswcDisplayCode, _countof(kEswcDisplayCode), kEswcPtrs + 1, 1, kEswcDisplayParams, _countof(kEswcDisplayParams)},
+    0x3c, 0x00af5cd8,
+    {kEswcToggleCode, _countof(kEswcToggleCode), kEswcTogglePtrs, _countof(kEswcTogglePtrs), nullptr, 0},
 };
 
 // ---- Sunrise (TmSunrise.exe Win10 community repack, timestamp 5cc8f0cf)
@@ -100,10 +118,21 @@ const ParamSig kTmsDisplayParams[] = {
     {0x00ac0e3c, 0x05, 0x0b005001, kCfgDisplay},
     {0x00ac3de8, 0x01, 0x0b013000, kFullScreen},
 };
+// StartFullscreen 0x005e4d80, StopFullscreen 0x005e5040, vtable 0x00a31b68
+const CodeSig kTmsToggleCode[] = {
+    {0x005e4d98, sizeof(kStartFs), kStartFs},
+    {0x005e5058, sizeof(kStopFs), kStopFs},
+};
+const PtrSig kTmsTogglePtrs[] = {
+    {0x00a31c04, 0x005e4d80},
+    {0x00a31c08, 0x005e5040},
+};
 const GameTable kTms = {
     "TmSunrise (Win10 repack)", 0x5cc8f0cf, 0x00b8b494, 0x00b8ab60, 0xe0, 0xe4,
     {kTmsAudioCode, _countof(kTmsAudioCode), kTmsPtrs, _countof(kTmsPtrs), kTmsAudioParams, _countof(kTmsAudioParams)},
     {kTmsDisplayCode, _countof(kTmsDisplayCode), kTmsPtrs + 1, 1, kTmsDisplayParams, _countof(kTmsDisplayParams)},
+    0x44, 0x00a31b68,
+    {kTmsToggleCode, _countof(kTmsToggleCode), kTmsTogglePtrs, _countof(kTmsTogglePtrs), nullptr, 0},
 };
 
 // ---- Original (TMORIGINAL.EXE Online Patch v2 community exe, timestamp 5d337477)
@@ -134,10 +163,21 @@ const ParamSig kTmoDisplayParams[] = {
     {0x00abce3c, 0x05, 0x0b005001, kCfgDisplay},
     {0x00abfde8, 0x01, 0x0b013000, kFullScreen},
 };
+// StartFullscreen 0x005e48e0, StopFullscreen 0x005e4ba0, vtable 0x00a2db28
+const CodeSig kTmoToggleCode[] = {
+    {0x005e48f8, sizeof(kStartFs), kStartFs},
+    {0x005e4bb8, sizeof(kStopFs), kStopFs},
+};
+const PtrSig kTmoTogglePtrs[] = {
+    {0x00a2dbc4, 0x005e48e0},
+    {0x00a2dbc8, 0x005e4ba0},
+};
 const GameTable kTmo = {
     "TMORIGINAL (Online Patch v2)", 0x5d337477, 0x00b866f4, 0x00b85dc0, 0xe0, 0xe4,
     {kTmoAudioCode, _countof(kTmoAudioCode), kTmoPtrs, _countof(kTmoPtrs), kTmoAudioParams, _countof(kTmoAudioParams)},
     {kTmoDisplayCode, _countof(kTmoDisplayCode), kTmoPtrs + 1, 1, kTmoDisplayParams, _countof(kTmoDisplayParams)},
+    0x44, 0x00a2db28,
+    {kTmoToggleCode, _countof(kTmoToggleCode), kTmoTogglePtrs, _countof(kTmoTogglePtrs), nullptr, 0},
 };
 
 bool rd32(uintptr_t addr, uint32_t* out) { return addr && safeRead(reinterpret_cast<const void*>(addr), out, 4); }
@@ -236,6 +276,10 @@ bool Game::verify(const Part& part, const char* what, bool* done, bool* ok) {
     return true;
 }
 
+bool Game::toggleOk() {
+    return displayOk() && verify(table_ ? table_->toggle : Part{}, "window mode switch", &toggleDone_, &toggleOk_);
+}
+
 bool Game::audioOk() { return verify(table_ ? table_->audio : Part{}, "music and sound volume", &audioDone_, &audioOk_); }
 bool Game::displayOk() { return verify(table_ ? table_->display : Part{}, "window mode", &displayDone_, &displayOk_); }
 
@@ -312,6 +356,62 @@ bool Game::readFullscreen(bool* fs) {
     return true;
 }
 
+uint8_t* Game::viewport() {
+    uint32_t app = 0, vp = 0, vt = 0;
+    if (!rd32(rb(table_->app), &app) || !app || !rd32(app + table_->vpOffset, &vp) || !vp || !rd32(vp, &vt)) return nullptr;
+    if (vt != rb(table_->vpVtable)) return nullptr; // another class (or not made yet): never call into it
+    return reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(vp));
+}
+
+bool Game::fullscreenNow(bool* fs) {
+    if (!toggleOk()) return false;
+    uint8_t* vp = viewport();
+    uint32_t x = 2;
+    if (!vp || !safeRead(vp + kFsNow, &x, 4) || x > 1) return false;
+    *fs = x != 0;
+    return true;
+}
+
+namespace {
+using ViewportFn = int(__fastcall*)(void* self, void* unused); // thiscall without arguments
+int callViewport(uintptr_t fn, void* vp, bool* faulted) {
+    __try {
+        return reinterpret_cast<ViewportFn>(fn)(vp, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *faulted = true;
+        return 0;
+    }
+}
+} // namespace
+
+bool Game::switchWindowMode(bool fullscreen) {
+    bool now = false;
+    if (!fullscreenNow(&now)) return false;
+    if (now == fullscreen) return true;
+    uint8_t* vp = viewport();
+    uint32_t vt = 0, fn = 0;
+    // the object's own vtable slot, checked once more right before the call
+    if (!vp || !rd32(reinterpret_cast<uintptr_t>(vp), &vt) || !rd32(vt + (fullscreen ? 0x9c : 0xa0), &fn) ||
+        fn != rb(fullscreen ? table_->toggle.ptrs[0].value : table_->toggle.ptrs[1].value))
+        return false;
+    logf(0, "window mode: %s (the game's own %s)", fullscreen ? "fullscreen" : "windowed", fullscreen ? "StartFullscreen" : "StopFullscreen");
+    bool faulted = false;
+    callViewport(fn, vp, &faulted);
+    if (faulted) {
+        logf(2, "window mode: the game's switch raised an exception: window mode off for this start");
+        toggleOk_ = false;
+        return false;
+    }
+    bool after = !fullscreen;
+    fullscreenNow(&after);
+    if (after != fullscreen) {
+        logf(1, "window mode: the game stayed %s (see the game's own log line \"StartFullscreen ... -> Fail\")", after ? "fullscreen" : "windowed");
+        return false;
+    }
+    setFullscreen(fullscreen); // the next start the same
+    return true;
+}
+
 bool Game::setFullscreen(bool fs) {
     bool cur = false;
     if (!readFullscreen(&cur)) return false;
@@ -357,6 +457,67 @@ bool Game::applyStart(const Prefs& p) {
         }
     }
     return ok;
+}
+
+// ---------------------------------------------------------------- between frames
+namespace {
+constexpr WPARAM kMarker = 0x47534d57; // 'GSMW'
+HHOOK g_hook = nullptr;
+DWORD g_thread = 0;
+HWND g_wnd = nullptr;
+void (*volatile g_fn)(void*) = nullptr;
+void* volatile g_user = nullptr;
+DWORD g_postedAt = 0;
+
+LRESULT CALLBACK getMessageHook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION && wp == PM_REMOVE) {
+        MSG* m = reinterpret_cast<MSG*>(lp);
+        if (m && m->message == WM_NULL && m->wParam == kMarker) {
+            void (*fn)(void*) = g_fn;
+            void* user = g_user;
+            g_fn = nullptr;
+            if (fn) fn(user);
+        }
+    }
+    return CallNextHookEx(g_hook, code, wp, lp);
+}
+
+BOOL CALLBACK pickWindow(HWND h, LPARAM lp) {
+    HWND* out = reinterpret_cast<HWND*>(lp);
+    if (!*out) *out = h;
+    if (IsWindowVisible(h)) {
+        *out = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+} // namespace
+
+bool runBetweenFrames(void (*fn)(void* user), void* user) {
+    if (!fn || (g_fn && GetTickCount() - g_postedAt < 2000)) return false; // a lost post expires
+    if (!g_hook) {
+        g_thread = GetCurrentThreadId();
+        g_hook = SetWindowsHookExW(WH_GETMESSAGE, &getMessageHook, nullptr, g_thread);
+        if (!g_hook) return false;
+    }
+    if (!g_wnd || !IsWindow(g_wnd)) {
+        HWND w = nullptr;
+        EnumThreadWindows(g_thread, &pickWindow, reinterpret_cast<LPARAM>(&w));
+        g_wnd = w;
+    }
+    g_user = user;
+    g_fn = fn;
+    g_postedAt = GetTickCount();
+    BOOL ok = g_wnd ? PostMessageW(g_wnd, WM_NULL, kMarker, 0) : FALSE;
+    if (!ok) ok = PostThreadMessageW(g_thread, WM_NULL, kMarker, 0);
+    if (!ok) g_fn = nullptr;
+    return ok != FALSE;
+}
+
+void stopBetweenFrames() {
+    g_fn = nullptr;
+    if (g_hook) UnhookWindowsHookEx(g_hook);
+    g_hook = nullptr;
 }
 
 } // namespace gs
