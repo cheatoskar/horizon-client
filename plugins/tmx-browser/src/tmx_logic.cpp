@@ -44,38 +44,6 @@ std::string tagSummary(uint32_t mask) {
     return o;
 }
 
-static void addFilters(std::string& q, const Form& f) {
-    if (!f.name.empty()) q += "&name=" + ck::urlEscape(f.name);
-    if (!f.author.empty()) q += "&author=" + ck::urlEscape(f.author);
-    if (f.tagMask) q += "&tags=" + tagList(f.tagMask);
-    if (f.difficulty >= 0 && f.difficulty <= 3) q += "&difficulty=" + std::to_string(f.difficulty);
-    if (f.length > 0 && f.length < kLengthCount) {
-        const LengthPreset& l = kLengths[f.length];
-        if (l.minMs >= 0) q += "&lengthmin=" + std::to_string(l.minMs);
-        if (l.maxMs >= 0) q += "&lengthmax=" + std::to_string(l.maxMs);
-    }
-    if (f.awards > 0) q += "&awards=" + std::to_string(f.awards);
-}
-
-std::string searchPath(const std::string& site, const Form& f, int page) {
-    std::string q = "/v1/tmx/search?game=" + ck::urlEscape(site);
-    addFilters(q, f);
-    q += "&page=" + std::to_string(page < 1 ? 1 : page);
-    return q;
-}
-
-std::string randomPath(const std::string& site, const Form& f) {
-    std::string q = "/v1/tmx/random?game=" + ck::urlEscape(site);
-    Form g = f;
-    g.name.clear(); // the random endpoint takes no text filters
-    g.author.clear();
-    addFilters(q, g);
-    return q;
-}
-
-std::string thumbPath(const std::string& site, int id) { return "/v1/tmx/thumb?game=" + ck::urlEscape(site) + "&id=" + std::to_string(id); }
-std::string mapPath(const std::string& site, int id) { return "/v1/tmx/map?game=" + ck::urlEscape(site) + "&id=" + std::to_string(id); }
-
 std::string siteHost(const std::string& site) {
     if (site == "tmn") return "nations.tm-exchange.com";
     if (site == "tms") return "sunrise.tm-exchange.com";
@@ -102,6 +70,11 @@ bool parseTrack(const void* jsonValue, Track& t) {
     if (const horizon::Json* v = j->get("uploaded")) t.uploaded = v->asString();
     if (const horizon::Json* v = j->get("uid")) t.uid = v->asString();
     if (const horizon::Json* v = j->get("thumbnail")) t.thumbnail = v->type != horizon::Json::Bool || v->b;
+    if (const horizon::Json* v = j->get("thumb")) {
+        t.thumbKind = static_cast<int>(v->asInt(0));
+        if (t.thumbKind < -1 || t.thumbKind > 2) t.thumbKind = 0;
+        t.thumbnail = t.thumbKind >= 0;
+    }
     if (const horizon::Json* v = j->get("difficulty")) {
         if (v->type == horizon::Json::String) t.difficulty = v->str;
         else if (v->isNumber() && v->asInt() >= 0 && v->asInt() <= 3) t.difficulty = kDifficulties[v->asInt()];
@@ -116,93 +89,15 @@ bool parseTrack(const void* jsonValue, Track& t) {
     return true;
 }
 
-static bool checkOk(const horizon::Json& root, std::string& err) {
-    if (root.type != horizon::Json::Object) {
-        err = "Unexpected answer";
-        return false;
-    }
-    if (const horizon::Json* ok = root.get("ok"))
-        if (ok->type == horizon::Json::Bool && !ok->b) {
-            const horizon::Json* e = root.get("error");
-            err = e && e->type == horizon::Json::String && !e->str.empty() ? e->str : "TMX search failed";
-            return false;
-        }
-    return true;
-}
-
-bool parseSearch(const std::string& body, SearchResult& out, std::string& err) {
-    horizon::Json root;
-    std::string perr;
-    if (!horizon::JsonParser::parse(body, root, perr)) {
-        err = "Unexpected answer";
-        return false;
-    }
-    if (!checkOk(root, err)) return false;
-    out = SearchResult();
-    if (const horizon::Json* v = root.get("page")) out.page = static_cast<int>(v->asInt(1));
-    if (const horizon::Json* v = root.get("more")) out.more = v->type == horizon::Json::Bool && v->b;
-    const horizon::Json* r = root.get("results");
-    if (!r || r->type != horizon::Json::Array) {
-        err = "Unexpected answer";
-        return false;
-    }
-    for (const horizon::Json& e : r->arr) {
-        Track t;
-        if (parseTrack(&e, t)) out.tracks.push_back(std::move(t));
-    }
-    return true;
-}
-
-bool parseRandom(const std::string& body, Track& out, bool& found, std::string& err) {
-    horizon::Json root;
-    std::string perr;
-    found = false;
-    if (!horizon::JsonParser::parse(body, root, perr)) {
-        err = "Unexpected answer";
-        return false;
-    }
-    if (!checkOk(root, err)) return false;
-    const horizon::Json* r = root.get("result");
-    if (!r || r->type == horizon::Json::Null) return true;
-    found = parseTrack(r, out);
-    return true;
-}
-
-std::string bridgeErrorText(int status) {
-    if (status >= 200 && status < 400) return "";
-    switch (status) {
-    case HORIZON_BRIDGE_ERR_NOT_CONNECTED: return "TM Horizon is not connected";
-    case HORIZON_BRIDGE_ERR_TIMEOUT: return "TM Horizon did not answer in time";
-    case HORIZON_BRIDGE_ERR_RATE_LIMIT: return "Too many requests, wait a moment";
-    case HORIZON_BRIDGE_ERR_TOO_LARGE: return "The answer was too large";
-    case HORIZON_BRIDGE_ERR_CANCELLED: return "Cancelled";
-    case 401: return "Press Allow in TM Horizon";
-    case 404: return "Not found on TMX";
-    case 429: return "Too many requests, wait a moment";
-    default: break;
-    }
-    return "TMX did not answer (" + std::to_string(status) + ")";
-}
-
 std::string playResultText(int r) {
     switch (r) {
     case HORIZON_OK: return "Map started";
-    case HORIZON_ERR_NOT_SUPPORTED: return "Playing maps is not supported here";
-    case HORIZON_ERR_WRONG_STATE: return "Go back to the main menu to play";
-    case HORIZON_ERR_BLOCKED_ONLINE: return "Playing is off while online";
-    case HORIZON_ERR_INVALID_ARG: return "The game could not open this file";
-    case HORIZON_ERR_BUSY: return "Busy, try again in a moment";
-    default: return "The game could not start the map";
-    }
-}
-
-std::string bridgeStateText(int s) {
-    switch (s) {
-    case HORIZON_BRIDGE_CONNECTED: return "Connected to TM Horizon";
-    case HORIZON_BRIDGE_SEARCHING: return "Start TM Horizon to search TMX";
-    case HORIZON_BRIDGE_PAIRING: return "Press Allow in TM Horizon";
-    case HORIZON_BRIDGE_DENIED: return "Denied in TM Horizon, it will ask again soon";
-    default: return "The TM Horizon bridge is off";
+    case HORIZON_ERR_NOT_SUPPORTED: return "Not supported here";
+    case HORIZON_ERR_WRONG_STATE: return "Main menu only";
+    case HORIZON_ERR_BLOCKED_ONLINE: return "Leave the server first";
+    case HORIZON_ERR_INVALID_ARG: return "Game refused the file";
+    case HORIZON_ERR_BUSY: return "Busy, try again";
+    default: return "Could not start the map";
     }
 }
 
@@ -342,6 +237,7 @@ std::string favouritesToJson(const std::vector<FavEntry>& favs) {
         o.obj.emplace_back("environment", jStr(f.t.environment));
         o.obj.emplace_back("uid", jStr(f.t.uid));
         o.obj.emplace_back("uploaded", jStr(f.t.uploaded));
+        o.obj.emplace_back("thumb", jNum(f.t.thumbKind));
         o.obj.emplace_back("added", jStr(f.added));
         arr.arr.push_back(std::move(o));
     }

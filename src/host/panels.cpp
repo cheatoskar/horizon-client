@@ -384,10 +384,11 @@ HorizonResult panelRegister(Plugin* p, const HorizonPanelDef* def) {
         q->dw = def->default_w;
         q->dh = def->default_h;
     }
-    if (fresh && !load(*q) && (q->flags & HORIZON_PANEL_HUD)) {
+    if (fresh && !load(*q) && (q->flags & HORIZON_PANEL_HUD) && !(q->flags & HORIZON_PANEL_START_HIDDEN)) {
         q->detached = true; // a HUD panel starts in its own window, on screen with the menu closed
         q->keepOpen = true;
     }
+    // START_HIDDEN: stays a tab (listed as hidden in layout mode) until the player shows it
     logLine(HORIZON_LOG_INFO, p->id.c_str(), "panel \"%s\" (%s)%s", q->key.c_str(), q->title.c_str(), q->detached ? ", in its own window" : "");
     return HORIZON_OK;
 }
@@ -477,8 +478,13 @@ void panelDrawTab(const std::string& pluginId, const std::string& key) {
         ImGui::Spacing();
         drawOptions(*q);
         ImGui::Spacing();
-        if (ImGui::Button("Bring it back")) attach(*q);
+        if (ImGui::Button((q->flags & HORIZON_PANEL_HUD) ? "Hide" : "Dock")) attach(*q);
         return;
+    }
+    // a widget that is not on screen: one click shows it at its place
+    if (q->flags & HORIZON_PANEL_HUD) {
+        if (ImGui::Button("Show")) showWidget(*q);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show on screen.");
     }
     // the pop-out button: a square icon button the size of a normal button, top right of every panel tab
     const float side = ImGui::GetFrameHeight();
@@ -668,7 +674,8 @@ void panelsResetLayout() {
     for (auto& up : g_panels) {
         HostPanel& q = *up;
         if (!(q.flags & HORIZON_PANEL_HUD) && !isWidget(q)) continue;
-        if (q.flags & HORIZON_PANEL_HUD) {
+        if ((q.flags & HORIZON_PANEL_START_HIDDEN) && !isWidget(q)) continue; // off until the player shows it
+        if ((q.flags & HORIZON_PANEL_HUD) && !(q.flags & HORIZON_PANEL_START_HIDDEN)) {
             q.detached = true;
             q.keepOpen = true;
         }

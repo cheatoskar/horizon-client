@@ -18,6 +18,9 @@ struct Track {
     int authorTime = -1; // ms, -1 unknown
     std::vector<std::string> tags;
     bool thumbnail = true;
+    // Which picture TMX has: 0 unknown (favourites saved by 0.1: ask image/1), 1 the map's own thumbnail
+    // (Forever maps), 2 an uploaded screenshot (the only kind on Nations, Sunrise and Original), -1 none.
+    int thumbKind = 0;
 };
 
 struct FavEntry {
@@ -53,11 +56,6 @@ struct Form {
 
 std::string tagList(uint32_t mask); // "0,2,5"
 std::string tagSummary(uint32_t mask); // "Race, Maze"
-// "/v1/tmx/search?game=..." page >= 1
-std::string searchPath(const std::string& site, const Form& f, int page);
-std::string randomPath(const std::string& site, const Form& f);
-std::string thumbPath(const std::string& site, int id);
-std::string mapPath(const std::string& site, int id);
 // Host name of the exchange for a site code, and the track page URL.
 std::string siteHost(const std::string& site);
 std::string trackUrl(const std::string& site, int id);
@@ -68,15 +66,43 @@ struct SearchResult {
     int page = 1;
     std::vector<Track> tracks;
 };
-bool parseSearch(const std::string& body, SearchResult& out, std::string& err);
-// found = false for {"ok":true,"result":null}
-bool parseRandom(const std::string& body, Track& out, bool& found, std::string& err);
-bool parseTrack(const void* jsonValue, Track& out); // horizon::Json*
-// One short line for a failed bridge answer ("" when status is a success).
-std::string bridgeErrorText(int status);
+bool parseTrack(const void* jsonValue, Track& out); // horizon::Json* (favourites.json entries)
 // One short line for a HorizonResult of play_map_file.
 std::string playResultText(int result);
-std::string bridgeStateText(int state);
+
+// ---------------------------------------------------------------- TMX API (direct, tmx_api.cpp)
+// The plugin talks to the exchange of the running game itself (TMX API v2, the same calls TM Horizon makes).
+constexpr size_t kMaxMapBytes = 8u << 20;   // a .Challenge.Gbx larger than this is refused
+constexpr size_t kMaxThumbBytes = 3u << 20; // a picture larger than this is skipped
+constexpr size_t kMaxJsonBytes = 2u << 20;
+constexpr int kPageSize = 20;
+bool knownSite(const std::string& site);
+bool siteForever(const std::string& site); // tmnf, tmuf: maps carry their own thumbnail, Play goes through the game
+// https://<host>/api/tracks?fields=...&count=..&inunlimiter=0[&name=..&author=..&tag=..&difficulty=..
+// &authortimemin=..&authortimemax=..][&after=<last id of the page before>]. Awards are filtered here, not by TMX.
+std::string apiSearchUrl(const std::string& site, const Form& f, int count, int afterId);
+std::string apiRandomUrl(const std::string& site, const Form& f); // 100 maps with the filters (no name/author), one is picked
+std::string imageUrl(const std::string& site, const Track& t);    // the small picture of a map
+std::string gbxUrl(const std::string& site, int id);              // the map file
+std::string playUrl(const std::string& site, int id);             // Forever: answers 302 to a tmtp:// link for the game
+// TMX API v2 answer -> tracks with at least minAwards awards. lastId: the last TrackId of the page (also of
+// filtered ones), the cursor for the next page. more: TMX has more.
+bool parseApiTracks(const std::string& body, int minAwards, std::vector<Track>& out, bool& more, int& lastId, std::string& err);
+bool parseApiTrack(const void* jsonValue, Track& out); // one element of "Results" (horizon::Json*)
+// The Location of /trackplay/<id> on tmnf.exchange / tmuf.exchange: tmtp:///:tmx:download:<site>?token=...
+bool tmtpLinkOk(const std::string& link);
+// A downloaded map: size, "GBX" header, version 3..6 and the challenge class (0x03043000, or 0x24003000 on
+// the older games). err gets a short line.
+bool checkMapFile(const void* data, size_t len, std::string& err);
+// Only these hosts are fetched (also after redirects).
+bool allowedHost(const std::string& host);
+uint32_t fnv1a(const void* data, size_t len);
+// TMX's "no picture" image (the grey TMX logo, served for maps without a screenshot on the old sites).
+bool isPlaceholderImage(const void* data, size_t len);
+// One short line for an HTTP status or a network error (status <= 0).
+std::string netErrorText(int status);
+// Thumbnail cache file name: "<site>-<id>.img"
+std::string thumbCacheName(const std::string& site, int id);
 
 // ---------------------------------------------------------------- files
 // No \/:*?"<>|, no $-codes, no control chars, trimmed, at most maxChars characters (UTF-8 aware).

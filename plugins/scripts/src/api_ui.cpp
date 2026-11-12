@@ -14,6 +14,7 @@
 #include "api_types.h"
 #include "engine.h"
 #include "imgui.h"
+#include "imgui_internal.h" // the widget window's draw list (UI::WidgetAlpha), layout mode window lookup
 #include "scriptarray/scriptarray.h"
 
 namespace hs {
@@ -23,6 +24,7 @@ enum class Open : uint8_t { Window, Child, Table, Color, Var, Id, Group, Disable
 
 std::vector<Open> g_stack;
 bool g_allowed = false;
+bool g_inWidget = false;
 bool g_scopePushed = false;
 
 const char* openName(Open o) {
@@ -482,6 +484,69 @@ Vec4 colorOf(const HorizonColor HorizonStyle::*c, Vec4 fallback) {
     const HorizonColor& v = st->*c;
     return Vec4{v.r, v.g, v.b, v.a};
 }
+// ---- widgets ----
+// Layout mode (Ctrl+Insert) is on: the host draws its full-screen "##hzlayout" window.
+bool isLayoutMode() {
+    if (!ImGui::GetCurrentContext()) return false;
+    ImGuiWindow* w = ImGui::FindWindowByName("##hzlayout");
+    return w && (w->Active || w->WasActive);
+}
+
+bool widgetIdOk(const std::string& id) {
+    if (id.empty() || id.size() > 24) return false;
+    for (char c : id)
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ' ')) return false;
+    return true;
+}
+
+bool addWidget(const std::string& id, const std::string& title, const Vec2& place) {
+    if (!requirePerm(PermUi, "UI::AddWidget")) return false;
+    Script* s = currentScript();
+    if (!s) return false;
+    if (!widgetIdOk(id)) {
+        scriptError("UI::AddWidget: the id is 1-24 letters, digits, space, '-', '_' or '.'");
+        return false;
+    }
+    for (WidgetDef& w : s->widgets)
+        if (w.id == id) { // again: new title and place
+            w.title = title.empty() ? id : title.substr(0, 40);
+            w.x = place.x;
+            w.y = place.y;
+            return true;
+        }
+    if (s->widgets.size() >= 8) {
+        scriptError("UI::AddWidget: at most 8 widgets per script");
+        return false;
+    }
+    WidgetDef w;
+    w.id = id;
+    w.title = title.empty() ? id : title.substr(0, 40);
+    w.x = place.x < 0.0f ? 0.0f : place.x > 1.0f ? 1.0f : place.x;
+    w.y = place.y < 0.0f ? 0.0f : place.y > 1.0f ? 1.0f : place.y;
+    s->widgets.push_back(w);
+    return true;
+}
+
+// Fades the whole widget, background included. Ignored while the menu or layout mode is open (alpha 1 then).
+void widgetAlpha(float alpha) {
+    if (!ok("UI::WidgetAlpha")) return;
+    if (!g_inWidget) {
+        scriptError("UI::WidgetAlpha only works inside RenderWidget()");
+        return;
+    }
+    if (isMenuOpen() || isLayoutMode()) return;
+    const float a = alpha < 0.0f ? 0.0f : alpha > 1.0f ? 1.0f : alpha;
+    if (a >= 0.999f) return;
+    // the window background and border are already in the window's draw list: scale their alpha
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int i = 0; i < dl->VtxBuffer.Size; i++) {
+        ImU32& c = dl->VtxBuffer[i].col;
+        const ImU32 na = static_cast<ImU32>(static_cast<float>(c >> IM_COL32_A_SHIFT) * a + 0.5f);
+        c = (c & ~IM_COL32_A_MASK) | (na << IM_COL32_A_SHIFT);
+    }
+    if (push(Open::Var)) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * a);
+}
+
 Vec4 accent() { return colorOf(&HorizonStyle::accent, Vec4{1.0f, 0.42f, 0.10f, 1.0f}); }
 Vec4 textColor() { return colorOf(&HorizonStyle::text, Vec4{0.93f, 0.94f, 0.95f, 1.0f}); }
 Vec4 mutedColor() { return colorOf(&HorizonStyle::muted, Vec4{0.56f, 0.59f, 0.64f, 1.0f}); }
@@ -511,6 +576,8 @@ void uiEndCall() {
 }
 
 bool uiAllowed() { return g_allowed; }
+bool uiInWidget() { return g_inWidget; }
+void uiSetInWidget(bool on) { g_inWidget = on; }
 
 #define R(x)                                                                                                                                         \
     do {                                                                                                                                             \
@@ -694,6 +761,9 @@ bool registerUiApi(asIScriptEngine* e) {
         {"void WindowDrawCircle(const vec2 &in center, float radius, const vec4 &in color, float thickness = 1)", asFUNCTION(wDrawCircle)},
         {"void WindowDrawTriangleFilled(const vec2 &in a, const vec2 &in b, const vec2 &in c, const vec4 &in color)", asFUNCTION(wDrawTriangleFilled)},
         {"bool IsMenuOpen()", asFUNCTION(isMenuOpen)},
+        {"bool IsLayoutMode()", asFUNCTION(isLayoutMode)},
+        {"bool AddWidget(const string &in id, const string &in title, const vec2 &in place = vec2(1, 0))", asFUNCTION(addWidget)},
+        {"void WidgetAlpha(float alpha)", asFUNCTION(widgetAlpha)},
         {"float GetScale()", asFUNCTION(getScale)},
         {"vec4 AccentColor()", asFUNCTION(accent)},
         {"vec4 TextColor()", asFUNCTION(textColor)},

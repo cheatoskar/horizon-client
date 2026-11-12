@@ -1,30 +1,20 @@
-// Map Info: name, author and medal times of the running map, from OnMapLoaded.
-// Small box in the HUD font: name, "by <author>", then one row per medal (a drawn medal icon and the time).
-// It fades out "Hide after" seconds after the map loads and comes back while the Horizon menu is open and
-// after the "Show script overlays" hotkey (default Ctrl+F4, the host calls OnPeek()).
-// Runs unchanged on ESWC, Sunrise, TMNF and TMUF. Some games leave the author empty for maps started
-// from their own menus; then the line is simply left out.
-
-[Setting name="Show"]
-bool show = true;
-
-[Setting name="Position" options="Top left|Top right|Bottom left|Bottom right"]
-int position = 0;
+// Map Info: name, author and medal times of the running map, from OnMapLoaded, as a widget.
+// Name, "by <author>", then one row per medal (a drawn medal icon and the time).
+// The widget is off until you show it (Ctrl+Insert, "+ Map Info" in the bar at the top, or "Show" on its tab on
+// the Horizon Scripts page); layout mode moves and resizes it and Horizon keeps the place. It fades out
+// "Hide after" seconds after the map loads and comes back while the menu is open and after the
+// "Show script widgets" hotkey (default Ctrl+F4, the host calls OnPeek()).
+// Runs unchanged on ESWC, Sunrise, Original, TMNF and TMUF. Some games leave the author empty for maps
+// started from their own menus; then the line is simply left out.
 
 [Setting name="Medal times"]
 bool showMedals = true;
 
-[Setting name="Hide while driving" description="Only show it in menus, on the end screen and in replays"]
+[Setting name="Hide while driving"]
 bool hideWhileDriving = false;
 
-[Setting name="Hide after" description="Seconds the box stays visible after a map starts or the hotkey is pressed. 0 = always visible" min=0 max=120]
+[Setting name="Hide after" description="Seconds after a map start. 0 = always." min=0 max=120]
 int hideAfter = 10;
-
-[Setting name="Background" min=0 max=1]
-float background = 0.7f;
-
-[Setting name="Distance from the edge" min=0 max=200]
-int margin = 16;
 
 // Medal colours
 const vec4 AUTHOR = vec4(0.18f, 0.80f, 0.44f, 1.0f);
@@ -57,6 +47,7 @@ void Wake() {
 void OnPeek() { Wake(); }
 
 void Main() {
+    UI::AddWidget("map-info", "Map Info", vec2(0, 0)); // top left
     // loaded (or reloaded) while a map is already running: pick it up
     Game::Map@ map = Game::CurrentMap();
     if (map !is null) OnMapLoaded(map);
@@ -115,34 +106,23 @@ void MedalTime(const vec4 &in color, int ms) {
     if (ms >= 0) MedalRow(color, Time::FormatRace(ms));
 }
 
-void Render() {
-    if (!show || !haveMap) return;
-    if (hideWhileDriving && Game::InRace()) return;
-    float target = UI::IsMenuOpen() ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
+void RenderWidget(const string &in id) {
+    bool preview = UI::IsMenuOpen() || UI::IsLayoutMode();
+    float target = preview ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
+    if (!preview && (!haveMap || (hideWhileDriving && Game::InRace()))) target = 0.0f;
     float step = Time::Delta() / FADE_MS;
     if (alpha < target) alpha = alpha + step > target ? target : alpha + step;
     else alpha = alpha - step < target ? target : alpha - step;
-    if (alpha <= 0.001f) return;
+    UI::WidgetAlpha(alpha);
     float sc = UI::GetScale();
-    UI::PushStyleVar(UI::StyleVar::Alpha, alpha);
-    UI::PushStyleVar(UI::StyleVar::WindowPadding, vec2(8.0f * sc, 5.0f * sc));
     UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(5.0f * sc, 1.0f * sc));
-
-    vec2 screen = UI::GetScreenSize();
-    float m = margin * sc;
-    bool right = position == 1 || position == 3;
-    bool bottom = position == 2 || position == 3;
-    UI::SetNextWindowPos(vec2(right ? screen.x - m : m, bottom ? screen.y - m : m), UI::Cond::Always,
-                         vec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f));
-    UI::SetNextWindowBgAlpha(background);
-    int flags = UI::WindowFlags::NoDecoration | UI::WindowFlags::AlwaysAutoResize | UI::WindowFlags::NoInputs
-              | UI::WindowFlags::NoSavedSettings | UI::WindowFlags::NoFocusOnAppearing | UI::WindowFlags::NoNav;
-    if (UI::Begin("Map Info", flags)) {
+    if (!haveMap) {
+        UI::TextColored(UI::MutedColor(), "No map");
+    } else {
         UI::Text(mapName.isEmpty() ? "Unnamed map" : mapName);
         string sub = mapAuthor.isEmpty() ? "" : "by " + mapAuthor;
         if (!environment.isEmpty()) sub += (sub.isEmpty() ? "" : " - ") + environment;
         if (!sub.isEmpty()) UI::TextColored(UI::MutedColor(), sub);
-
         if (showMedals) {
             if (stunts) {
                 if (authorScore >= 0) MedalRow(AUTHOR, "" + authorScore);
@@ -155,6 +135,5 @@ void Render() {
             }
         }
     }
-    UI::End();
-    UI::PopStyleVar(3);
+    UI::PopStyleVar();
 }

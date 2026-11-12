@@ -5,6 +5,8 @@
 //
 //   scripts_fakehost.exe <scripts.dll> <examples folder>
 #include <windows.h>
+
+#include <map>
 #include <stdio.h>
 #include <string.h>
 
@@ -59,6 +61,32 @@ bool windowDrawn(const char* name) {
     return w && w->Active; // Active: drawn in the frame that just ended
 }
 
+// The script widgets: host panels with HUD | START_HIDDEN, drawn here in their own windows like the host does.
+const testhost::Panel* widget(const char* prefix) {
+    for (const testhost::Panel& p : testhost::panels)
+        if (p.key.compare(0, strlen(prefix), prefix) == 0) return &p;
+    return nullptr;
+}
+int widgetCount() {
+    int n = 0;
+    for (const testhost::Panel& p : testhost::panels)
+        if (p.key.compare(0, 2, "w-") == 0) n++;
+    return n;
+}
+std::string widgetWindow(const testhost::Panel& p) { return "widget###" + p.key; }
+// Highest vertex alpha in the widget's window: 0 = faded out (UI::WidgetAlpha), content and background.
+int widgetAlpha(const testhost::Panel& p) {
+    ImGuiWindow* w = ImGui::FindWindowByName(widgetWindow(p).c_str());
+    if (!w || !w->Active || !w->DrawList) return -1;
+    int a = 0;
+    for (int i = 0; i < w->DrawList->VtxBuffer.Size; i++) {
+        const int v = static_cast<int>(w->DrawList->VtxBuffer[i].col >> IM_COL32_A_SHIFT);
+        if (v > a) a = v;
+    }
+    return a;
+}
+std::map<std::string, float> g_widgetHeight; // content height drawn last frame
+
 struct Exports {
     HorizonPlugin_InfoFn info;
     HorizonPlugin_InitFn init;
@@ -81,6 +109,15 @@ void frame(const Exports& x, bool panels) {
             p.draw(p.user);
             ImGui::PopID();
         }
+        ImGui::End();
+    }
+    for (const testhost::Panel& p : testhost::panels) {
+        if (p.key.compare(0, 2, "w-") != 0) continue;
+        ImGui::SetNextWindowPos(ImVec2(p.dx * 1600.0f, p.dy * 900.0f));
+        ImGui::Begin(widgetWindow(p).c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
+        const float y0 = ImGui::GetCursorPosY();
+        p.draw(p.user);
+        g_widgetHeight[p.key] = ImGui::GetCursorPosY() - y0;
         ImGui::End();
     }
     ImGui::EndFrame();
@@ -119,6 +156,14 @@ void runGame(const char* dll, const std::string& examples, const std::string& ro
     const HorizonHostApi host = testhost::api();
     check(x.init(&host) == 0, "Init returns 0");
     check(testhost::panels.size() == 2 && testhost::panels[0].title == "Scripts" && testhost::panels[1].title == "Options", "panels: Scripts, Options");
+    frame(x, true); // the widgets of running scripts are registered once a frame (DrawOverlay)
+    check(testhost::panels.size() == 4, "panels: + 2 script widgets after the first frame");
+    const testhost::Panel* wc = widget("w-clock-clock-");
+    const testhost::Panel* wm = widget("w-map-info-map-info-");
+    const uint32_t hidden = HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN;
+    check(wc && wm && wc->title == "Clock" && wm->title == "Map Info" && wc->flags == hidden && wm->flags == hidden,
+          "UI::AddWidget: Clock and Map Info are host widgets, off until shown");
+    check(wc && wm && wc->dx > 0.6f && wc->dy < 0.34f && wm->dx < 0.34f && wm->dy < 0.34f, "default places: clock top right, map info top left");
     const std::string title = testhost::gameName(game);
     check(contains(testhost::logs(), "[clock] Clock ready on " + title), "clock: Main() ran");
 
@@ -153,35 +198,39 @@ void runGame(const char* dll, const std::string& examples, const std::string& ro
         x.onEvent(&e);
         frame(x, true);
     }
-    check(windowDrawn("Clock##hs.clock"), "clock window drawn");
-    check(windowDrawn("Map Info##hs.map-info"), "map-info window drawn");
+    wc = widget("w-clock-clock-");
+    wm = widget("w-map-info-map-info-");
+    check(wc && wm && g_widgetHeight[wc->key] > 10.0f && g_widgetHeight[wm->key] > 30.0f, "RenderWidget: clock and map info draw into their widgets");
+    check(!windowDrawn("Clock##hs.clock") && !windowDrawn("Map Info##hs.map-info"), "no own windows any more (Render() is not used)");
+    check(wc && wm && widgetAlpha(*wc) > 200 && widgetAlpha(*wm) > 200, "widgets visible while a map runs");
     // online: both are online-ok and keep running
     testhost::online = true;
     e.type = HORIZON_EVENT_ONLINE_CHANGED;
     e.is_online = 1;
     x.onEvent(&e);
     frame(x, false);
-    check(windowDrawn("Clock##hs.clock") && windowDrawn("Map Info##hs.map-info"), "online: both still drawn (online-ok)");
+    check(widgetCount() == 2 && wc && wm && g_widgetHeight[wc->key] > 10.0f && g_widgetHeight[wm->key] > 10.0f, "online: both still drawn (online-ok)");
     testhost::online = false;
     x.onEvent(&e);
     e.type = HORIZON_EVENT_MENU_ENTERED;
     x.onEvent(&e);
-    frame(x, true);
-    frame(x, true);
-    check(!windowDrawn("Map Info##hs.map-info"), "menu: map-info hides");
-    check(windowDrawn("Clock##hs.clock"), "menu: clock stays");
-    // photo/video capture: overlays hidden (setting on by default)
-    testhost::hostFlags = HORIZON_HOST_FLAG_CAPTURE;
-    frame(x, false);
-    frame(x, false);
-    check(!windowDrawn("Clock##hs.clock"), "capture: clock hidden");
-    testhost::hostFlags = 0;
+    testhost::menuOpen = false; // the Horizon menu closed: widgets fade
+    for (int i = 0; i < 50; i++) { // the fade runs on real time (Time::Delta): 0.4 s
+        Sleep(12);
+        frame(x, true);
+    }
+    wc = widget("w-clock-clock-");
+    wm = widget("w-map-info-map-info-");
+    check(wm && widgetAlpha(*wm) == 0, "menu: map-info fades out (UI::WidgetAlpha, background too)");
+    check(wc && widgetAlpha(*wc) > 200, "menu: clock stays");
+    testhost::menuOpen = true;
 
     const std::string& L = testhost::logs();
     check(!contains(L, "[clock] main.as") && !contains(L, "[map-info] main.as") && !contains(L, "error") && !contains(L, "never called") &&
               !contains(L, "is ignored"),
           "no errors or warnings logged");
     x.shutdown();
+    check(widgetCount() == 0, "Shutdown removes the widgets");
     check(FreeLibrary(mod) != 0, "Shutdown + FreeLibrary");
     if (g_fail) printf("%s\n", L.c_str());
 }

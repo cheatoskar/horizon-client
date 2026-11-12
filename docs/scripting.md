@@ -108,6 +108,7 @@ A callback is a global function with exactly this declaration. A function with a
 | `void Main()` | Once, after the script loaded. Waits while a solo-only script starts paused online. | none |
 | `void Render()` | Every frame the host draws overlays, while the script is running. Not while a photo or video is taken (option). | `ui` |
 | `void RenderMenu()` | Every frame the script's page ("Script page") is visible in the Scripts tab. | `ui` |
+| `void RenderWidget(const string &in id)` | Every frame a widget the script added with `UI::AddWidget(id, ...)` is on screen. Draws the widget's body only (no `Begin`/`End`), see Widgets. | `ui` |
 | `void OnMapLoaded(Game::Map@ map)` or `void OnMapLoaded()` | A map was loaded. The first form gets the map, which can be `null`. | `read-game` |
 | `void OnRaceStart()` | A run starts, also after a restart. | `read-game` |
 | `void OnCheckpoint(int time, int index)` | The player passed a checkpoint (time in ms). | `read-game` |
@@ -116,7 +117,7 @@ A callback is a global function with exactly this declaration. A function with a
 | `void OnRaceEnd()` | The race ended (end screen or replay stop). | `read-game` |
 | `void OnMenu()` | The game went back to the menu. | `read-game` |
 | `void OnGameState(Game::State state)` | The game state changed. | `read-game` |
-| `void OnPeek()` | The "Show script overlays" hotkey was pressed (Hotkeys page of the Horizon menu, default Ctrl+F4, rebindable; one hotkey for all scripts, it does nothing while the plugin is off or gated online). For overlays that hide themselves: show again for a while. | none |
+| `void OnPeek()` | The "Show script widgets" hotkey was pressed (Hotkeys page of the Horizon menu, default Ctrl+F4, rebindable; one hotkey for all scripts, it does nothing while the plugin is off or gated online). For overlays that hide themselves: show again for a while. | none |
 | `void OnUnload()` | Before the script is reloaded, switched off or the game quits. Not called after Stopped or Suspended. | none |
 
 `OnMapLoaded(const Game::Map@)` is accepted too. If a script has both forms, only the one with the map is called.
@@ -213,7 +214,7 @@ string FormatDuration(uint64 ms)            // "12:34", "1:02:03"
 
 ### UI::
 
-The UI is a small subset of Dear ImGui drawing into the host's ImGui context, so scripts look like the rest of Horizon. It needs the `ui` permission and only works inside `Render()` and `RenderMenu()`.
+The UI is a small subset of Dear ImGui drawing into the host's ImGui context, so scripts look like the rest of Horizon. It needs the `ui` permission and only works inside `Render()`, `RenderMenu()` and `RenderWidget()`.
 
 Rules that every call follows:
 
@@ -374,6 +375,36 @@ void WindowDrawCircleFilled(const vec2 &in center, float radius, const vec4 &in 
 void WindowDrawCircle(const vec2 &in center, float radius, const vec4 &in color, float thickness = 1)   // outline
 void WindowDrawTriangleFilled(const vec2 &in a, const vec2 &in b, const vec2 &in c, const vec4 &in color)
 ```
+
+#### Widgets
+
+A widget is a small box on screen (a clock, a medal list, splits) that Horizon places like a module's widget: layout mode (Ctrl+Insert or "Layout" in the menu) moves, resizes and minimises it, the place is saved per widget in `horizon\settings\host.json`, a click on it never closes the menu, and with the menu open it can be dragged like any widget. The script only draws its body.
+
+```angelscript
+bool AddWidget(const string &in id, const string &in title, const vec2 &in place = vec2(1, 0))
+void WidgetAlpha(float alpha)                        // fade the whole widget, 0..1, inside RenderWidget only
+bool IsLayoutMode()                                  // layout mode is on
+```
+
+```angelscript
+void Main() {
+    UI::AddWidget("clock", "Clock", vec2(1, 0));     // id, title, default place: top right
+}
+
+void RenderWidget(const string &in id) {            // id: which of the script's widgets
+    UI::Text(Time::Format("%H:%M"));
+}
+```
+
+- `AddWidget` usually goes in `Main()`. `id` is 1-24 letters, digits, space, `-`, `_` or `.`, unique within the script (at most 8 widgets); calling it again with the same id changes title and place. `title` is shown in layout mode, on the widget's tab and in the list of hidden widgets.
+- `place` is the default spot, 0..1 per axis: x 0 left, 0.5 centre, 1 right; y 0 top, 0.5 middle, 1 bottom. A widget with no saved place goes to that slot at the screen edge (16 px from the edges, stacked below or above other widgets in the same slot), never to a random spot.
+- **Off by default.** A new widget is not on screen until the player shows it: in layout mode the bar at the top lists hidden widgets ("+ Clock"), and every widget has a tab on the Horizon Scripts page with "Show". "Hide" (tab, or the eye button in layout mode) takes it off again. Horizon remembers this per widget.
+- `RenderWidget(id)` runs every frame the widget is on screen, inside the host's window: draw the body with the normal `UI::` calls, no `UI::Begin`/`UI::End` and no `SetNextWindowPos`. The window fits its content; resizing it in layout mode scales it (read `UI::GetScale()` while drawing, the host changes it for the widget).
+- The window background and its opacity are the host's ("Widget background" on General, and the widget's own options on its tab or right-click with the menu open).
+- `UI::WidgetAlpha(a)` fades the whole widget, background included (a self-hiding clock). It is ignored while the menu or layout mode is open, so the player can always see and move the widget.
+- Widgets of a script that is switched off, paused online, stopped or not loaded are not shown; their saved place stays. A script's widgets are removed while it reloads and come back with `Main()`.
+- Photos and videos: widgets are hidden by default (the widget's "Hide in photos and videos" option).
+- `Render()` with its own `UI::Begin` windows still works, but those windows are not part of layout mode. Use widgets for anything that sits on screen during a race.
 
 #### Host
 
@@ -620,10 +651,11 @@ Both live in `plugins\scripts\examples\`. Copy a folder into `<game>\horizon\scr
 
 ### clock
 
-Real time and session time in a corner. Permissions `ui`, `settings` and `read-game` (only for the map event that restarts the hide timer; it reads nothing from the game), so it runs everywhere, also online (`online = "online-ok"`).
+Real time and session time as a widget. Permissions `ui`, `settings` and `read-game` (only for the map event that restarts the hide timer; it reads nothing from the game), so it runs everywhere, also online (`online = "online-ok"`).
 
-- Settings: show, corner (`options` combo), 24 or 12 hours, seconds, session time, "Hide after" (seconds, default 10, 0 = always visible), large text, background (`min=0 max=1` slider), margin.
-- Hiding: the clock is visible for "Hide after" seconds after the script starts or a map loads (`OnMapLoaded()`, so the permission `read-game` is asked for), then fades out over 0.4 s. It is shown again while the Horizon menu is open (`UI::IsMenuOpen()`) and for the same time after the "Show script overlays" hotkey (`OnPeek()`). `TargetAlpha(sinceMs, seconds)` is the pure function behind it; the fade is `UI::PushStyleVar(UI::StyleVar::Alpha, alpha)` around the window, the alpha follows the target by frame time.
+- `Main()` adds the widget: `UI::AddWidget("clock", "Clock", vec2(1, 0))`, top right. It is off until the player shows it (layout mode "+ Clock", or "Show" on the Clock tab of the Horizon Scripts page).
+- Settings: 24 or 12 hours, seconds, session time, "Hide after" (seconds, default 10, 0 = always), large text. Place, size and background are the host's.
+- Hiding: visible for "Hide after" seconds after the script starts or a map loads (`OnMapLoaded()`), then it fades out over 0.4 s with `UI::WidgetAlpha(alpha)`. Shown again while the Horizon menu or layout mode is open (`UI::IsMenuOpen()`, `UI::IsLayoutMode()`) and for the same time after the "Show script widgets" hotkey (`OnPeek()`). `TargetAlpha(sinceMs, seconds)` is the pure function behind it; the alpha follows the target by frame time.
 - `ClockText()` builds the format text and calls `Time::Format`:
 
 ```angelscript
@@ -635,34 +667,26 @@ string ClockText() {
 }
 ```
 
-- `PlaceWindow()` turns the corner choice into a position and a pivot, using `UI::GetScreenSize()` and `UI::GetScale()`.
-- `Render()` opens a borderless, auto-sized, click-through window and draws the time, then the session line with `Time::FormatDuration(Time::Now())` in `UI::MutedColor()`:
-
-```angelscript
-int flags = UI::WindowFlags::NoDecoration | UI::WindowFlags::AlwaysAutoResize | UI::WindowFlags::NoInputs
-          | UI::WindowFlags::NoSavedSettings | UI::WindowFlags::NoFocusOnAppearing | UI::WindowFlags::NoNav;
-if (UI::Begin("Clock", flags)) { ... }
-UI::End();
-```
+- `RenderWidget(id)` draws the time (title font when "Large text" is on), then the session line with `Time::FormatDuration(Time::Now())` in `UI::MutedColor()`.
 
 ### map-info
 
-Name, author and medal times of the map that is running. Permissions `ui`, `settings`, `read-game`.
+Name, author and medal times of the map that is running, as a widget (top left). Permissions `ui`, `settings`, `read-game`.
 
-- `OnMapLoaded(Game::Map@ map)` copies the values into globals (the map object is reused), `OnMenu()` clears them.
-- `Main()` picks up a map that is already running when the script is loaded or reloaded:
+- `Main()` adds the widget (`UI::AddWidget("map-info", "Map Info", vec2(0, 0))`) and picks up a map that is already running when the script is loaded or reloaded:
 
 ```angelscript
 void Main() {
+    UI::AddWidget("map-info", "Map Info", vec2(0, 0));
     Game::Map@ map = Game::CurrentMap();
     if (map !is null) OnMapLoaded(map);
 }
 ```
 
-- Same hiding as the clock ("Hide after", default 10 s after the map loaded; menu open and `OnPeek()` show it again). "Hide while driving" still works on top of it.
+- `OnMapLoaded(Game::Map@ map)` copies the values into globals (the map object is reused), `OnMenu()` clears them.
+- Same hiding as the clock ("Hide after", default 10 s after the map loaded; menu, layout mode and `OnPeek()` show it again). Without a map, and with "Hide while driving" during a run (`Game::InRace()`), it fades out; with the menu open it shows "No map".
 - The author line is left out when `mapAuthor.isEmpty()`, because some games do not tell it for maps from their own menus.
-- Medal times are a two-column table (`UI::BeginTable("medals", 2, UI::TableFlags::SizingFixedFit)`), one `MedalRow` per medal; rows with `-1` are skipped. On a stunts map it shows `authorScore` instead.
-- "Hide while driving" uses `Game::InRace()`.
+- One `MedalRow` per medal with a drawn medal (`UI::WindowDrawCircleFilled` and friends, tinted with the fade alpha because draw-list shapes do not follow the style alpha); rows with `-1` are skipped. On a stunts map it shows `authorScore` instead.
 
 ## Testing without the game
 
@@ -675,6 +699,6 @@ plugins\scripts\tests\run_tests.cmd
 It runs two programs:
 
 - `build\test\scripts\scripts_test.exe`: unit and engine tests (manifest, gate, time budget, settings metadata, file names, the engine with test scripts, Competition Patch rule).
-- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, Original, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel and the Options panel, and checks that both examples ran unchanged, drew their windows and logged nothing bad.
+- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, Original, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel, the Options panel and the two widgets, and checks that both examples ran unchanged, registered their widgets (HUD, off until shown, top right / top left), drew into them, that Map Info fades out in the menu with the menu closed, and that nothing bad was logged.
 
 The exit code is non-zero when a check fails. The fake host has no real engine objects, so `Reflection::` finds nothing there: a script that reads the game has to handle failure (and it should anyway). Real reads are only testable in the game.

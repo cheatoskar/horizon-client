@@ -63,7 +63,15 @@ struct MapData {
 
 enum Callback {
     CbMain, CbRender, CbRenderMenu, CbOnMapLoaded, CbOnMapLoadedNoArg, CbOnRaceStart, CbOnCheckpoint, CbOnRespawn, CbOnFinish,
-    CbOnRaceEnd, CbOnMenu, CbOnGameState, CbOnPeek, CbOnUnload, CbCount
+    CbOnRaceEnd, CbOnMenu, CbOnGameState, CbOnPeek, CbOnUnload, CbRenderWidget, CbCount
+};
+
+// A widget a script added with UI::AddWidget: a host panel (HORIZON_PANEL_HUD | START_HIDDEN) that the layout
+// mode moves, resizes and minimises like a module's widget. The body is drawn by RenderWidget(id).
+struct WidgetDef {
+    std::string id;      // the script's own id ("clock")
+    std::string title;   // shown in layout mode and on the tab
+    float x = 1.0f, y = 0.0f; // default place, 0..1 per axis (0 left/top, 0.5 centre, 1 right/bottom)
 };
 
 struct Script {
@@ -82,6 +90,7 @@ struct Script {
     asIScriptModule* module = nullptr;
     asIScriptFunction* cb[CbCount] = {};
     std::vector<ScriptSetting> settings;
+    std::vector<WidgetDef> widgets; // UI::AddWidget (cleared on unload)
 
     uint64_t loadedSig = 0;       // file signature when loaded
     uint64_t pendingSig = 0;      // a changed signature waiting for the debounce
@@ -119,6 +128,7 @@ public:
 
     void render();                       // Render() of every running script with "ui" (inside an ImGui frame)
     void renderMenu(Script& s);          // RenderMenu() of one script (inside the Scripts tab)
+    void renderWidget(Script& s, const std::string& id); // RenderWidget(id) inside the host's widget window
     void dispatch(const HorizonEvent& e);
     void peek();                         // the "show overlays" hotkey: OnPeek() of every running script
 
@@ -202,6 +212,9 @@ bool registerReflectionApi(asIScriptEngine* e);
 void uiBeginCall();
 void uiEndCall();
 bool uiAllowed();
+// True while RenderWidget() runs (UI::WidgetAlpha works only there).
+bool uiInWidget();
+void uiSetInWidget(bool on);
 // Reflection (api_reflection.cpp): per-frame read budget and the class catalog.
 void reflectionBeginFrame(int readLimit);
 void reflectionShutdown();

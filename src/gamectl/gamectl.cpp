@@ -7,7 +7,10 @@
 #include <string.h>
 #include <wchar.h>
 
+#include <vector>
+
 #include "core/gbx.h"
+#include "gamectl/gamectl_pick.h"
 #include "reflect/reflect.h"
 
 namespace gamectl {
@@ -172,13 +175,37 @@ bool makeDirs(const wchar_t* dir) {
     return GetFileAttributesW(dir) != INVALID_FILE_ATTRIBUTES;
 }
 
-int refreshAndFindNew(void* app, void** newInfo) {
+// The info list as raw pointers (SEH-guarded: the game owns the buffer). -1 on an exception.
+int infoCount() {
+    __try {
+        return static_cast<int>(reinterpret_cast<Buffer*>(A(g_spec->infos))->count);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+int copyInfos(void** out, uint32_t cap) {
     __try {
         Buffer* infos = reinterpret_cast<Buffer*>(A(g_spec->infos));
-        const uint32_t before = infos->count;
-        void** snapshot = static_cast<void**>(HeapAlloc(GetProcessHeap(), 0, (before + 1) * sizeof(void*)));
-        if (!snapshot) return -1;
-        for (uint32_t i = 0; i < before; i++) snapshot[i] = infos->items[i];
+        const uint32_t n = infos->count < cap ? infos->count : cap;
+        for (uint32_t i = 0; i < n; i++) out[i] = infos->items[i];
+        return static_cast<int>(n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+bool snapshotInfos(std::vector<void*>& v) {
+    const int n = infoCount();
+    if (n < 0 || n > 1000000) return false;
+    v.assign(static_cast<size_t>(n) + 64, nullptr);
+    const int got = copyInfos(v.data(), static_cast<uint32_t>(v.size()));
+    if (got < 0) return false;
+    v.resize(static_cast<size_t>(got));
+    return true;
+}
+
+// RefreshFromDisk + SortByName, the game's own rescan of its track folders. One call per play_map_file.
+bool refreshInfos(void* app) {
+    __try {
         void* folders = g_spec->foldersEmbedded ? static_cast<char*>(app) + g_spec->appFolders
                                                  : *reinterpret_cast<void**>(static_cast<char*>(app) + g_spec->appFolders);
         if (g_spec->refreshArgs == 3)
@@ -186,23 +213,20 @@ int refreshAndFindNew(void* app, void** newInfo) {
         else
             reinterpret_cast<void(__cdecl*)(void*, void*)>(A(g_spec->refresh))(folders, nullptr);
         reinterpret_cast<void(__cdecl*)()>(A(g_spec->sortByName))();
-        int added = 0;
-        for (uint32_t i = 0; i < infos->count; i++) {
-            void* p = infos->items[i];
-            bool old = false;
-            for (uint32_t j = 0; j < before && !old; j++) old = snapshot[j] == p;
-            if (!old) {
-                added++;
-                *newInfo = p;
-            }
-        }
-        logf("gamectl: challenge infos %u -> %u, %d new", before, infos->count, added);
-        HeapFree(GetProcessHeap(), 0, snapshot);
-        return added;
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         logf("gamectl: exception 0x%08X while rescanning the track folders", GetExceptionCode());
-        return -1;
+        return false;
     }
+}
+
+// Offset of an info's gold time (ms): reflection ("GoldTime" of CConstructionChallengeInfo on ESWC/Sunrise/
+// Original, CGameCtnChallengeInfo on Forever), else the dumped offsets 88 / 100.
+int goldOffset() {
+    int off = reflect::offsetOf("CConstructionChallengeInfo", "GoldTime");
+    if (off < 0) off = reflect::offsetOf("CGameCtnChallengeInfo", "GoldTime");
+    if (off < 0 && g_spec) off = (g_spec->game == Game::Tmnf || g_spec->game == Game::Tmuf) ? 100 : 88;
+    return off;
 }
 
 bool setMenuToPlay(void* app, void* menus, void* info) {
@@ -359,23 +383,37 @@ Result playMapFile(const wchar_t* path) {
         logf("gamectl: map file not found (%lu)", GetLastError());
         return Result::FileError;
     }
-    // Rescan once before the copy: maps saved into the Tracks folder since the game's last scan (TM Horizon's
-    // downloads, the TMX browser's file next to the copy) would otherwise count as new too.
-    void* info = nullptr;
-    if (refreshAndFindNew(app, &info) < 0) return Result::GameError;
-    info = nullptr;
+    // The source may be anywhere (a plugin's data folder, a download folder): it is copied into the one folder
+    // the game scans and found again by its gold time among the infos the rescan added, never by counting
+    // (the rescan can also rebuild infos of other files, so "exactly one new" was wrong).
+    char src8[MAX_PATH * 3] = {};
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, src8, sizeof(src8), nullptr, nullptr);
+    const lr::GbxMapHeader hdr = lr::readChallengeHeaderFile(src8);
+    if (!hdr.ok) {
+        logf("gamectl: not a readable challenge file (%s)", hdr.error.c_str());
+        return Result::FileError;
+    }
+    std::vector<void*> before, after;
+    if (!snapshotInfos(before)) return Result::GameError;
     swprintf_s(dst, L"%sHZ_%010lu.Challenge.Gbx", dir, GetTickCount());
     if (!CopyFileW(path, dst, FALSE)) {
         logf("gamectl: copy failed (%lu)", GetLastError());
         return Result::FileError;
     }
-    int added = refreshAndFindNew(app, &info);
-    if (added < 0) return Result::GameError;
-    if (added != 1 || !info) {
-        logf("gamectl: expected 1 new map in the game's list, got %d (tracks folder %ls)", added, dir);
+    const DWORD t0 = GetTickCount();
+    if (!refreshInfos(app) || !snapshotInfos(after)) return Result::GameError;
+    const int goff = goldOffset();
+    int fresh = 0;
+    const int pick = pickNewChallenge(before, after, [goff](void* info, int* ms) { return goff >= 0 && readAt(info, static_cast<size_t>(goff), ms); },
+                                      hdr.goldMs, &fresh);
+    logf("gamectl: challenge infos %u -> %u, %d new, rescan %lu ms, gold %d (offset %d) -> %s", static_cast<unsigned>(before.size()),
+         static_cast<unsigned>(after.size()), fresh, GetTickCount() - t0, hdr.goldMs, goff,
+         pick >= 0 ? "found" : pick == kPickNoNew ? "the game did not list the copy" : "none of the new infos is this map");
+    if (pick < 0) {
+        DeleteFileW(dst);
         return Result::NotFound;
     }
-    if (!setMenuToPlay(app, menus, info)) return Result::GameError;
+    if (!setMenuToPlay(app, menus, after[static_cast<size_t>(pick)])) return Result::GameError;
     wcscpy_s(g_lastPath, dst);
     logf("gamectl: playing %ls", dst);
     return Result::Ok;

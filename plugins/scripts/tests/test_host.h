@@ -15,6 +15,8 @@ struct Panel {
     std::string key, title;
     HorizonPanelDrawFn draw = nullptr;
     void* user = nullptr;
+    uint32_t flags = 0;
+    float dx = 0, dy = 0;
 };
 
 extern bool online;
@@ -22,6 +24,7 @@ extern bool actionsAllowed;
 extern int gameState;
 extern uint32_t hostFlags;
 extern std::vector<Panel> panels;
+extern bool menuOpen; // menu_open() (default true)
 extern std::vector<std::string> playedMaps;
 extern int menuReturns;
 

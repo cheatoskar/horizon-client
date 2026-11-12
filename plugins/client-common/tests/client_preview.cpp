@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "client_host.h"
+#include "../../tmx-browser/tests/fake_tmx.h"
 
 using namespace horizon::ui;
 
@@ -444,6 +445,8 @@ void inputDisplay(const std::string& dir) {
 void tmxBrowser(const std::string& dir) {
     Plugin p = load(dir, "tmx-browser");
     if (!p.mod || !p.hook) return;
+    // TMX Browser talks to TMX itself: a fake exchange instead of the network
+    if (auto net = reinterpret_cast<faketmx::TestNetFn>(GetProcAddress(p.mod, "HorizonClient_TestNet"))) net(&faketmx::fetch, &faketmx::link);
     startHost(HORIZON_GAME_TMNF, "tmx-browser");
     DeleteFileA((dataRoot() + "tmx-browser\\favourites.json").c_str());
     chost::bridgeStateValue = HORIZON_BRIDGE_CONNECTED;
@@ -454,11 +457,12 @@ void tmxBrowser(const std::string& dir) {
         return;
     }
     Model m = baseModel("TrackMania Nations Forever");
-    PluginView pv = view("tmx-browser", "TMX Browser", "Find maps on TMX and play them right away.");
+    PluginView pv = view("tmx-browser", "TMX Browser", "Search TMX and play maps in the game.");
     pv.panels = {tab("browse", "Browse"), tab("favourites", "Favourites")};
     m.plugins.push_back(pv);
     Actions a = actionsFor(p);
     p.cmd("search");
+    p.cmd("pump");
     menuShot("tmx-browser-grid", m, a, "plugin:tmx-browser", 24, nullptr);
     p.cmd("select 2");
     menuShot("tmx-browser-detail", m, a, "plugin:tmx-browser", 6, nullptr);

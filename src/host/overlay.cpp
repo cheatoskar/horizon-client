@@ -593,6 +593,8 @@ void overlayCreateContext() {
     fillStyle();
 }
 
+HWND overlayWindow() { return g_hwnd; }
+
 void overlayDeviceCreated(void* device, HWND window, void* params) {
     (void)params;
     auto* dev = static_cast<IDirect3DDevice9*>(device);

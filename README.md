@@ -36,6 +36,8 @@ The table lives in [`src/host/exe_known.h`](src/host/exe_known.h) (with PE times
 | Autosave & Login-Fix (replay after a finish) | solo and online (your previous run), TMX copy | solo | solo | no |
 | Controller hot-plug | yes | yes | yes | no |
 | Input Display, WR Hunter, TMX Browser, TMX Upload | yes | yes | yes | yes |
+| TMX Browser: Play in the game (no TM Horizon needed) | yes (main menu) | yes (main menu) | yes (main menu) | yes, through the game's own TMX link (main menu) |
+| Script widgets in layout mode (Horizon Scripts) | yes | yes | yes | yes |
 | Horizon Performance, Horizon Scripts | yes | yes | yes | yes |
 | Node Explorer (read-only engine browser) | yes | yes | no | yes |
 | TM Horizon opens a map in the running game | yes (main menu) | yes (main menu) | yes (main menu) | no |

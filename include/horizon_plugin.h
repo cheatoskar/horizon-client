@@ -127,6 +127,8 @@ typedef enum HorizonEventType {
 #define HORIZON_PANEL_MENU_PAGE 0x01u /* a tab on the plugin's page in the menu */
 #define HORIZON_PANEL_HUD       0x02u /* starts in its own window that stays on screen with the menu closed
                                          (e.g. a timer); the player can still bring it into the menu */
+#define HORIZON_PANEL_START_HIDDEN 0x04u /* with HUD: a widget that is off until the player shows it (layout mode
+                                            bar, or "Show" on its tab). Host 0.3.0; older hosts show it at once */
 
 typedef void (HORIZON_CALL* HorizonPanelDrawFn)(void* user);
 

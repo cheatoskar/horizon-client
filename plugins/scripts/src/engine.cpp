@@ -54,6 +54,7 @@ const char* kDecls[CbCount][3] = {
     {"void OnGameState(Game::State)", nullptr, nullptr},
     {"void OnPeek()", nullptr, nullptr},
     {"void OnUnload()", nullptr, nullptr},
+    {"void RenderWidget(const string &in)", nullptr, nullptr},
 };
 
 struct CbName {
@@ -75,6 +76,7 @@ const CbName kCbNames[] = {
     {"OnGameState", "void OnGameState(Game::State state)", PermReadGame},
     {"OnPeek", "void OnPeek()", 0},
     {"OnUnload", "void OnUnload()", 0},
+    {"RenderWidget", "void RenderWidget(const string &in id)", PermUi},
 };
 
 struct IncludeCtx {
@@ -580,6 +582,7 @@ void Manager::unloadScript(Script& s, bool callUnload) {
     saveChangedSettings(s);
     for (auto& c : s.cb) c = nullptr;
     s.settings.clear();
+    s.widgets.clear();
     s.module->Discard();
     s.module = nullptr;
     if (engine_) engine_->GarbageCollect();
@@ -735,6 +738,14 @@ void Manager::peek() {
         if (s.state != ScriptState::Running || !s.cb[CbOnPeek]) continue;
         call(s, s.cb[CbOnPeek], "OnPeek()", cfg.callLimitMs, false, nullptr, nullptr);
     }
+}
+
+void Manager::renderWidget(Script& s, const std::string& id) {
+    if (s.state != ScriptState::Running || !s.cb[CbRenderWidget] || !(s.manifest.perms & PermUi)) return;
+    uiSetInWidget(true);
+    call(s, s.cb[CbRenderWidget], "RenderWidget()", cfg.callLimitMs, true,
+         [](asIScriptContext* ctx, const void* p) { ctx->SetArgAddress(0, const_cast<void*>(p)); }, &id);
+    uiSetInWidget(false);
 }
 
 void Manager::renderMenu(Script& s) {

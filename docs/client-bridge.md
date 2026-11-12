@@ -1,6 +1,6 @@
 # TM Horizon client bridge
 
-The game process never goes online. When a plugin needs something from the internet (a TMX search, a
+The host never goes online. When a plugin needs something from the internet (a TMX search, a
 map file, a record replay), the Horizon Host asks the TM Horizon launcher on the same PC, and the
 launcher asks TMX with its own HTTP client (user agent `TM-Hub/<version>`, its caches and limits). The
 same connection carries notifications from the launcher to the game (upload finished, mod updates,

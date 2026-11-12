@@ -14,6 +14,7 @@
 #include "host/game/forever_poll.h"
 #include "host/bridge_logic.h"
 #include "host/exe_known.h"
+#include "gamectl/gamectl_pick.h"
 #include "host/stats_log.h"
 #include "host/toast_queue.h"
 #include "../tests/abi12/abi12_sizes.h"
@@ -655,6 +656,41 @@ static void testExeIdentification() {
     CHECK(originals == 1 && gameBitFromName("original") == HORIZON_GAME_ORIGINAL && std::string(gameKey(HORIZON_GAME_ORIGINAL)) == "original");
 }
 
+// play_map_file: the copied map is found among the infos the rescan added by its gold time, never by counting.
+// TM Sunrise (owner's log): "challenge infos 207 -> 208, 2 new", the old code refused with "expected 1, got 2".
+static void testPickNewChallenge() {
+    int objs[16] = {};
+    std::map<void*, int> gold;
+    auto P = [&](int i) { return static_cast<void*>(&objs[i]); };
+    std::vector<void*> before = {P(0), P(1), P(2), P(3)};
+    for (int i = 0; i < 16; i++) gold[P(i)] = 30000 + i * 1000;
+    gold[P(9)] = 44000; // the map just copied in
+    auto goldOf = [&](void* info, int* ms) {
+        auto it = gold.find(info);
+        if (it == gold.end()) return false;
+        *ms = it->second;
+        return true;
+    };
+    int fresh = 0;
+    // 4 -> 5 infos, but two pointers are new (the game rebuilt the info of another file): pick by gold time
+    std::vector<void*> after = {P(0), P(8), P(2), P(3), P(9)};
+    CHECK(gamectl::pickNewChallenge(before, after, goldOf, 44000, &fresh) == 4 && fresh == 2);
+    // sorted by name: the new one can be anywhere
+    after = {P(9), P(0), P(1), P(8), P(2), P(3), P(10), P(11)};
+    CHECK(gamectl::pickNewChallenge(before, after, goldOf, 44000, &fresh) == 0 && fresh == 4);
+    // one new info and the gold time does not match (offset unknown): the single new one
+    after = {P(0), P(1), P(2), P(3), P(12)};
+    CHECK(gamectl::pickNewChallenge(before, after, goldOf, 44000, &fresh) == 4 && fresh == 1);
+    // several new, none matches: refused
+    after = {P(0), P(12), P(13)};
+    CHECK(gamectl::pickNewChallenge(before, after, goldOf, 44000, &fresh) == gamectl::kPickAmbiguous);
+    // map without a gold time: only a single new info counts
+    CHECK(gamectl::pickNewChallenge(before, {P(0), P(1), P(2), P(3), P(14)}, goldOf, 0, &fresh) == 4);
+    CHECK(gamectl::pickNewChallenge(before, {P(0), P(14), P(15)}, goldOf, 0, &fresh) == gamectl::kPickAmbiguous);
+    // nothing new: the game did not list the copy
+    CHECK(gamectl::pickNewChallenge(before, before, goldOf, 44000, &fresh) == gamectl::kPickNoNew && fresh == 0);
+}
+
 int main() {
     testProfile();
     testManifest();
@@ -669,6 +705,7 @@ int main() {
     testBridgeLogic();
     testStatsLines();
     testExeIdentification();
+    testPickNewChallenge();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

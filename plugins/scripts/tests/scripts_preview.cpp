@@ -1,6 +1,7 @@
 // Renders Horizon Scripts inside the real Horizon menu shell (src/host/ui), offscreen with D3D9, and saves
 // screens\scripts-<scene>.png (not committed): the Scripts tab with the example scripts, a script with
-// errors, and the two example overlays over a stand-in game picture. No game needed.
+// errors, and the two example widgets (Clock, Map Info) over a stand-in game picture, also with layout mode's
+// frames. No game needed.
 //
 //   scripts_preview.exe <scripts.dll> <examples folder>
 #include <windows.h>
@@ -130,7 +131,53 @@ struct Scene {
     const char* name;
     const char* selected;
     bool menu;
+    bool layout; // the widgets with layout mode's frames (drawn like src/host/panels.cpp does)
 };
+
+// The script widgets (host panels the scripts plugin registered) where the host puts new widgets: the slot at
+// the screen edge from default_x/y, 16 px from the edges, stacked downwards. Layout mode adds a frame and the
+// "plugin · title" label above each one and the bar at the top.
+void drawWidgets(bool layout) {
+    const float m = 16.0f;
+    float yLeft = m, yRight = m;
+    if (layout) ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2(static_cast<float>(kWidth), static_cast<float>(kHeight)), IM_COL32(0, 0, 0, 90));
+    if (layout) {
+        yLeft += 70.0f;
+        yRight += 70.0f;
+    }
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    const ImU32 accent = IM_COL32(255, 107, 26, 255);
+    for (const testhost::Panel& p : testhost::panels) {
+        if (p.key.compare(0, 2, "w-") != 0) continue;
+        const bool right = p.dx > 0.6f;
+        float& y = right ? yRight : yLeft;
+        ImGui::SetNextWindowPos(ImVec2(right ? kWidth - m : m, y), ImGuiCond_Always, ImVec2(right ? 1.0f : 0.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w * 0.65f);
+        ImGui::Begin((p.title + "###hzpanel.scripts." + p.key).c_str(), nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs);
+        p.draw(p.user);
+        const ImVec2 a = ImGui::GetWindowPos(), sz = ImGui::GetWindowSize();
+        ImGui::End();
+        if (layout) {
+            const ImVec2 b(a.x + sz.x, a.y + sz.y);
+            fg->AddRect(ImVec2(a.x - 2, a.y - 2), ImVec2(b.x + 2, b.y + 2), accent, 6.0f, 0, 2.0f);
+            fg->AddTriangleFilled(ImVec2(b.x, b.y - 16), b, ImVec2(b.x - 16, b.y), accent);
+            const std::string label = "Horizon Scripts \xC2\xB7 " + p.title;
+            const ImVec2 ls = ImGui::CalcTextSize(label.c_str());
+            fg->AddRectFilled(ImVec2(a.x - 2, a.y - ls.y - 16), ImVec2(a.x + ls.x + 14, a.y - 6), IM_COL32(26, 29, 36, 235), 4.0f);
+            fg->AddText(ImVec2(a.x + 6, a.y - ls.y - 12), IM_COL32(235, 238, 242, 255), label.c_str());
+        }
+        y += sz.y + 8.0f;
+    }
+    if (layout) {
+        const char* bar = "Edit layout     Drag to move, corner to resize. Esc ends.";
+        const ImVec2 ts = ImGui::CalcTextSize(bar);
+        const ImVec2 p0((kWidth - ts.x - 60.0f) * 0.5f, 12.0f);
+        fg->AddRectFilled(p0, ImVec2(p0.x + ts.x + 60.0f, p0.y + 46.0f), IM_COL32(26, 29, 36, 245), 23.0f);
+        fg->AddRect(p0, ImVec2(p0.x + ts.x + 60.0f, p0.y + 46.0f), accent, 23.0f, 0, 1.5f);
+        fg->AddText(ImVec2(p0.x + 30.0f, p0.y + 23.0f - ts.y * 0.5f), IM_COL32(235, 238, 242, 255), bar);
+    }
+}
 
 } // namespace
 
@@ -255,10 +302,10 @@ int main(int argc, char** argv) {
 
     CreateDirectoryW(L"screens", nullptr);
     const Scene scenes[] = {
-        {"tab", "map-info", true},
-        {"errors", "split-demo", true},
-        {"overlays", "clock", false},
-        {"mapinfo", "map-info", false},
+        {"tab", "map-info", true, false},
+        {"errors", "split-demo", true, false},
+        {"overlays", "clock", false, false},
+        {"layout", "map-info", false, true},
     };
     int failed = 0;
     for (const Scene& sc : scenes) {
@@ -301,7 +348,9 @@ int main(int argc, char** argv) {
             io.AddMousePosEvent(5, 890);
             ImGui::NewFrame();
             gameBackground();
+            testhost::menuOpen = sc.menu || sc.layout;
             overlay();
+            drawWidgets(sc.layout);
             if (sc.menu) drawMenu(model, actions, &menuOpen);
             ImGui::EndFrame();
             ImGui::Render();

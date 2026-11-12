@@ -1,8 +1,8 @@
-# Clock: real time and session time in a corner of the screen.
+# Clock: real time and session time as a widget.
 name = "Clock"
 author = "cheatoskar"
-version = "1.1.0"
-description = "The real time and how long the game has been running, in a corner. Fades out after a few seconds."
+version = "1.2.0"
+description = "Time and session time as a widget."
 games = ["eswc", "sunrise", "original", "tmnf", "tmuf"]
 online = "online-ok"
 permissions = ["ui", "settings", "read-game"]

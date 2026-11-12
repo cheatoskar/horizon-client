@@ -1,14 +1,8 @@
-// Clock: the real time and how long the game has been running, in a corner of the screen.
-// Runs unchanged on ESWC, Sunrise, TMNF and TMUF: it only uses UI, Time and settings.
-// It shows itself for "Hide after" seconds when the script starts or a map loads, fades out, and comes
-// back while the Horizon menu is open and for the same time after the "Show script overlays" hotkey
-// (Hotkeys page, default Ctrl+F4; the host calls OnPeek()).
-
-[Setting name="Show clock"]
-bool show = true;
-
-[Setting name="Position" options="Top left|Top right|Bottom left|Bottom right"]
-int position = 1;
+// Clock: the real time and how long the game has been running, as a widget.
+// Runs unchanged on ESWC, Sunrise, Original, TMNF and TMUF: it only uses UI, Time and settings.
+// The widget is off until you show it (Ctrl+Insert, "+ Clock" in the bar at the top, or "Show" on its tab on the
+// Horizon Scripts page). Drag it in layout mode; Horizon keeps the place. It fades out "Hide after" seconds after
+// a map loads and comes back while the menu is open and after the "Show script widgets" hotkey (OnPeek()).
 
 [Setting name="Format" options="24 hours|12 hours"]
 int hours = 0;
@@ -16,20 +10,14 @@ int hours = 0;
 [Setting name="Seconds"]
 bool seconds = true;
 
-[Setting name="Session time" description="How long the game has been running"]
+[Setting name="Session time"]
 bool showSession = true;
 
-[Setting name="Hide after" description="Seconds the clock stays visible after a map starts or the hotkey is pressed. 0 = always visible" min=0 max=120]
+[Setting name="Hide after" description="Seconds after a map start. 0 = always." min=0 max=120]
 int hideAfter = 10;
 
 [Setting name="Large text"]
 bool large = true;
-
-[Setting name="Background" min=0 max=1]
-float background = 0.55f;
-
-[Setting name="Distance from the edge" min=0 max=200]
-int margin = 16;
 
 const float FADE_MS = 400.0f;
 
@@ -50,6 +38,7 @@ void Wake() {
 }
 
 void Main() {
+    UI::AddWidget("clock", "Clock", vec2(1, 0)); // top right
     Wake();
     print("Clock ready on " + Game::Title());
 }
@@ -64,35 +53,14 @@ string ClockText() {
     return Time::Format(f);
 }
 
-// Window position and pivot for the chosen corner.
-void PlaceWindow() {
-    vec2 screen = UI::GetScreenSize();
-    float m = margin * UI::GetScale();
-    bool right = position == 1 || position == 3;
-    bool bottom = position == 2 || position == 3;
-    vec2 pos(right ? screen.x - m : m, bottom ? screen.y - m : m);
-    vec2 pivot(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f);
-    UI::SetNextWindowPos(pos, UI::Cond::Always, pivot);
-    UI::SetNextWindowBgAlpha(background);
-}
-
-void Render() {
-    if (!show) return;
-    float target = UI::IsMenuOpen() ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
+void RenderWidget(const string &in id) {
+    float target = UI::IsMenuOpen() || UI::IsLayoutMode() ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
     float step = Time::Delta() / FADE_MS;
     if (alpha < target) alpha = alpha + step > target ? target : alpha + step;
     else alpha = alpha - step < target ? target : alpha - step;
-    if (alpha <= 0.001f) return;
-    PlaceWindow();
-    UI::PushStyleVar(UI::StyleVar::Alpha, alpha);
-    int flags = UI::WindowFlags::NoDecoration | UI::WindowFlags::AlwaysAutoResize | UI::WindowFlags::NoInputs
-              | UI::WindowFlags::NoSavedSettings | UI::WindowFlags::NoFocusOnAppearing | UI::WindowFlags::NoNav;
-    if (UI::Begin("Clock", flags)) {
-        if (large) UI::PushFont(UI::Font::Title);
-        UI::Text(ClockText());
-        if (large) UI::PopFont();
-        if (showSession) UI::TextColored(UI::MutedColor(), "Session " + Time::FormatDuration(Time::Now()));
-    }
-    UI::End();
-    UI::PopStyleVar();
+    UI::WidgetAlpha(alpha);
+    if (large) UI::PushFont(UI::Font::Title);
+    UI::Text(ClockText());
+    if (large) UI::PopFont();
+    if (showSession) UI::TextColored(UI::MutedColor(), "Session " + Time::FormatDuration(Time::Now()));
 }

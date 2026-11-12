@@ -126,9 +126,48 @@ public:
         if (!known_) return true; // unknown: treat as running (Competition Patch gate stays closed)
         return obs_.raceKind == fpoll::Kind::RaceSolo || obs_.raceKind == fpoll::Kind::RaceNet;
     }
+    // Forever (host 0.3.0): the file is handed to the game the way a second TmForever.exe started with
+    // "/singleinst /file=<path>" does it (a double-clicked map): WM_COPYDATA with dwData 'ELIF' and the wide path
+    // to the game window, sent from a short thread so the game handles it in its own message loop. No rescan of
+    // the map list (gamectl's way froze TMUF for seconds with ~7200 maps), no memory write, no game call.
+    // Only from the main menu and offline; the game opens the map a moment later (OK = handed over).
     HorizonResult playMapFile(const char* path, uint32_t) override {
         if (!known_) return HORIZON_ERR_NOT_SUPPORTED;
-        return fromGamectl(gamectl::playMapFile(wide(path).c_str()));
+        if (isOnline()) return HORIZON_ERR_BLOCKED_ONLINE;
+        if (gameState() != HORIZON_STATE_MAIN_MENU) return HORIZON_ERR_WRONG_STATE;
+        const std::wstring w = wide(path ? path : "");
+        wchar_t full[MAX_PATH] = {};
+        const DWORD n = GetFullPathNameW(w.c_str(), MAX_PATH, full, nullptr);
+        const DWORD attr = n && n < MAX_PATH ? GetFileAttributesW(full) : INVALID_FILE_ATTRIBUTES;
+        const size_t len = wcslen(full);
+        const wchar_t* ext = L".challenge.gbx";
+        if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) || len < 15 || _wcsicmp(full + len - 14, ext) != 0)
+            return HORIZON_ERR_INVALID_ARG;
+        HWND win = overlayWindow();
+        if (!win) return HORIZON_ERR_FAILED;
+        std::wstring* arg = new std::wstring(full);
+        HANDLE t = CreateThread(
+            nullptr, 0,
+            [](void* p) -> DWORD {
+                std::wstring* s = static_cast<std::wstring*>(p);
+                HWND target = overlayWindow();
+                COPYDATASTRUCT cd = {};
+                cd.dwData = 0x46494c45; // 'ELIF'
+                cd.cbData = static_cast<DWORD>((s->size() + 1) * sizeof(wchar_t));
+                cd.lpData = const_cast<wchar_t*>(s->c_str());
+                DWORD_PTR result = 0;
+                const LRESULT ok = target ? SendMessageTimeoutW(target, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 15000, &result) : 0;
+                HLOG("game: map handed to the game (single-instance file message): %s, answer %d", utf8(*s).c_str(), ok ? static_cast<int>(result) : -1);
+                delete s;
+                return 0;
+            },
+            arg, 0, nullptr);
+        if (!t) {
+            delete arg;
+            return HORIZON_ERR_FAILED;
+        }
+        CloseHandle(t);
+        return HORIZON_OK;
     }
     HorizonResult returnToMenu() override {
         if (!known_) return HORIZON_ERR_NOT_SUPPORTED;

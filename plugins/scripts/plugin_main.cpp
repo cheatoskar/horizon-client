@@ -5,6 +5,8 @@
 // tab: the list with on/off, reload, folders, permissions, errors with file:line, the settings page
 // built from [Setting] globals and each script's own RenderMenu() page. The plugin's page in the menu
 // is two panels (ABI 1.2): "Scripts" first, then "Options"; there is no DrawMenu export.
+// Script widgets (UI::AddWidget + RenderWidget) become host panels (HUD, off until shown): the layout mode
+// moves, resizes and minimises them like any module's widget and the host saves their place per widget.
 #define HORIZON_PLUGIN_BUILD
 #include <windows.h>
 #include <shellapi.h>
@@ -13,7 +15,9 @@
 #include <string.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "imgui.h"
 #include "horizon_imgui.h"
@@ -439,6 +443,102 @@ void HORIZON_CALL drawOptionsPanel(void*) {
     if (g_imgui && g_host) drawGeneralSettings();
 }
 
+// ---------------------------------------------------------------- script widgets ------------------
+// One host panel per UI::AddWidget of a running script. The entries stay allocated until Shutdown (their
+// address is the panel's user pointer); "live" says whether the host has the panel right now.
+struct WidgetReg {
+    std::string key, script, widget, title;
+    float x = 1.0f, y = 0.0f;
+    bool live = false;
+};
+std::vector<std::unique_ptr<WidgetReg>> g_widgets;
+
+std::string slug(const std::string& in, size_t maxLen) {
+    std::string o;
+    for (char c : in) {
+        if (o.size() >= maxLen) break;
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        const bool good = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (good) o += c;
+        else if (!o.empty() && o.back() != '-') o += '-';
+    }
+    while (!o.empty() && o.back() == '-') o.pop_back();
+    return o.empty() ? std::string("x") : o;
+}
+
+// "w-<script>-<widget>-<hash>": [a-z0-9-], at most 38 characters, stable for a script id + widget id.
+std::string widgetKey(const std::string& script, const std::string& id) {
+    uint32_t h = 0x811c9dc5u;
+    for (char c : script + "/" + id) h = (h ^ static_cast<unsigned char>(c)) * 0x01000193u;
+    char hx[8];
+    snprintf(hx, sizeof(hx), "%06x", h & 0xffffffu);
+    return "w-" + slug(script, 16) + "-" + slug(id, 12) + "-" + hx;
+}
+
+// 0..1 per axis -> the host's slot (left/centre/right, top/middle/bottom).
+float slotFraction(float v) { return v < 0.25f ? 0.05f : v > 0.75f ? 0.9f : 0.45f; }
+
+void HORIZON_CALL drawWidget(void* user) {
+    WidgetReg* w = static_cast<WidgetReg*>(user);
+    if (!g_host || !g_enabled || !g_mgr.ready() || !w || !w->live) return;
+    if (Script* s = g_mgr.find(w->script)) g_mgr.renderWidget(*s, w->widget);
+}
+
+// Registers the widgets of running scripts and removes the others (game thread, once a frame).
+void syncWidgets() {
+    if (!g_host || !g_panels || !g_host->register_panel || !g_host->unregister_panel) return;
+    std::vector<WidgetReg*> wanted;
+    for (auto& sp : g_mgr.scripts()) {
+        Script& s = *sp;
+        if (s.state != ScriptState::Running || !(s.manifest.perms & PermUi) || !s.cb[CbRenderWidget]) continue;
+        for (const WidgetDef& d : s.widgets) {
+            const std::string key = widgetKey(s.id, d.id);
+            WidgetReg* r = nullptr;
+            for (auto& e : g_widgets)
+                if (e->key == key) r = e.get();
+            if (!r) {
+                g_widgets.push_back(std::make_unique<WidgetReg>());
+                r = g_widgets.back().get();
+                r->key = key;
+                r->script = s.id;
+                r->widget = d.id;
+            }
+            const bool changed = !r->live || r->title != d.title || r->x != d.x || r->y != d.y;
+            r->title = d.title;
+            r->x = d.x;
+            r->y = d.y;
+            if (changed) {
+                HorizonPanelDef def = {};
+                def.size = sizeof(def);
+                def.key = r->key.c_str();
+                def.title = r->title.c_str();
+                def.icon = HZ_ICON_SCROLL_TEXT;
+                def.flags = HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN;
+                def.draw = drawWidget;
+                def.user = r;
+                def.default_x = slotFraction(r->x);
+                def.default_y = slotFraction(r->y);
+                def.default_w = 0.0f; // fits its content: resizing in layout mode scales it
+                def.default_h = 0.0f;
+                r->live = g_host->register_panel(g_host->plugin, &def) == HORIZON_OK;
+            }
+            if (r->live) wanted.push_back(r);
+        }
+    }
+    for (auto& e : g_widgets)
+        if (e->live && std::find(wanted.begin(), wanted.end(), e.get()) == wanted.end()) {
+            g_host->unregister_panel(g_host->plugin, e->key.c_str());
+            e->live = false;
+        }
+}
+
+void dropWidgets() {
+    if (g_host && g_host->unregister_panel)
+        for (auto& e : g_widgets)
+            if (e->live) g_host->unregister_panel(g_host->plugin, e->key.c_str());
+    g_widgets.clear();
+}
+
 void HORIZON_CALL onPeekHotkey(void*) {
     if (g_enabled) g_mgr.peek();
 }
@@ -451,12 +551,12 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_ABI,
     "scripts",
     "Horizon Scripts",
-    "0.1.0",
+    "0.2.0",
     HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF,
     HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL, // page = two panels (ABI 1.2), no DrawMenu
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Runs AngelScript scripts from horizon\\scripts on every supported game.",
+    "Runs scripts from horizon\\scripts.",
     HORIZON_ABI_MINOR,
 };
 
@@ -507,7 +607,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         g_panels = host->register_panel(host->plugin, &d) == HORIZON_OK && g_panels;
     }
     // one hotkey for all scripts: calls OnPeek(), e.g. Clock and Map Info show themselves again for a while
-    if (host->register_hotkey) host->register_hotkey(host->plugin, "peek", "Show script overlays", "Ctrl+F4", onPeekHotkey, nullptr);
+    if (host->register_hotkey) host->register_hotkey(host->plugin, "peek", "Show script widgets", "Ctrl+F4", onPeekHotkey, nullptr);
     if (!g_panels) host->log(host->plugin, HORIZON_LOG_WARN, "this host has no panels (ABI 1.2): scripts run, but the Scripts page needs host 0.2.0 or newer");
     if (g_mgr.ready()) {
         updateGate();
@@ -519,6 +619,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
 }
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
+    dropWidgets();
     g_mgr.shutdown();
     g_host = nullptr;
 }
@@ -532,6 +633,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawOverlay(void) {
     g_lastFrameUs = us;
     updateGate();
     g_mgr.tick(GetTickCount64());
+    syncWidgets();
     reflectionBeginFrame(g_mgr.cfg.readLimit);
     if (!g_imgui || !g_enabled) return;
     const bool capture = g_host->abi_minor >= 2 && g_host->host_flags && (g_host->host_flags() & HORIZON_HOST_FLAG_CAPTURE);

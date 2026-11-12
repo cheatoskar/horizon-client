@@ -12,6 +12,7 @@ bool actionsAllowed = true;
 int gameState = HORIZON_STATE_SOLO_RACE;
 uint32_t hostFlags = 0;
 std::vector<Panel> panels;
+bool menuOpen = true;
 std::vector<std::string> playedMaps;
 int menuReturns = 0;
 
@@ -24,7 +25,7 @@ std::vector<std::pair<HorizonCallback, void*>> g_queue;
 int32_t HORIZON_CALL t_is_online(void) { return online ? 1 : 0; }
 int32_t HORIZON_CALL t_actions_allowed(HorizonPluginHandle) { return actionsAllowed ? 1 : 0; }
 int32_t HORIZON_CALL t_get_game_state(void) { return gameState; }
-int32_t HORIZON_CALL t_menu_open(void) { return 1; }
+int32_t HORIZON_CALL t_menu_open(void) { return menuOpen ? 1 : 0; }
 const char* HORIZON_CALL t_data_folder(HorizonPluginHandle) { return g_dataFolder.c_str(); }
 const wchar_t* HORIZON_CALL t_data_folder_w(HorizonPluginHandle) { return g_dataFolderW.c_str(); }
 void HORIZON_CALL t_run_on_game_thread(HorizonPluginHandle, HorizonCallback cb, void* user) { g_queue.push_back({cb, user}); }
@@ -43,12 +44,21 @@ HorizonResult HORIZON_CALL t_register_panel(HorizonPluginHandle, const HorizonPa
             p.title = d->title;
             p.draw = d->draw;
             p.user = d->user;
+            p.flags = d->flags;
+            p.dx = d->default_x;
+            p.dy = d->default_y;
             return HORIZON_OK;
         }
-    panels.push_back(Panel{d->key, d->title, d->draw, d->user});
+    panels.push_back(Panel{d->key, d->title, d->draw, d->user, d->flags, d->default_x, d->default_y});
     return HORIZON_OK;
 }
-void HORIZON_CALL t_unregister_panel(HorizonPluginHandle, const char*) {}
+void HORIZON_CALL t_unregister_panel(HorizonPluginHandle, const char* key) {
+    for (size_t i = 0; i < panels.size(); i++)
+        if (key && panels[i].key == key) {
+            panels.erase(panels.begin() + static_cast<std::ptrdiff_t>(i));
+            return;
+        }
+}
 int32_t HORIZON_CALL t_panel_visible(HorizonPluginHandle, const char*) { return 1; }
 void HORIZON_CALL t_set_host_flag(HorizonPluginHandle, uint32_t, int32_t) {}
 uint32_t HORIZON_CALL t_host_flags(void) { return hostFlags; }

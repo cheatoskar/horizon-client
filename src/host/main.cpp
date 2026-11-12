@@ -84,6 +84,13 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
 
     // game info for plugins
     s.infoGameFolder = utf8(s.game.exeFolder);
+    // Forever keeps its user data (Tracks, Replays) in Documents\TrackMania\, also under TMLoader, unless it runs
+    // with /useexedir (then the game folder is used, and "" makes plugins fall back to it). Same rule as gamectl.
+    if ((s.game.game & HORIZON_GAME_FOREVER) && !wcsstr(GetCommandLineW(), L"/useexedir")) {
+        wchar_t docs[MAX_PATH] = {};
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs)))
+            s.infoUserFolder = utf8(std::wstring(docs) + L"\\TrackMania\\");
+    }
     s.info.size = sizeof(HorizonGameInfo);
     s.info.game = s.game.game;
     s.info.game_name = s.game.name.c_str();

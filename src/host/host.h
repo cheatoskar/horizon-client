@@ -170,6 +170,7 @@ void texturesLoad(); // logo, plugin and other-mod icons (textures.cpp), after t
 void texturesReloadPluginIcons(); // after the icon style changed (host.json "ui.icon_alt"), between frames
 void* gameDevice();
 void overlayDeviceCreated(void* device, HWND window, void* params);
+HWND overlayWindow(); // the game window the device was made for (nullptr before)
 void overlayBeforeReset();
 void overlayAfterReset(bool ok);
 void overlayFrame(void* device); // in Present, before the call on

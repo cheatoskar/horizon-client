@@ -179,7 +179,7 @@ A plugin that renders itself (shaders, post effects) sets `HORIZON_CAP_DEVICE` a
 | `game_info()` | game bit, exe sha256, exe base (rebase link addresses: `base - 0x400000 + link`), folders, host version |
 | `engine_pointer(HORIZON_ENGINE_APP / RACE / CHALLENGE)` | raw game objects, NULL if unknown |
 | `post_replay_saved(plugin, utf8 path)` | tell everyone I wrote a replay file |
-| `play_map_file`, `return_to_menu` | game control (`CAP_GAME_CONTROL`); return a `HorizonResult` |
+| `play_map_file`, `return_to_menu` | game control (`CAP_GAME_CONTROL`); return a `HorizonResult`. The map file may be anywhere (a plugin's data folder). ESWC, Sunrise, Original: copied into `GameData\Tracks\Challenges\Downloaded\_Horizon\`, one rescan of the game's map list, the copy is found by the gold time in its header (host 0.3.0; it used to count new list entries and failed with "expected 1, got 2"); main menu only. TMNF/TMUF (host 0.3.0): handed to the game like a double-clicked map (the game's single-instance message, `WM_COPYDATA` 'ELIF'), main menu and offline only, no rescan, no memory write; `HORIZON_OK` means handed over, the game opens it a moment later (not run in a game yet) |
 | `get_game_state`, `is_online`, `menu_open` | current state |
 | `request_restart_note(plugin, why)` | "applies after restart" note in the menu |
 | `reflect_offset`, `reflect_method` | read-only engine reflection by class and member name |
@@ -214,6 +214,7 @@ host->register_panel(host->plugin, &d);
 - "Pop out" (top right of the tab) puts the panel into its own window. With the menu open the window sits above the menu and can be moved and resized; its close button and "Back to the menu" bring it back. Right-click in the window, or the tab of a popped-out panel, shows its options: **Keep open when the menu closes**, **Lock layout** (no moving or resizing), **Click-through** (with the menu closed, clicks go to the game), **Hide in photos and videos** (on by default, see `HORIZON_HOST_FLAG_CAPTURE`), **Opacity** 30-100 %.
 - With the menu closed, kept windows have no title bar and can't be moved; they take mouse clicks unless they are click-through.
 - `HORIZON_PANEL_HUD`: starts popped out and kept open (a timer, a split display). The player can still bring it into the menu.
+- `HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN` (host 0.3.0, no ABI change; an older host ignores the bit and shows the widget at once): a widget that is off until the player shows it, from the list of hidden widgets in layout mode ("+ Title") or "Show" on its tab. Its tab then has "Hide". Reset in layout mode leaves hidden ones hidden. Horizon Scripts registers every script widget (`UI::AddWidget`) this way.
 - The host saves the layout per plugin id + key in `horizon\settings\host.json` (`panel.<plugin>.<key>`).
 - Panels of a plugin that is off, failed or gated online are not drawn. `panel_visible(plugin, key)` says whether the body was drawn in the last frame (skip work otherwise).
 - The sample plugin shows both kinds: "Events" (a tab) and "Clock" (a HUD window).
@@ -332,7 +333,7 @@ Rules the host applies:
 
 ### The TM Horizon bridge: `bridge_request` and `bridge_state`
 
-The game process never goes online. A plugin that needs data from the internet (a TMX search, a map file, a record replay) asks TM Horizon through the host. The protocol, the paths and the pairing are in `docs/client-bridge.md`; this section is only the plugin side.
+The host itself never goes online. A plugin that needs data from the internet (a TMX search, a map file, a record replay) can ask TM Horizon through the host (WR Hunter does); a plugin may also talk to a site itself (TMX Browser since 0.2.0 calls the TMX API with its own HTTP client, so it works without TM Horizon). The protocol, the paths and the pairing are in `docs/client-bridge.md`; this section is only the plugin side.
 
 ```c
 static void HORIZON_CALL onAnswer(void* user, int32_t status, const char* content_type,
@@ -386,7 +387,7 @@ TM Horizon applies its own limits on top (one TMX request per second at most, ca
 
 Threading: call `bridge_request` on the game thread (`Init`, `OnEvent`, a panel's draw function, `DrawOverlay`). The host sends the request on its own thread and hands the answer back on the game thread, so the callback can touch plugin state without a lock. When a plugin is switched off, its waiting requests are dropped and the ones already answered get `HORIZON_BRIDGE_ERR_CANCELLED`. After `Shutdown` no callback arrives. If the callback's `user` pointer points to something, make sure it is still there when the answer comes (a request id looked up in a table is safer than a raw pointer).
 
-The first plugins that use this: WR Hunter (record replay, `docs/plugins/wr-hunter.md`) and TMX Browser (`docs/plugins/tmx-browser.md`).
+The plugin that uses this: WR Hunter (record replay, `docs/plugins/wr-hunter.md`). TMX Browser used it up to 0.1.0.
 
 ## For mods that are not plugins (TMVS and others)
 

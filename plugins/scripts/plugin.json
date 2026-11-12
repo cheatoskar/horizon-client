@@ -1,7 +1,7 @@
 {
   "id": "scripts",
   "name": "Horizon Scripts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "dll": "scripts.dll",
   "games": [
     "eswc",
@@ -12,7 +12,7 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Runs AngelScript scripts from horizon\\scripts on every supported game.",
+  "description": "Runs scripts from horizon\\scripts.",
   "author": "cheatoskar",
   "icon": "icon.png"
 }

@@ -1,10 +1,17 @@
 // TMX Browser - a Horizon Host plugin: search the TrackMania Exchange from inside the game, look at the map
-// cards, and download or play a map. Online data comes from TM Horizon over the host's bridge (the game
-// process never goes online). The pure logic (queries, parsing, favourites, file names) is in tmx_logic.cpp.
+// cards, and download or play a map. The plugin talks to the exchange of the running game itself (TMX API v2,
+// tmx_net.cpp: WinHTTP on worker threads, rate limited, user agent TM-Horizon/<version>); TM Horizon is not
+// needed. The pure logic (URLs, parsing, map check, favourites, file names) is in tmx_logic.cpp / tmx_api.cpp.
 //
-// Threads: everything runs on the game thread (panels draw there, bridge callbacks come back there).
-// Late answers: every request has an entry in g_pending and the generation it was sent in. Shutdown and
-// switching the plugin off clear g_pending and bump g_gen, so nothing can touch freed state afterwards.
+// Play: ESWC, Sunrise and Original download the map into the game's Tracks\Challenges\Downloaded\_Horizon\
+// folder and start it with the host's play_map_file (main menu only, never online). TMNF/TMUF stay read-only:
+// the plugin asks TMX for the map's play link (https://<exchange>/trackplay/<id> answers with a one-time
+// tmtp:///:tmx:download:... link) and hands it to the game the way Windows does for a clicked tmtp link (the
+// game's own single-instance message), so the game downloads and opens the map itself.
+//
+// Threads: everything here runs on the game thread (panels, DrawOverlay); network answers are picked up in
+// pumpNet() once a frame. Late answers: every request has an entry in g_pending and the generation it was
+// sent in. Shutdown and switching the plugin off clear g_pending and bump g_gen.
 #define HORIZON_PLUGIN_BUILD
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <windows.h>
@@ -27,14 +34,16 @@
 #include "horizon_plugin.h"
 #include "ckui.h"
 #include "tmx_logic.h"
+#include "tmx_net.h"
 
 using tmx::Track;
 
 namespace {
 
-constexpr char kVersion[] = "0.1.0";
+constexpr char kVersion[] = "0.2.0";
 constexpr size_t kMaxTextures = 48;
-constexpr int kMaxThumbsInFlight = 3;
+constexpr int kMaxThumbsInFlight = 6;
+constexpr size_t kThumbCacheFiles = 600;
 
 const HorizonHostApi* g_host = nullptr;
 bool g_imgui = false;
@@ -42,19 +51,23 @@ bool g_enabled = false;
 unsigned g_gen = 1;
 std::string g_site;
 bool g_forever = true;
+tmx::Net g_net;
+std::string g_thumbDir;
 
 // ---------------------------------------------------------------- requests
-enum Kind { kSearch, kRandom, kThumb, kMap };
+enum Kind { kSearch, kRandom, kThumb, kMap, kPlayLink, kSendLink };
 struct Pending {
     Kind kind = kSearch;
     unsigned gen = 0;
     int id = 0, page = 1;
-    bool play = false;
+    bool play = false;   // kMap: start it once saved
+    bool later = false;  // kMap: for "Play later"
     unsigned serial = 0;
     std::string name;
 };
-std::unordered_map<uintptr_t, Pending> g_pending;
-uintptr_t g_nextReq = 1;
+std::unordered_map<uint64_t, Pending> g_pending;
+uint64_t g_nextReq = 1;
+std::unordered_map<int, int> g_cursor; // page -> TMX "after" id
 
 // ---------------------------------------------------------------- state
 struct View {
@@ -82,8 +95,22 @@ struct Msg {
     ULONGLONG at = 0;
 } g_msg;
 bool g_mapBusy = false;
-std::string g_lastFile;
+std::string g_lastFile, g_lastLink;
 std::vector<tmx::FavEntry> g_favs; // newest first
+
+// "Play later": a map that starts once the player is back in the main menu (offline, no run).
+struct Later {
+    bool active = false;
+    bool ready = false; // legacy: the file is saved; Forever: always (the link is asked for when it starts)
+    Track t;
+    std::string file;
+} g_later;
+// A legacy map that starts a few frames after "Loading map" was shown (play_map_file rescans the game's map list).
+struct Start {
+    int frames = 0;
+    std::string file, name;
+} g_start;
+int g_links = 0; // tmtp links handed to the game (test hook)
 
 struct Thumb {
     uint64_t tex = 0;
@@ -95,7 +122,7 @@ std::vector<int> g_wanted;
 std::vector<uint64_t> g_deferred;
 int g_frame = -1;
 ULONGLONG g_thumbPause = 0;
-int g_created = 0, g_released = 0;
+int g_created = 0, g_released = 0, g_cacheHits = 0;
 
 // ---------------------------------------------------------------- small helpers
 void logf(int level, const char* fmt, ...) {
@@ -114,24 +141,17 @@ void setMsg(const std::string& text, int kind) {
     g_msg.at = GetTickCount64();
 }
 
-bool connected() { return g_host && g_host->bridge_state && g_host->bridge_state() == HORIZON_BRIDGE_CONNECTED; }
-
-std::string bridgeNeed(bool forMap) {
-    const int s = g_host && g_host->bridge_state ? g_host->bridge_state() : HORIZON_BRIDGE_OFF;
-    if (s == HORIZON_BRIDGE_SEARCHING && forMap) return "Start TM Horizon to download maps";
-    return tmx::bridgeStateText(s);
-}
-
-// "" when Play may run now.
+// "" when Play may run now. Never a game call while online, in a race or during a run.
 std::string playBlock() {
     if (!g_host) return "Not ready";
-    if (g_host->is_online && g_host->is_online()) return "Playing is off while online";
-    if (g_host->actions_allowed && !g_host->actions_allowed(g_host->plugin)) return "Playing is off during a run";
-    if (g_host->get_game_state && g_host->get_game_state() != HORIZON_STATE_MAIN_MENU) return "Go back to the main menu to play";
-    if (!connected()) return bridgeNeed(true);
+    if (g_host->is_online && g_host->is_online()) return "Leave the server first";
+    const int st = g_host->get_game_state ? g_host->get_game_state() : HORIZON_STATE_UNKNOWN;
+    if (st == HORIZON_STATE_NET_RACE) return "Leave the server first";
+    if (st == HORIZON_STATE_SOLO_RACE || st == HORIZON_STATE_END_RACE) return "Leave the race first";
+    if (g_host->actions_allowed && !g_host->actions_allowed(g_host->plugin)) return "Run in progress";
+    if (st != HORIZON_STATE_MAIN_MENU) return "Main menu only";
     return "";
 }
-std::string saveBlock() { return connected() ? std::string() : bridgeNeed(true); }
 
 void releaseTex(uint64_t tex) {
     if (tex && g_host && g_host->release_texture) {
@@ -231,69 +251,84 @@ std::vector<const Track*> favTracks() {
     return v;
 }
 
-// ---------------------------------------------------------------- bridge
-void HORIZON_CALL onBridge(void* user, int32_t status, const char* contentType, const void* body, uint32_t len);
-
-bool bridgeSend(Pending p, const std::string& path, std::string* why) {
-    if (!g_host || !g_host->bridge_request) return false;
-    const uintptr_t key = g_nextReq++;
+// ---------------------------------------------------------------- network
+uint64_t netSend(Pending p, tmx::NetJob job) {
+    const uint64_t key = g_nextReq++;
     p.gen = g_gen;
     g_pending[key] = p;
-    const HorizonResult r = g_host->bridge_request(g_host->plugin, "GET", path.c_str(), nullptr, 0, &onBridge, reinterpret_cast<void*>(key));
-    if (r == HORIZON_OK) return true;
-    g_pending.erase(key);
-    if (why) *why = r == HORIZON_ERR_BUSY ? "Too many requests, wait a moment" : r == HORIZON_ERR_NOT_SUPPORTED ? "The TM Horizon bridge is off" : "Could not send the request";
-    return false;
+    job.id = key;
+    g_net.submit(job);
+    return key;
+}
+
+tmx::NetJob apiJob(const std::string& url, size_t maxBytes, bool follow = true) {
+    tmx::NetJob j;
+    j.lane = tmx::Lane::Api;
+    j.url = url;
+    j.maxBytes = maxBytes;
+    j.follow = follow;
+    return j;
 }
 
 void doSearch(int page) {
-    if (!connected()) {
-        g_b.err = tmx::bridgeStateText(g_host->bridge_state());
-        return;
-    }
     if (page <= 1) {
         g_b.searched = g_b.form;
+        g_cursor.clear();
         page = 1;
+    }
+    int after = 0;
+    if (page > 1) {
+        auto it = g_cursor.find(page);
+        if (it == g_cursor.end()) {
+            g_b.err = "Search again";
+            return;
+        }
+        after = it->second;
     }
     Pending p;
     p.kind = kSearch;
     p.page = page;
     p.serial = ++g_serial;
-    std::string why;
     g_b.err.clear();
     g_b.loading = true;
-    if (!bridgeSend(p, tmx::searchPath(g_site, g_b.searched, page), &why)) {
-        g_b.loading = false;
-        g_b.err = why;
-    }
+    netSend(p, apiJob(tmx::apiSearchUrl(g_site, g_b.searched, tmx::kPageSize, after), tmx::kMaxJsonBytes));
 }
 
 void doRandom() {
-    if (!connected()) {
-        g_b.err = tmx::bridgeStateText(g_host->bridge_state());
-        return;
-    }
     Pending p;
     p.kind = kRandom;
     p.serial = ++g_serial;
-    std::string why;
     g_b.err.clear();
     g_b.loading = true;
-    if (!bridgeSend(p, tmx::randomPath(g_site, g_b.form), &why)) {
-        g_b.loading = false;
-        g_b.err = why;
-    }
+    netSend(p, apiJob(tmx::apiRandomUrl(g_site, g_b.form), tmx::kMaxJsonBytes));
+}
+
+// Forever: ask TMX for the play link (not followed: the Location is the tmtp:// link).
+void askPlayLink(const Track& t) {
+    Pending p;
+    p.kind = kPlayLink;
+    p.id = t.id;
+    p.name = t.name;
+    g_mapBusy = true;
+    setMsg("Opening...", 0);
+    netSend(p, apiJob(tmx::playUrl(g_site, t.id), 64 * 1024, false));
 }
 
 // Download a map; play = also start it. All gates are checked here, the buttons only mirror them.
 void doMap(const Track& t, bool play) {
-    const std::string block = play ? playBlock() : saveBlock();
-    if (!block.empty()) {
-        setMsg(block, 2);
-        return;
+    if (play) {
+        const std::string block = playBlock();
+        if (!block.empty()) {
+            setMsg(block, 2);
+            return;
+        }
     }
     if (g_mapBusy) {
-        setMsg("Busy, one map at a time", 2);
+        setMsg("Busy", 2);
+        return;
+    }
+    if (play && g_forever) {
+        askPlayLink(t);
         return;
     }
     Pending p;
@@ -301,133 +336,247 @@ void doMap(const Track& t, bool play) {
     p.id = t.id;
     p.play = play;
     p.name = t.name;
-    std::string why;
     g_mapBusy = true;
     setMsg(play ? "Downloading..." : "Saving...", 0);
-    if (!bridgeSend(p, tmx::mapPath(g_site, t.id), &why)) {
-        g_mapBusy = false;
-        setMsg(why, 2);
+    netSend(p, apiJob(tmx::gbxUrl(g_site, t.id), tmx::kMaxMapBytes));
+}
+
+// "Play later": start the map once the player is back in the main menu. Legacy games download it now.
+void doPlayLater(const Track& t) {
+    if (g_mapBusy) {
+        setMsg("Busy", 2);
+        return;
+    }
+    g_later = Later();
+    g_later.active = true;
+    g_later.t = t;
+    if (g_forever) {
+        g_later.ready = true;
+    } else {
+        Pending p;
+        p.kind = kMap;
+        p.id = t.id;
+        p.later = true;
+        p.name = t.name;
+        g_mapBusy = true;
+        netSend(p, apiJob(tmx::gbxUrl(g_site, t.id), tmx::kMaxMapBytes));
+    }
+    setMsg("Plays in the main menu", 0);
+}
+
+void cancelLater() {
+    g_later = Later();
+    setMsg("", 0);
+}
+
+std::string mapPathFor(const std::string& name, int id) {
+    const HorizonGameInfo* gi = g_host->game_info();
+    const std::string dir = tmx::downloadFolder(g_forever, gi && gi->user_folder ? gi->user_folder : "", gi && gi->game_folder ? gi->game_folder : "");
+    return dir + tmx::mapFileName(name, id);
+}
+
+// Legacy games: play_map_file a few frames after "Loading map" is on screen (the game rescans its map list).
+void scheduleStart(const std::string& file, const std::string& name) {
+    g_start.frames = 2;
+    g_start.file = file;
+    g_start.name = name;
+    setMsg("Loading map...", 0);
+}
+
+void runStart() {
+    const std::string file = g_start.file, name = g_start.name;
+    g_start = Start();
+    const std::string block = playBlock(); // the state may have changed in the last frames
+    if (!block.empty()) {
+        setMsg(block, 2);
+        return;
+    }
+    const ULONGLONG t0 = GetTickCount64();
+    const HorizonResult r = g_host->play_map_file(g_host->plugin, file.c_str(), 0);
+    logf(HORIZON_LOG_INFO, "play_map_file -> %d in %llu ms", r, GetTickCount64() - t0);
+    const std::string text = tmx::playResultText(r);
+    if (r == HORIZON_OK) {
+        setMsg(text, 1);
+        ck::toast(g_host, HORIZON_TOAST_OK, "Map started", name.c_str());
+    } else {
+        setMsg(text, 2);
+        ck::toast(g_host, HORIZON_TOAST_WARN, "Map not started", text.c_str());
     }
 }
 
-void handleMap(const Pending& p, int32_t status, const void* body, uint32_t len) {
+void handleMap(const Pending& p, const tmx::NetResult& res) {
     g_mapBusy = false;
-    const std::string err = tmx::bridgeErrorText(status);
+    const std::string err = tmx::netErrorText(res.r.status);
     if (!err.empty()) {
-        if (status != HORIZON_BRIDGE_ERR_CANCELLED) setMsg(err, 2);
+        setMsg(err, 2);
+        if (p.later) g_later = Later();
         return;
     }
-    if (!body || len < 4 || memcmp(body, "GBX", 3) != 0) {
-        setMsg("TMX did not send a map file", 2);
+    std::string bad;
+    if (!tmx::checkMapFile(res.r.body.data(), res.r.body.size(), bad)) {
+        setMsg(bad, 2);
+        if (p.later) g_later = Later();
         return;
     }
-    const HorizonGameInfo* gi = g_host->game_info();
-    const std::string dir = tmx::downloadFolder(g_forever, gi && gi->user_folder ? gi->user_folder : "", gi && gi->game_folder ? gi->game_folder : "");
-    const std::string path = dir + tmx::mapFileName(p.name, p.id);
-    if (!tmx::createDirs(path) || !tmx::writeFile(path, body, len)) {
-        setMsg("Could not write the map file", 2);
+    const std::string path = mapPathFor(p.name, p.id);
+    if (!tmx::createDirs(path) || !tmx::writeFile(path, res.r.body.data(), res.r.body.size())) {
+        setMsg("Could not save the map", 2);
         logf(HORIZON_LOG_WARN, "could not write %s", path.c_str());
+        if (p.later) g_later = Later();
         return;
     }
     g_lastFile = path;
+    if (p.later) {
+        if (g_later.active && g_later.t.id == p.id) {
+            g_later.file = path;
+            g_later.ready = true;
+        }
+        return;
+    }
     if (!p.play) {
-        setMsg("Saved as " + tmx::mapFileName(p.name, p.id), 1);
+        setMsg("Saved", 1);
         ck::toast(g_host, HORIZON_TOAST_OK, "Map saved", p.name.c_str());
         return;
     }
-    const std::string block = playBlock(); // the game may have changed state while the map downloaded
+    const std::string block = playBlock();
     if (!block.empty()) {
         setMsg("Saved. " + block, 2);
         ck::toast(g_host, HORIZON_TOAST_WARN, "Map saved", block.c_str());
         return;
     }
-    const HorizonResult r = g_host->play_map_file(g_host->plugin, path.c_str(), 0);
-    const std::string text = tmx::playResultText(r);
-    if (r == HORIZON_OK) {
-        setMsg(text, 1);
-        ck::toast(g_host, HORIZON_TOAST_OK, "Map started", p.name.c_str());
+    scheduleStart(path, p.name);
+}
+
+void sendLink(const std::string& link, const std::string& name) {
+    Pending p;
+    p.kind = kSendLink;
+    p.name = name;
+    tmx::NetJob j;
+    j.lane = tmx::Lane::Api;
+    j.sendLink = link;
+    j.window = tmx::gameWindow(g_host->device ? g_host->device() : nullptr);
+    g_mapBusy = true;
+    netSend(p, j);
+}
+
+void handlePlayLink(const Pending& p, const tmx::NetResult& res) {
+    g_mapBusy = false;
+    const int st = res.r.status;
+    if ((st == 301 || st == 302 || st == 303 || st == 307) && tmx::tmtpLinkOk(res.r.location)) {
+        const std::string block = playBlock();
+        if (!block.empty()) {
+            setMsg(block, 2);
+            return;
+        }
+        g_lastLink = res.r.location;
+        sendLink(res.r.location, p.name);
+        return;
+    }
+    const std::string err = tmx::netErrorText(st);
+    setMsg(err.empty() || st < 300 ? std::string("No play link from TMX") : err, 2);
+    logf(HORIZON_LOG_WARN, "play link for %d: status %d, location \"%.80s\"", p.id, st, res.r.location.c_str());
+}
+
+void handleSendLink(const Pending& p, const tmx::NetResult& res) {
+    g_mapBusy = false;
+    if (res.r.status == 200) {
+        g_links++;
+        setMsg("Opened in the game", 1);
+        ck::toast(g_host, HORIZON_TOAST_OK, "Map opening", p.name.c_str());
     } else {
-        setMsg(text, 2);
-        ck::toast(g_host, HORIZON_TOAST_WARN, "Could not start the map", text.c_str());
+        setMsg("Game did not answer", 2);
     }
 }
 
-void handleThumb(const Pending& p, int32_t status, const void* body, uint32_t len) {
+void handleThumb(const Pending& p, tmx::NetResult& res) {
     g_thumbInflight.erase(p.id);
-    if (status == HORIZON_BRIDGE_ERR_CANCELLED) return;
-    if (status == HORIZON_BRIDGE_ERR_RATE_LIMIT || status == 429 || status == HORIZON_BRIDGE_ERR_TIMEOUT) {
+    if (res.r.status == 429 || res.r.status == -2) {
         g_thumbPause = GetTickCount64() + 3000; // try again later, the card asks again
         return;
     }
-    std::vector<uint8_t> rgba;
-    int w = 0, h = 0;
-    if (status != 200 || !tmx::decodeThumb(body, len, rgba, w, h, 256)) {
+    if (!res.decoded) {
         g_noThumb.insert(p.id);
         return;
     }
-    const uint64_t tex = g_host->create_texture_rgba(g_host->plugin, static_cast<uint32_t>(w), static_cast<uint32_t>(h), rgba.data());
+    if (res.fromCache) g_cacheHits++;
+    const uint64_t tex = g_host->create_texture_rgba(g_host->plugin, static_cast<uint32_t>(res.w), static_cast<uint32_t>(res.h), res.rgba.data());
     if (!tex) {
         g_noThumb.insert(p.id);
         return;
     }
     g_created++;
     std::vector<Thumb> evicted;
-    g_thumbs.put(p.id, Thumb{tex, w, h}, &evicted);
+    g_thumbs.put(p.id, Thumb{tex, res.w, res.h}, &evicted);
     for (const Thumb& e : evicted) g_deferred.push_back(e.tex); // may be in this frame's draw list: release next frame
 }
 
-void HORIZON_CALL onBridge(void* user, int32_t status, const char*, const void* body, uint32_t len) {
-    auto it = g_pending.find(reinterpret_cast<uintptr_t>(user));
-    if (it == g_pending.end()) return;
-    const Pending p = std::move(it->second);
-    g_pending.erase(it);
-    if (p.gen != g_gen || !g_host || !g_enabled) return;
-    const std::string bodyText = body && len ? std::string(static_cast<const char*>(body), len) : std::string();
-    switch (p.kind) {
-    case kThumb: handleThumb(p, status, body, len); break;
-    case kMap: handleMap(p, status, body, len); break;
-    case kSearch:
-    case kRandom: {
-        if (p.serial != g_serial) return; // a newer search superseded this one
-        g_b.loading = false;
-        std::string err = tmx::bridgeErrorText(status);
-        if (!err.empty()) {
-            if (status != HORIZON_BRIDGE_ERR_CANCELLED) g_b.err = err;
-            return;
-        }
-        if (p.kind == kSearch) {
-            tmx::SearchResult r;
-            if (!tmx::parseSearch(bodyText, r, err)) {
-                g_b.err = err;
-                return;
-            }
-            if (p.page <= 1) g_b.results.clear();
-            for (Track& t : r.tracks) {
-                bool dup = false;
-                for (const Track& o : g_b.results)
-                    if (o.id == t.id) dup = true;
-                if (!dup) g_b.results.push_back(std::move(t));
-            }
-            g_b.page = p.page;
-            g_b.more = r.more;
-            g_b.hasSearched = true;
-        } else {
-            Track t;
-            bool found = false;
-            if (!tmx::parseRandom(bodyText, t, found, err)) {
-                g_b.err = err;
-                return;
-            }
-            if (!found) {
-                g_b.err = "No map matches these filters";
-                return;
-            }
-            g_view[0].detail = true;
-            g_view[0].t = std::move(t);
-            g_msg.text.clear();
-        }
-        break;
+void handleList(const Pending& p, const tmx::NetResult& res) {
+    if (p.serial != g_serial) return; // a newer search superseded this one
+    g_b.loading = false;
+    const std::string err = tmx::netErrorText(res.r.status);
+    if (!err.empty()) {
+        g_b.err = err;
+        return;
     }
+    std::vector<Track> tracks;
+    bool more = false;
+    int lastId = 0;
+    std::string perr;
+    const int minAwards = p.kind == kSearch ? g_b.searched.awards : g_b.form.awards;
+    if (!tmx::parseApiTracks(res.r.body, minAwards, tracks, more, lastId, perr)) {
+        g_b.err = perr;
+        return;
+    }
+    if (p.kind == kSearch) {
+        if (p.page <= 1) g_b.results.clear();
+        for (Track& t : tracks) {
+            bool dup = false;
+            for (const Track& o : g_b.results)
+                if (o.id == t.id) dup = true;
+            if (!dup) g_b.results.push_back(std::move(t));
+        }
+        g_b.page = p.page;
+        g_b.more = more && lastId > 0;
+        if (g_b.more) g_cursor[p.page + 1] = lastId;
+        g_b.hasSearched = true;
+        return;
+    }
+    if (tracks.empty()) {
+        g_b.err = "No map found";
+        return;
+    }
+    const size_t pick = static_cast<size_t>((GetTickCount64() ^ (static_cast<ULONGLONG>(GetCurrentProcessId()) << 7)) % tracks.size());
+    g_view[0].detail = true;
+    g_view[0].t = std::move(tracks[pick]);
+    g_msg.text.clear();
+}
+
+// Once a frame (DrawOverlay, the panels and the test hook): answers, the delayed start, "Play later".
+void pumpNet() {
+    if (!g_host || !g_enabled) return;
+    tmx::NetResult res;
+    while (g_net.poll(res)) {
+        auto it = g_pending.find(res.id);
+        if (it == g_pending.end()) continue;
+        const Pending p = std::move(it->second);
+        g_pending.erase(it);
+        if (p.gen != g_gen) continue;
+        switch (p.kind) {
+        case kThumb: handleThumb(p, res); break;
+        case kMap: handleMap(p, res); break;
+        case kPlayLink: handlePlayLink(p, res); break;
+        case kSendLink: handleSendLink(p, res); break;
+        case kSearch:
+        case kRandom: handleList(p, res); break;
+        }
+    }
+    if (g_start.frames > 0 && --g_start.frames == 0) runStart();
+    if (g_later.active && g_later.ready && !g_mapBusy && g_start.frames == 0 && playBlock().empty()) {
+        const Later l = g_later;
+        g_later = Later();
+        logf(HORIZON_LOG_INFO, "play later: %d now", l.t.id);
+        if (g_forever) askPlayLink(l.t);
+        else scheduleStart(l.file, l.t.name);
     }
 }
 
@@ -445,17 +594,35 @@ void wantThumb(const Track& t) {
     if (std::find(g_wanted.begin(), g_wanted.end(), t.id) == g_wanted.end()) g_wanted.push_back(t.id);
 }
 
+const Track* trackById(int id) {
+    for (const Track& t : g_b.results)
+        if (t.id == id) return &t;
+    for (const tmx::FavEntry& f : g_favs)
+        if (f.t.id == id && f.game == g_site) return &f.t;
+    for (const View& v : g_view)
+        if (v.detail && v.t.id == id) return &v.t;
+    return nullptr;
+}
+
 void pumpThumbs() {
-    if (GetTickCount64() < g_thumbPause || !connected()) return;
+    if (GetTickCount64() < g_thumbPause) return;
     size_t i = 0;
     while (i < g_wanted.size() && static_cast<int>(g_thumbInflight.size()) < kMaxThumbsInFlight) {
         const int id = g_wanted[i++];
         if (g_thumbInflight.count(id) || g_thumbs.peek(id) || g_noThumb.count(id)) continue;
+        const Track* t = trackById(id);
+        if (!t) continue;
         Pending p;
         p.kind = kThumb;
         p.id = id;
-        if (bridgeSend(p, tmx::thumbPath(g_site, id), nullptr)) g_thumbInflight.insert(id);
-        else break; // busy or off: the cards ask again next frame
+        tmx::NetJob j;
+        j.lane = tmx::Lane::Image;
+        j.url = tmx::imageUrl(g_site, *t);
+        j.maxBytes = tmx::kMaxThumbBytes;
+        j.decode = true;
+        if (!g_thumbDir.empty()) j.cacheFile = g_thumbDir + tmx::thumbCacheName(g_site, id);
+        netSend(p, j);
+        g_thumbInflight.insert(id);
     }
     g_wanted.clear();
 }
@@ -735,23 +902,34 @@ void drawDetail(const ck::Palette& pal, View& v) {
 
     ImGui::Dummy(ImVec2(0, 8.0f * s));
     const std::string playOff = playBlock();
-    const std::string saveOff = saveBlock();
     const bool busy = g_mapBusy;
+    const bool waiting = g_later.active && g_later.t.id == t.id;
     const HorizonStyle* hs = g_host->style ? g_host->style() : nullptr;
     const ImVec4 ink = hs ? ck::v4(hs->accent_ink) : ImVec4(0.1f, 0.04f, 0.01f, 1.0f);
-    ImGui::BeginDisabled(!playOff.empty() || busy);
-    ImGui::PushStyleColor(ImGuiCol_Button, pal.accent);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.accent2);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, pal.accent3);
-    ImGui::PushStyleColor(ImGuiCol_Text, ink);
-    if (ImGui::Button("Play", ImVec2(96.0f * s, 0))) doMap(t, true);
-    ImGui::PopStyleColor(4);
-    ImGui::EndDisabled();
+    const float pw = 120.0f * s;
+    if (waiting) {
+        if (ImGui::Button("Cancel", ImVec2(pw, 0))) cancelLater();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Do not start it later.");
+    } else {
+        ImGui::BeginDisabled(busy);
+        ImGui::PushStyleColor(ImGuiCol_Button, pal.accent);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.accent2);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, pal.accent3);
+        ImGui::PushStyleColor(ImGuiCol_Text, ink);
+        if (playOff.empty()) {
+            if (ImGui::Button("Play", ImVec2(pw, 0))) doMap(t, true);
+        } else {
+            if (ImGui::Button("Play later", ImVec2(pw, 0))) doPlayLater(t);
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::EndDisabled();
+        if (!playOff.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Starts in the main menu.");
+    }
     ImGui::SameLine();
-    ImGui::BeginDisabled(!saveOff.empty() || busy);
+    ImGui::BeginDisabled(busy);
     if (ImGui::Button("Save", ImVec2(80.0f * s, 0))) doMap(t, false);
     ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Download without playing.");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Download only.");
     ImGui::SameLine();
     const bool fav = isFav(t.id);
     {
@@ -764,7 +942,11 @@ void drawDetail(const ck::Palette& pal, View& v) {
         drawStar(dl, ImVec2(p.x + fs * 1.0f, p.y + bh * 0.5f), fs * 0.5f, fav ? ck::u32(pal.accent2) : ck::u32(pal.text2), fav);
         ck::text(dl, ImGui::GetFont(), fs, ImVec2(p.x + fs * 1.9f, p.y + (bh - fs) * 0.5f), ck::u32(pal.text), label);
     }
-    if (!playOff.empty()) {
+    if (waiting) {
+        ImGui::PushStyleColor(ImGuiCol_Text, pal.muted);
+        ImGui::TextWrapped("Plays in the main menu");
+        ImGui::PopStyleColor();
+    } else if (!playOff.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, pal.warn);
         ImGui::TextWrapped("%s", playOff.c_str());
         ImGui::PopStyleColor();
@@ -784,17 +966,15 @@ void drawDetail(const ck::Palette& pal, View& v) {
     if (ImGui::Button("Copy")) ImGui::SetClipboardText(url.c_str());
 }
 
-void bridgeLine(const ck::Palette& pal) {
+void siteLine(const ck::Palette& pal) {
     const float s = S();
-    const int st = g_host->bridge_state();
-    const ImVec4 c = st == HORIZON_BRIDGE_CONNECTED ? pal.ok : st == HORIZON_BRIDGE_PAIRING ? pal.warn : pal.muted;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float fs = ImGui::GetFontSize();
-    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 5.0f * s, p.y + fs * 0.5f + 1.0f), 4.0f * s, ck::u32(c));
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 5.0f * s, p.y + fs * 0.5f + 1.0f), 4.0f * s, ck::u32(pal.ok));
     ImGui::Dummy(ImVec2(14.0f * s, fs));
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, st == HORIZON_BRIDGE_CONNECTED ? pal.text2 : c);
-    ImGui::TextUnformatted(tmx::bridgeStateText(st).c_str());
+    ImGui::PushStyleColor(ImGuiCol_Text, pal.text2);
+    ImGui::TextUnformatted(tmx::siteHost(g_site).c_str());
     ImGui::PopStyleColor();
 }
 
@@ -872,20 +1052,18 @@ void drawForm(const ck::Palette& pal) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(avail - (rest * 0.76f + gap * 3.0f));
     if (ImGui::DragInt("##awards", &f.awards, 0.25f, 0, 9999, "Awards: %d+")) changed = true;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Minimum number of awards.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Minimum awards.");
 
     // row 3: buttons
-    const bool off = !connected();
-    ImGui::BeginDisabled(off);
     if (ImGui::Button("Search", ImVec2(90.0f * s, 0))) go = true;
     ImGui::SameLine();
     if (ImGui::Button("Random", ImVec2(90.0f * s, 0))) {
         saveForm();
         doRandom();
     }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("A random map that fits the filters.");
-    ImGui::EndDisabled();
-    ImGui::SameLine(avail - 130.0f * s);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A random map with these filters.");
+    // narrow page (a small window, a pop-out): the card size goes below the buttons instead of over them
+    if (avail >= 90.0f * 2.0f * s + gap + 130.0f * s + 16.0f * s) ImGui::SameLine(avail - 130.0f * s);
     gridSizeCombo(130.0f * s);
     (void)pal;
 
@@ -902,8 +1080,8 @@ void drawResults(const ck::Palette& pal) {
     }
     if (g_b.loading) ck::hint(pal, "Searching...");
     if (g_b.results.empty()) {
-        if (!g_b.loading && g_b.hasSearched) ck::hint(pal, "No maps found.");
-        else if (!g_b.loading && !g_b.hasSearched && g_b.err.empty()) ck::hint(pal, "Search TMX or try a random map.");
+        if (!g_b.loading && g_b.hasSearched) ck::hint(pal, "No maps found");
+        else if (!g_b.loading && !g_b.hasSearched && g_b.err.empty()) ck::hint(pal, "Search or Random");
         return;
     }
     std::vector<const Track*> list;
@@ -915,7 +1093,7 @@ void drawResults(const ck::Palette& pal) {
         g_msg.text.clear();
     }
     if (g_b.more) {
-        ImGui::BeginDisabled(g_b.loading || !connected());
+        ImGui::BeginDisabled(g_b.loading);
         if (ImGui::Button("More", ImVec2(110.0f * S(), 0))) doSearch(g_b.page + 1);
         ImGui::EndDisabled();
     }
@@ -925,7 +1103,7 @@ void HORIZON_CALL drawBrowse(void*) {
     if (!g_enabled || !g_imgui || !g_host) return;
     beginFrame();
     const ck::Palette pal = ck::palette(g_host);
-    bridgeLine(pal);
+    siteLine(pal);
     ImGui::Dummy(ImVec2(0, 2.0f * S()));
     if (g_view[0].detail) {
         drawDetail(pal, g_view[0]);
@@ -934,6 +1112,7 @@ void HORIZON_CALL drawBrowse(void*) {
         drawResults(pal);
     }
     pumpThumbs();
+    pumpNet();
 }
 
 void HORIZON_CALL drawFavs(void*) {
@@ -953,7 +1132,7 @@ void HORIZON_CALL drawFavs(void*) {
         gridSizeCombo(130.0f * S());
         ImGui::Dummy(ImVec2(0, 4.0f * S()));
         if (list.empty()) {
-            ck::hint(pal, "No favourites yet. Click the star on a map.");
+            ck::hint(pal, "No favourites");
         } else {
             const int open = drawGrid(pal, list);
             if (open >= 0) {
@@ -964,10 +1143,15 @@ void HORIZON_CALL drawFavs(void*) {
         }
     }
     pumpThumbs();
+    pumpNet();
 }
 
 void resetState() {
+    g_net.cancelAll();
     g_pending.clear();
+    g_cursor.clear();
+    g_later = Later();
+    g_start = Start();
     g_gen++;
     g_b.results.clear();
     g_b.err.clear();
@@ -987,16 +1171,17 @@ void resetState() {
 
 // ---------------------------------------------------------------- test hook
 std::string activeStateText() {
-    char buf[900];
+    char buf[1400];
     const std::string pb = g_host ? playBlock() : std::string("no host");
     snprintf(buf, sizeof(buf),
-             "game=%s bridge=%d results=%d more=%d page=%d loading=%d thumbs=%d inflight=%d noThumb=%d created=%d released=%d "
-             "detail=%s:%d favs=%d tab=%s playblock=\"%s\" msg=\"%s\" err=\"%s\" file=\"%s\"",
-             g_site.c_str(), g_host && g_host->bridge_state ? g_host->bridge_state() : -1, static_cast<int>(g_b.results.size()),
+             "game=%s results=%d more=%d page=%d loading=%d thumbs=%d inflight=%d noThumb=%d created=%d released=%d cache=%d "
+             "later=%d:%d starting=%d links=%d busy=%d detail=%s:%d favs=%d tab=%s playblock=\"%s\" msg=\"%s\" err=\"%s\" file=\"%s\" link=\"%s\"",
+             g_site.c_str(), static_cast<int>(g_b.results.size()),
              g_b.more ? 1 : 0, g_b.page, g_b.loading ? 1 : 0, static_cast<int>(g_thumbs.size()), static_cast<int>(g_thumbInflight.size()),
-             static_cast<int>(g_noThumb.size()), g_created, g_released, g_view[g_tab].detail ? (g_tab == 0 ? "browse" : "favourites") : "none",
+             static_cast<int>(g_noThumb.size()), g_created, g_released, g_cacheHits, g_later.active ? 1 : 0, g_later.active ? g_later.t.id : 0,
+             g_start.frames, g_links, g_mapBusy ? 1 : 0, g_view[g_tab].detail ? (g_tab == 0 ? "browse" : "favourites") : "none",
              g_view[g_tab].detail ? g_view[g_tab].t.id : 0, static_cast<int>(favTracks().size()), g_tab == 0 ? "browse" : "favourites",
-             pb.c_str(), g_msg.text.c_str(), g_b.err.c_str(), g_lastFile.c_str());
+             pb.c_str(), g_msg.text.c_str(), g_b.err.c_str(), g_lastFile.c_str(), g_lastLink.c_str());
     return buf;
 }
 
@@ -1024,10 +1209,10 @@ static const HorizonPluginInfo kInfo = {
     "TMX Browser",
     kVersion,
     HORIZON_GAME_ALL,
-    HORIZON_CAP_GAME_CONTROL,
+    HORIZON_CAP_GAME_CONTROL | HORIZON_CAP_OVERLAY,
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
     "cheatoskar",
-    "Search the TrackMania Exchange, preview maps and play them from the game.",
+    "Search TMX and play maps in the game.",
     HORIZON_ABI_MINOR,
 };
 
@@ -1037,8 +1222,8 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) { 
 
 HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* host) {
     if (!host || host->abi != HORIZON_ABI) return 1;
-    if (!ck::abiAtLeast(host, 3) || !host->register_panel || !host->bridge_request) {
-        if (host->log) host->log(host->plugin, HORIZON_LOG_WARN, "needs a host with ABI 1.3 (panels and the bridge)");
+    if (!ck::abiAtLeast(host, 3) || !host->register_panel) {
+        if (host->log) host->log(host->plugin, HORIZON_LOG_WARN, "needs a host with ABI 1.3 (panels, toasts)");
         return 1;
     }
     g_host = host;
@@ -1054,6 +1239,13 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         return 1;
     }
     g_forever = ck::isForever(host);
+    {
+        const HorizonGameInfo* gi = host->game_info ? host->game_info() : nullptr;
+        const std::string ver = gi && gi->host_version && *gi->host_version ? gi->host_version : "0.3.0";
+        g_net.configure("TM-Horizon/" + ver + " (+https://tm-horizon.com)", 1000, 250);
+        g_thumbDir = std::string(host->data_folder(host->plugin)) + "thumbs\\";
+        tmx::pruneCache(g_thumbDir, kThumbCacheFiles);
+    }
     resetState();
     g_enabled = true;
     g_lastFile.clear();
@@ -1079,8 +1271,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     d.draw = &drawFavs;
     host->register_panel(host->plugin, &d);
 
-    host->log(host->plugin, HORIZON_LOG_INFO, "---- tmx-browser %s start (site code %s, %d favourites) ----", kVersion, g_site.c_str(),
-              static_cast<int>(g_favs.size()));
+    host->log(host->plugin, HORIZON_LOG_INFO, "---- tmx-browser %s start (%s, %d favourites, play %s) ----", kVersion, tmx::siteHost(g_site).c_str(),
+              static_cast<int>(g_favs.size()), g_forever ? "through the game's tmtp link" : "play_map_file");
     return 0;
 }
 
@@ -1091,11 +1283,45 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
             g_host->unregister_panel(g_host->plugin, "favourites");
         }
         g_enabled = false;
+        g_net.stop(); // joins the workers: no answer arrives after this
         resetState(); // releases every texture while g_host is still valid
     }
     g_host = nullptr;
     g_imgui = false;
     g_enabled = false;
+}
+
+// Once a frame while on: picks up network answers, so a download finishes with the menu closed too.
+HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawOverlay(void) { pumpNet(); }
+
+// Test seam for the fake-host test and the previews: a fetcher and a link sender instead of WinHTTP and the
+// game window; requests run at once (no gaps). fetch returns the HTTP status and hands the answer to put().
+typedef void(__cdecl* TmxPutFn)(void* ctx, const char* type, const char* location, const void* body, int32_t len);
+typedef int32_t(__cdecl* TmxFetchFn)(const char* url, int32_t follow, TmxPutFn put, void* ctx);
+typedef int32_t(__cdecl* TmxLinkFn)(const char* link);
+static void __cdecl testPut(void* ctx, const char* type, const char* location, const void* body, int32_t len) {
+    tmx::NetResponse* r = static_cast<tmx::NetResponse*>(ctx);
+    r->type = type ? type : "";
+    r->location = location ? location : "";
+    if (body && len > 0) r->body.assign(static_cast<const char*>(body), static_cast<size_t>(len));
+}
+HORIZON_EXPORT void __cdecl HorizonClient_TestNet(TmxFetchFn fetch, TmxLinkFn link) {
+    g_net.stop();
+    g_net.setSync(fetch != nullptr);
+    if (fetch)
+        g_net.setFetcher([fetch](const std::string& url, size_t maxBytes, bool follow) {
+            tmx::NetResponse r;
+            r.status = fetch(url.c_str(), follow ? 1 : 0, &testPut, &r);
+            if (r.body.size() > maxBytes) {
+                r.body.clear();
+                r.status = -3;
+            }
+            return r;
+        });
+    else
+        g_net.setFetcher(nullptr);
+    if (link) g_net.setLinkSender([link](const std::string& l) { return link(l.c_str()) != 0; });
+    else g_net.setLinkSender(nullptr);
 }
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
@@ -1113,6 +1339,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
 //   random          random map (opens its detail)         select N / favselect N   open result N / favourite N
 //   back            close the detail of the active tab    tab browse|favourites    which panel play/save/fav act on first
 //   play / save     download (and start) the open map     fav [N]                  toggle the open map / result N
+//   later / cancel  "Play later" for the open map / cancel it   pump               pick up answers (also done before each command)
 //   form k=v ...    name author tags(3,5) diff len awards  grid small|large        card size
 //   state           the state text only
 HORIZON_EXPORT int32_t __cdecl HorizonClient_TestHook(const char* cmd, char* out, int32_t outSize) {
@@ -1122,6 +1349,7 @@ HORIZON_EXPORT int32_t __cdecl HorizonClient_TestHook(const char* cmd, char* out
     const size_t sp = line.find(' ');
     const std::string c = line.substr(0, sp);
     if (!g_host && c != "state") return hookOut(out, outSize, "error: not running", -1); // "state" also works after Shutdown
+    pumpNet();
     const std::string arg = sp == std::string::npos ? std::string() : line.substr(sp + 1);
     const int n = atoi(arg.c_str());
     if (c == "state") {
@@ -1155,10 +1383,15 @@ HORIZON_EXPORT int32_t __cdecl HorizonClient_TestHook(const char* cmd, char* out
         g_view[g_tab].detail = false;
     } else if (c == "tab") {
         g_tab = arg == "favourites" || arg == "favs" ? 1 : 0;
-    } else if (c == "play" || c == "save") {
+    } else if (c == "play" || c == "save" || c == "later") {
         View* v = activeView();
         if (!v) return hookOut(out, outSize, "error: no map open", -1);
-        doMap(v->t, c == "play");
+        if (c == "later") doPlayLater(v->t);
+        else doMap(v->t, c == "play");
+    } else if (c == "cancel") {
+        cancelLater();
+    } else if (c == "pump") {
+        pumpNet();
     } else if (c == "fav") {
         if (n >= 1) {
             if (n > static_cast<int>(g_b.results.size())) return hookOut(out, outSize, "error: no such result", -1);
