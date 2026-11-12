@@ -2,7 +2,8 @@
 // GUID keeps the slot, no registration storm, replug refresh once), the worker's enumeration logic (list series after
 // a device change, device descriptions, diff, why the game cannot see a pad) and the game backend against a fake
 // input port laid out like ESWC's (enumeration callback appends a pad with DirectInput's device type, binding tables
-// get an empty range, refresh swaps the device).
+// get an empty range, refresh swaps the device) and the bindings a late pad gets (the game's defaults pass for
+// the current profile, saved bindings kept, appended to the running race's table and the menu tables).
 #define DIRECTINPUT_VERSION 0x0800
 #include <windows.h>
 
@@ -10,6 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <string>
+#include <vector>
 
 #include "../hp_enum.h"
 #include "../hp_game.h"
@@ -221,6 +225,7 @@ static uint8_t* newPad(const GUID& g, uint32_t lost) {
     U32(pad, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_padVtbl));
     U32(pad, 0x14) = lost;
     U32(pad, 0x34) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(newDev(g)));
+    U32(pad, 0x30) = 0x80000000u | g.Data1; // device id (the game: hash of the instance GUID | 0x80000000)
     return pad;
 }
 static DWORD g_cbType = 0;
@@ -408,6 +413,11 @@ static void realTableTests() {
         b.slots(s);
         check(!b.ready() && b.failed() && s.empty() && !b.add(A(1, L"x")) && !b.refresh(2, A(1, L"x")),
               "code bytes do not match here: off, no crash, no game call");
+        check(t->bind != nullptr && t->bind().codeCount >= 14, "bindings table with its code signatures");
+        Binder bd(&t->bind(), 0x400000, t->reserve8, nullptr, nullptr);
+        uint8_t fakePort[0xac] = {};
+        bd.apply(fakePort, 2, L"x");
+        check(!bd.verify() && !bd.last().ok, "bindings code does not match here: off, no game call");
     }
     check(tableForTimestamp(0x5ce7272f) == &eswcTable() && tableForTimestamp(0x5cc8f0cf) == &sunriseTable() &&
               tableForTimestamp(0x5d337477) == &originalTable() && !tableForTimestamp(1),
@@ -512,11 +522,255 @@ static void enumTests() {
     }
 }
 
+// ------------------------------------------------------------------ bindings for a late pad (fake app/config/race)
+// Laid out like ESWC: app {+cb SetDefaults, +0x58 port, +race}, race {+app, +port, +config table, +all table},
+// config {+0x14/+0x18 entries (action index, device id, object), +0x20/+0x24 actions, +0x2c/+0x30 ids, +0x4c port}.
+static uint32_t __fastcall fakePadObject(uint8_t*, void*, uint32_t kind, uint32_t index) {
+    return kind == 7 && index == 1 ? 0xffffffffu : kind * 0x100 + index; // no second POV: the game skips it
+}
+static uint8_t g_bApp[0x400];
+static uint8_t g_bRace[0x200];
+static uint8_t g_bCfg[0x60];
+static uint32_t g_actDesc[10][4];  // the race action descs
+static uint32_t g_menuDesc[5][4];  // the "all objects" action descs
+static uintptr_t g_actionList[10]; // globals holding the race action descs (game order)
+static uintptr_t g_allAct[5];      // globals holding the menu action descs
+static uintptr_t g_cfgVt[4], g_allVt[4], g_otherTblVt[4];
+static uint8_t* g_bPort = nullptr;
+static uint8_t* g_bPortGlobal = nullptr;
+static int g_passCalls = 0;
+static int g_curCalls = 0;
+static void fakeSetDefaults() {}
+
+static void cfgAdd(uint32_t action, uint32_t id, uint32_t object) {
+    uint32_t n = U32(g_bCfg, 0x14);
+    uint32_t* e = static_cast<uint32_t*>(realloc(reinterpret_cast<void*>(static_cast<uintptr_t>(U32(g_bCfg, 0x18))), (n + 1) * 12));
+    e[n * 3] = action;
+    e[n * 3 + 1] = id;
+    e[n * 3 + 2] = object;
+    U32(g_bCfg, 0x18) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(e));
+    U32(g_bCfg, 0x14) = n + 1;
+    uint32_t k = U32(g_bCfg, 0x2c);
+    uint32_t* ids = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(U32(g_bCfg, 0x30)));
+    for (uint32_t i = 0; i < k; i++)
+        if (ids[i] == id) return;
+    ids = static_cast<uint32_t*>(realloc(ids, (k + 1) * 4));
+    ids[k] = id;
+    U32(g_bCfg, 0x30) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(ids));
+    U32(g_bCfg, 0x2c) = k + 1;
+}
+static bool cfgKnows(uint32_t id) {
+    uint32_t* ids = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(U32(g_bCfg, 0x30)));
+    for (uint32_t i = 0; i < U32(g_bCfg, 0x2c); i++)
+        if (ids[i] == id) return true;
+    return false;
+}
+static uintptr_t __fastcall fakeCurConfig(uint8_t* app, void*) {
+    g_curCalls++;
+    return app == g_bApp ? reinterpret_cast<uintptr_t>(g_bCfg) : 0;
+}
+// the game's defaults pass: every pad without bindings gets Accelerate=button 0, Brake=button 1, Steer=X axis
+static void __fastcall fakePass(uint8_t*, void*, uint8_t* config) {
+    g_passCalls++;
+    if (config != g_bCfg) return;
+    const uint32_t n = U32(g_bPort, 0x2c);
+    uint8_t** devs = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_bPort, 0x30)));
+    for (uint32_t i = 0; i < n; i++) {
+        if (U32(devs[i], 0) != static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_padVtbl))) continue;
+        const uint32_t id = U32(devs[i], 0x30);
+        if (cfgKnows(id)) continue;
+        cfgAdd(3, id, fakePadObject(devs[i], nullptr, 8, 0));
+        cfgAdd(4, id, fakePadObject(devs[i], nullptr, 8, 1));
+        cfgAdd(8, id, fakePadObject(devs[i], nullptr, 0, 0));
+    }
+}
+static BindTable g_fakeBind;
+static const BindTable& fakeBind() { return g_fakeBind; }
+
+static uint8_t* newTableVt(uintptr_t* vt, uint32_t devices, uint32_t bindings) {
+    uint8_t* t = newTable(devices, bindings);
+    U32(t, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(vt));
+    if (bindings) { // bindings on the last device, (action, object) pairs
+        U32(t, 0x20) = 0; // newTable only set the count
+        fakeReserve(reinterpret_cast<uint32_t*>(t + 0x20), nullptr, bindings);
+        U32(t, 0x20) = bindings;
+        uint32_t* b = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(U32(t, 0x24)));
+        for (uint32_t k = 0; k < bindings; k++) {
+            b[k * 2] = 0x1000 + k;
+            b[k * 2 + 1] = k;
+        }
+    }
+    U32(t, 0x2c) = 1;
+    U32(t, 0x30) = 1;
+    U32(t, 0x34) = 0x12345678; // a stale cursor
+    return t;
+}
+// the game's table lookup (0x460670): bindings of a device index
+static int tableRange(uint8_t* t, uint32_t dev, const uint32_t** items) {
+    const uint32_t* r = reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(U32(t, 0x18)));
+    *items = reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(U32(t, 0x24))) + r[dev * 2] * 2;
+    return static_cast<int>(r[dev * 2 + 1]);
+}
+
+static uint8_t *g_tRace, *g_tAll, *g_tOther;
+static void buildBindWorld() {
+    g_padVtbl[0x94 / 4] = reinterpret_cast<uintptr_t>(&fakePadObject);
+    g_bPort = static_cast<uint8_t*>(calloc(1, 0xac));
+    U32(g_bPort, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_portVtbl));
+    U32(g_bPort, 0x94) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&g_di));
+    U32(g_bPort, 0x98) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_cfg));
+    for (int i = 0; i < 2; i++) { // mouse, keyboard
+        uint8_t* other = static_cast<uint8_t*>(calloc(1, 0x138));
+        U32(other, 0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_otherVtbl));
+        U32(other, 0x30) = 0x80000010u + i;
+        appendDevice(g_bPort, other);
+    }
+    // a race is running: its config table (keyboard bindings), its "all objects" table, and some other table
+    g_tRace = newTableVt(g_cfgVt, 2, 6);
+    g_tAll = newTableVt(g_allVt, 2, 4);
+    g_tOther = newTableVt(g_otherTblVt, 2, 2);
+    uint8_t** tables = static_cast<uint8_t**>(malloc(3 * sizeof(void*)));
+    tables[0] = g_tOther;
+    tables[1] = g_tRace;
+    tables[2] = g_tAll;
+    U32(g_bPort, 0x14) = 3;
+    U32(g_bPort, 0x18) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(tables));
+    // config: actions, keyboard bindings
+    static uintptr_t actions[10];
+    for (int k = 0; k < 10; k++) {
+        actions[k] = reinterpret_cast<uintptr_t>(&g_actDesc[k]);
+        g_actionList[k] = actions[k];
+    }
+    for (int k = 0; k < 5; k++) g_allAct[k] = reinterpret_cast<uintptr_t>(&g_menuDesc[k]);
+    U32(g_bCfg, 0x20) = 10;
+    U32(g_bCfg, 0x24) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(actions));
+    U32(g_bCfg, 0x4c) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
+    cfgAdd(3, 0x80000011u, 0x7f); // keyboard: Accelerate = up
+    // app and race
+    U32(g_bApp, 0x258) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&fakeSetDefaults));
+    U32(g_bApp, 0x58) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
+    U32(g_bApp, 0x2f0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+    U32(g_bRace, 0x40) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bApp));
+    U32(g_bRace, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
+    U32(g_bRace, 0x144) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_tRace));
+    U32(g_bRace, 0x148) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_tAll));
+    static uint8_t* appGlobal = g_bApp;
+    BindTable b = {};
+    b.appGlobal = reinterpret_cast<uintptr_t>(&appGlobal);
+    b.appDefaultsCb = 0x258;
+    b.appPort = 0x58;
+    b.appRace = 0x2f0;
+    b.setDefaults = reinterpret_cast<uintptr_t>(&fakeSetDefaults);
+    b.defaultsPass = reinterpret_cast<uintptr_t>(&fakePass);
+    b.currentConfig = reinterpret_cast<uintptr_t>(&fakeCurConfig);
+    b.raceApp = 0x40;
+    b.racePort = 0x140;
+    b.raceConfigTable = 0x144;
+    b.raceAllTable = 0x148;
+    b.configTableVtbl = reinterpret_cast<uintptr_t>(g_cfgVt);
+    b.allTableVtbl = reinterpret_cast<uintptr_t>(g_allVt);
+    for (int k = 0; k < 5; k++) b.allActions[k] = reinterpret_cast<uintptr_t>(&g_allAct[k]);
+    b.actionList = reinterpret_cast<uintptr_t>(g_actionList);
+    g_fakeBind = b;
+}
+
+static std::vector<std::string> g_bindLog;
+static void bindLog(void*, int, const char* text) { g_bindLog.push_back(text); }
+static bool bindLogHas(const char* part) {
+    for (const auto& l : g_bindLog)
+        if (l.find(part) != std::string::npos) return true;
+    return false;
+}
+
+static void bindTests() {
+    printf("bindings for a late pad (fake app, config, race)\n");
+    buildBindWorld();
+    static const CodeSig code[] = {{reinterpret_cast<uintptr_t>(kSig), sizeof(kSig), kSig}};
+    GameTable t = {"fake", 0, reinterpret_cast<uintptr_t>(&g_bPortGlobal), reinterpret_cast<uintptr_t>(g_portVtbl),
+                   reinterpret_cast<uintptr_t>(g_padVtbl), reinterpret_cast<uintptr_t>(&fakeEnumCb),
+                   reinterpret_cast<uintptr_t>(&fakeReserve), reinterpret_cast<uintptr_t>(&g_fmt), code, 1, nullptr, 0, &fakeBind};
+    g_bPortGlobal = g_bPort;
+    GameBackend b(&t, 0x400000, &bindLog, nullptr);
+    check(b.ready() && b.binder() != nullptr, "backend with bindings: ready");
+    check(bindLogHas("bindings code checked"), "bindings code checked at start");
+
+    // 1: a new pad during a race, no saved bindings
+    const uint32_t raceBinds = U32(g_tRace, 0x20), allBinds = U32(g_tAll, 0x20), otherBinds = U32(g_tOther, 0x20);
+    check(b.add(A(7, L"Pad Seven")), "pad added");
+    uint8_t* pad = reinterpret_cast<uint8_t**>(static_cast<uintptr_t>(U32(g_bPort, 0x30)))[2];
+    const uint32_t id = U32(pad, 0x30);
+    const Binder::Result& r = b.binder()->last();
+    check(r.ok && !r.saved && r.configPairs == 3 && g_passCalls == 1, "no saved bindings: the game's defaults pass ran, 3 bindings");
+    check(cfgKnows(id) && U32(g_bCfg, 0x14) == 4, "config: the pad's id and 3 entries added, keyboard entry kept");
+    const uint32_t* it = nullptr;
+    check(tableRange(g_tRace, 2, &it) == 3 && U32(g_tRace, 0x20) == raceBinds + 3, "race table: 3 bindings for the pad");
+    check(it[0] == reinterpret_cast<uintptr_t>(&g_actDesc[3]) && it[1] == 0x800 && it[2] == reinterpret_cast<uintptr_t>(&g_actDesc[4]) &&
+              it[3] == 0x801 && it[4] == reinterpret_cast<uintptr_t>(&g_actDesc[8]) && it[5] == 0,
+          "race table: Accelerate=button 0, Brake=button 1, Steer=X axis (action descs from the config)");
+    check(tableRange(g_tRace, 1, &it) == 6 && it[0] == 0x1000, "race table: the keyboard's range unchanged");
+    check(U32(g_tRace, 0x2c) == 0 && U32(g_tRace, 0x30) == 0xffffffffu && U32(g_tRace, 0x34) == U32(g_tRace, 0x24),
+          "race table: lookup cursor reset (no stale pointer into the old bindings)");
+    check(tableRange(g_tAll, 2, &it) == 9 && U32(g_tAll, 0x20) == allBinds + 9 && r.menuAdded == 9 && r.menuTables == 1,
+          "all objects table: 9 menu bindings (the missing second POV is skipped like the game does)");
+    check(it[0] == reinterpret_cast<uintptr_t>(&g_menuDesc[0]) && it[1] == 0x800 && it[16] == reinterpret_cast<uintptr_t>(&g_menuDesc[4]) &&
+              it[17] == 0x101,
+          "all objects table: button 0 -> menu action 0 ... Y axis -> menu action 4");
+    check(U32(g_tOther, 0x20) == otherBinds && tableRange(g_tOther, 2, &it) == 0, "other table: only the empty range");
+    check(r.raceAdded == 3 && bindLogHas("the game's defaults added to the profile, 3 binding(s): Accelerate=800, Brake=801, Steer=0"),
+          "log names the bindings");
+
+    // 2: a pad the profile has saved bindings for (same id as before): kept, applied to the race at once
+    const uint32_t savedId = 0x80000000u | 8; // newPad's id for GUID 8
+    cfgAdd(2, savedId, 0x803); // Respawn = button 3
+    cfgAdd(3, savedId, 0x805); // Accelerate = button 5
+    const int passBefore = g_passCalls;
+    check(b.add(A(8, L"Pad Eight")), "second pad added");
+    const Binder::Result& r2 = b.binder()->last();
+    check(r2.ok && r2.saved && r2.configPairs == 2 && g_passCalls == passBefore, "saved bindings: kept, no defaults pass");
+    check(tableRange(g_tRace, 3, &it) == 2 && it[0] == reinterpret_cast<uintptr_t>(&g_actDesc[2]) && it[1] == 0x803 && it[3] == 0x805,
+          "race table: the saved Respawn=button 3, Accelerate=button 5");
+    check(bindLogHas("saved in the profile, kept, 2 binding(s): Respawn=803, Accelerate=805"), "log: saved bindings");
+
+    // 3: outside a race: the config and the menu tables only
+    U32(g_bApp, 0x2f0) = 0;
+    const uint32_t raceNow = U32(g_tRace, 0x20);
+    check(b.add(A(9, L"Pad Nine")), "third pad added in the menu");
+    const Binder::Result& r3 = b.binder()->last();
+    check(r3.ok && r3.raceAdded == 0 && r3.configPairs == 3 && r3.menuAdded == 9 && U32(g_tRace, 0x20) == raceNow,
+          "no race: defaults in the config (for the next race start), menu table updated, race table untouched");
+    U32(g_bApp, 0x2f0) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
+
+    // 4: the app is not the one expected: nothing is changed
+    U32(g_bApp, 0x258) = 0x1234;
+    const uint32_t cfgN = U32(g_bCfg, 0x14);
+    check(b.add(A(10, L"Pad Ten")), "fourth pad added (registration does not depend on bindings)");
+    check(!b.binder()->last().ok && U32(g_bCfg, 0x14) == cfgN && bindLogHas("is not as expected"),
+          "app callback differs: config and tables untouched, logged");
+    U32(g_bApp, 0x258) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&fakeSetDefaults));
+
+    // 5: appendToTable refuses what the game's AddBinding would not produce for the last device
+    BindPair p[1] = {{0x55, 0x66}};
+    const char* why = "";
+    uint8_t* t2 = newTableVt(g_cfgVt, 3, 0);
+    check(!appendToTable(t2, 1, p, 1, reinterpret_cast<uintptr_t>(&fakeReserve), &why) && strstr(why, "last device"),
+          "append: not the last device -> refused");
+    check(appendToTable(t2, 2, p, 1, reinterpret_cast<uintptr_t>(&fakeReserve), &why), "append: last device ok");
+    check(!appendToTable(t2, 2, p, 1, reinterpret_cast<uintptr_t>(&fakeReserve), &why) && strstr(why, "already"),
+          "append twice -> refused (no duplicates)");
+    uint8_t* t3 = newTableVt(g_cfgVt, 3, 0);
+    reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(U32(t3, 0x18)))[4] = 5; // range start not at the end
+    check(!appendToTable(t3, 2, p, 1, reinterpret_cast<uintptr_t>(&fakeReserve), &why) && strstr(why, "end"),
+          "append: range not at the end -> refused");
+    check(actionName(3) == "Accelerate" && actionName(8) == "Steer" && actionName(20) == "action 20", "action names");
+}
+
 int main() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
     realTableTests();
     trackerTests();
     enumTests();
     backendTests();
+    bindTests();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

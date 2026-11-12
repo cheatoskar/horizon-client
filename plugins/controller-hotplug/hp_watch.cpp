@@ -241,9 +241,9 @@ void Watcher::pollXInput(bool first) {
         schedule_.trigger(GetTickCount()); // list again even if no HID notification came
         changed_ = true;
     }
-    const bool changed = mask != xinputMask_;
+    // the hint waits for the DirectInput list that the change starts (0.5 s later): a pad shows up in XInput
+    // a moment before DirectInput lists it, which is no reason for a warning
     xinputMask_ = mask;
-    if (changed && !first) updateHint();
 }
 
 bool Watcher::enumerate() {

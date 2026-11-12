@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "hp_bind.h"
 #include "hp_tracker.h"
 
 namespace hp {
@@ -48,6 +49,7 @@ struct GameTable {
     int codeCount;
     const PtrSig* ptrs;
     int ptrCount;
+    const BindTable& (*bind)(); // bindings for a late pad (hp_bind.h); null = none
 };
 
 const GameTable& eswcTable();
@@ -62,6 +64,9 @@ public:
     static constexpr uint32_t kMaxDevices = 32; // the game keeps the device index in one byte; 32 is plenty
 
     GameBackend(const GameTable* table, uintptr_t exeBase, LogFn log, void* logUser);
+    ~GameBackend();
+    GameBackend(const GameBackend&) = delete;
+    GameBackend& operator=(const GameBackend&) = delete;
     bool verify();   // checks every code signature once; false = wrong exe or patched code: stay off
     bool ready() override;
     void slots(std::vector<Slot>& out) override;
@@ -69,6 +74,7 @@ public:
     bool refresh(int slotIndex, const Attached& d) override;
 
     bool failed() const { return failed_; }
+    const Binder* binder() const { return binder_; }
     const GameTable* table() const { return table_; }
     uint32_t deviceCount(); // all devices of the port (keyboard, mouse, pads), 0 without a port
     uint32_t devices() override { return deviceCount(); }
@@ -94,6 +100,7 @@ private:
         std::wstring name;
     };
     std::vector<CacheEntry> cache_;
+    Binder* binder_ = nullptr;
 };
 
 // For tests and the module's test mode: a game in memory.

@@ -10,7 +10,7 @@ set "SD=dist\standalone\controller-hotplug"
 for %%d in ("%BD%" "%BD%\core" "%BD%\module" "%BD%\standalone" "%BD%\loader" "%BD%\tests" "%OD%" "%SD%" "%SD%\controller-hotplug" build\test) do if not exist %%d mkdir %%d
 
 rem shared code (tracker, game side, worker thread, glue)
-%CXX% /Fo"%BD%\core\\" /Fd"%BD%\core\c.pdb" %PD%\hp_tracker.cpp %PD%\hp_enum.cpp %PD%\hp_game.cpp %PD%\hp_watch.cpp %PD%\hp_service.cpp || exit /b 1
+%CXX% /Fo"%BD%\core\\" /Fd"%BD%\core\c.pdb" %PD%\hp_tracker.cpp %PD%\hp_enum.cpp %PD%\hp_bind.cpp %PD%\hp_game.cpp %PD%\hp_watch.cpp %PD%\hp_service.cpp || exit /b 1
 
 rem the Horizon module
 %CXX% /Fo"%BD%\module\\" /Fd"%BD%\module\m.pdb" %PD%\hotplug_plugin.cpp || exit /b 1

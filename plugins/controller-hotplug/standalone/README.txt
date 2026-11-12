@@ -31,13 +31,12 @@ Pruefen, ob es laeuft
   Im Spielordner steht controller_hotplug.log. Dort steht "ready".
 
 Benutzen
-  Spiel starten, Pad anstecken, im Spiel unter den Eingabe-Einstellungen einrichten.
-  Das Spiel speichert die Belegung pro Geraet. Ein Pad, das schon einmal belegt war,
-  bekommt seine Belegung beim naechsten Rennstart (Strecke neu laden). Wird ein Pad
-  mitten im Rennen angesteckt, ist es sofort bekannt, die Belegung gilt ab dem
-  naechsten Rennstart. Abziehen und wieder anstecken: das Spiel behaelt den Platz
+  Spiel starten, Pad anstecken, fahren. Das Pad bekommt sofort die Belegung, die es
+  beim Spielstart bekommen haette: die im Profil gespeicherte, sonst die
+  Standardbelegung des Spiels (auch mitten im Rennen). Aendern wie immer in den
+  Eingabe-Einstellungen. Abziehen und wieder anstecken: das Spiel behaelt den Platz
   und die Belegung. Ein Pad an einem anderen USB-Port kann als neues Geraet
-  zaehlen und braucht dann eine neue Belegung.
+  zaehlen und bekommt dann die Standardbelegung.
   Xbox-Controller: Das Spiel sieht ihn nur, solange er eingeschaltet ist. Steckt
   er per USB, ist aber aus, steht das im Log; einschalten (Xbox-Taste) reicht,
   er wird dann hinzugefuegt.
@@ -79,12 +78,11 @@ Check that it runs
   The game folder has controller_hotplug.log. It says "ready".
 
 Use
-  Start the game, plug in the pad, set it up in the game's input settings. The game
-  saves bindings per device. A pad that was bound before gets its bindings at the
-  next race start (load the map again). A pad plugged in mid-race is known at once;
-  its bindings apply from the next race start. Unplug and plug in again: the game
-  keeps the slot and the bindings. A pad in a different USB port can count as a new
-  device and needs new bindings.
+  Start the game, plug in the pad, drive. The pad gets the bindings it would have
+  got at start right away: the ones saved in the profile, else the game's default
+  bindings (also in the middle of a race). Change them in the game's input settings
+  as usual. Unplug and plug in again: the game keeps the slot and the bindings. A pad
+  in a different USB port can count as a new device and gets the default bindings.
   Xbox controllers: the game sees one only while it is switched on. If it is
   plugged in by USB but off, the log says so; switch it on (Xbox button) and it
   is added.
