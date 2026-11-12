@@ -264,15 +264,42 @@ bool copyText(const char* src, uint32_t len, char* out) {
         return false;
     }
 }
+// CSystemFidFile.FileName is a wide string (reflection type 0x29, the type of CConstructionChallenge.ChallengeName,
+// which the host reads as {length, wchar_t*}; ESWC 1.80 member entry 0x00c08588). Read as 8-bit text it gave the
+// first letter only ("H"): no info ever matched the copy's name ("176 of 205 infos have a readable file name, 0 match",
+// ESWC log 2026-11-12). Read wide; a text that is not UTF-16 (no zero high bytes) is taken as 8-bit.
+bool copyWide(const wchar_t* src, uint32_t len, wchar_t* out) {
+    __try {
+        memcpy(out, src, len * sizeof(wchar_t));
+        out[len] = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
     void* fid = nullptr;
     if (!info || !readAt(info, kInfoFid, &fid) || reinterpret_cast<uintptr_t>(fid) < 0x10000) return false;
     if (reflect::ready() && !reflect::isKindOf(reflect::classOfObject(fid), "CSystemFidFile")) return false;
     uint32_t len = 0;
-    const char* text = nullptr;
+    const void* text = nullptr;
     if (!readAt(fid, static_cast<size_t>(nameOff), &len) || !readAt(fid, static_cast<size_t>(nameOff) + 4, &text)) return false;
-    if (!text || len == 0 || len >= cap) return false;
-    return copyText(text, len, out);
+    if (!text || len == 0 || len >= cap || len >= MAX_PATH) return false;
+    wchar_t wide[MAX_PATH + 1];
+    if (copyWide(static_cast<const wchar_t*>(text), len, wide)) {
+        // 8-bit text read as UTF-16 packs two letters per unit (>= 0x2020); a file name's first letter is < 0x100
+        bool utf16 = wide[0] < 0x100;
+        for (uint32_t i = 0; i < len && utf16; i++)
+            if (wide[i] == 0) utf16 = false;
+        if (utf16) {
+            const int n = WideCharToMultiByte(CP_ACP, 0, wide, static_cast<int>(len), out, static_cast<int>(cap) - 1, nullptr, nullptr);
+            if (n > 0) {
+                out[n] = 0;
+                return true;
+            }
+        }
+    }
+    return copyText(static_cast<const char*>(text), len, out);
 }
 
 // The game's own "play the selected map" (see the comment above kSpecs): SelectedChallengeInfo = info,
@@ -467,9 +494,15 @@ Result playMapFile(const wchar_t* path) {
          rep.method == PickMethod::FileName ? want : "the new infos", rep.named, static_cast<unsigned>(after.size()), nameOff,
          rep.matches);
     if (pick < 0) {
-        if (rep.method == PickMethod::FileName)
+        if (rep.method == PickMethod::FileName) {
             logf("gamectl: %s", pick == kPickNoNew ? "the game did not list the copy (no info has its file name)"
                                                    : "several infos have the copy's file name, not guessing");
+            // what the names look like (the last three infos of the list), for the next look at a failure
+            for (size_t i = after.size() > 3 ? after.size() - 3 : 0; i < after.size(); i++) {
+                char nm[300] = {};
+                if (infoFileName(after[i], nameOff, nm, sizeof(nm))) logf("gamectl: info #%u file name \"%s\"", static_cast<unsigned>(i), nm);
+            }
+        }
         else
             logf("gamectl: gold %d (offset %d): %s", hdr.goldMs, goff,
                  pick == kPickNoNew ? "the rescan added no info" : "none or several of the new infos match");
