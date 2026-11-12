@@ -1,10 +1,12 @@
 // wr-hunter.dll in the client test host, for ESWC, Sunrise, Original, TMNF and TMUF: map load (UID found through the
 // id table, nothing from the host), a reset, two finished runs, checkpoint times from the fake game's
 // list (Forever) or from CHECKPOINT events (ESWC/Sunrise), the TMX record through the fake bridge, both
-// layouts drawn, settings and history surviving Shutdown/Init.
+// layouts drawn, settings and history surviving Shutdown/Init. ESWC/Sunrise/Original also with checkpoint event bursts
+// as TM Original sent them in the 0.3.0-rc test (one checkpoint, ~50 events) and the broken PB file it left.
 //   wr_hunter_fakehost.exe <wr-hunter.dll> [eswc|sunrise|original|tmnf|tmuf ...]
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -99,9 +101,17 @@ void runGame(HMODULE mod, const Plugin& p, uint32_t game, const char* name) {
     check(s.find(std::string("map=") + kUid) != std::string::npos && field(s, "uid") == 1, "map kept by the UID read from the id table: " + s);
     check(field(s, "targetSplits") == 5 && field(s, "target") == 24420, "TMX record as target (5 splits)");
 
+    uint64_t clockBase = 1000000;
+    auto clockAt = [&](uint64_t ms) {
+        char cmd[48];
+        snprintf(cmd, sizeof(cmd), "clock %llu", static_cast<unsigned long long>(ms));
+        p.hook(cmd, nullptr, 0);
+    };
     auto drive = [&](const std::vector<int>& cps, bool finish) {
         chost::gameState = HORIZON_STATE_SOLO_RACE;
         chost::setRun(0, 0, {});
+        clockBase += 100000;
+        clockAt(clockBase);
         send(p, chost::event(HORIZON_EVENT_RACE_START));
         chost::setRun(1, 10, {});
         frame(p, false);
@@ -110,6 +120,7 @@ void runGame(HMODULE mod, const Plugin& p, uint32_t game, const char* name) {
             const bool last = i + 1 == cps.size();
             if (last && !finish) break;
             passed.push_back(cps[i]);
+            clockAt(clockBase + static_cast<uint64_t>(cps[i]));
             if (last) {
                 chost::setRun(2, cps[i], passed);
                 frame(p, true);
@@ -179,6 +190,124 @@ void runGame(HMODULE mod, const Plugin& p, uint32_t game, const char* name) {
     (void)mod;
 }
 
+// The splits widget alone in an auto-sized window like the host's HUD widgets; returns the window size.
+ImVec2 frameHud(const Plugin& p) {
+    ImVec2 size(0, 0);
+    for (int i = 0; i < 3; i++) { // auto size settles over a few frames
+        ImGui::NewFrame();
+        p.overlay();
+        ImGui::SetNextWindowPos(ImVec2(1100, 20), ImGuiCond_Always);
+        if (ImGui::Begin("hud", nullptr,
+                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
+            for (const chost::Panel& pn : chost::panels)
+                if (pn.key == "splits") pn.draw(pn.user);
+            size = ImGui::GetWindowSize();
+        }
+        ImGui::End();
+        ImGui::EndFrame();
+        chost::endFrame();
+    }
+    return size;
+}
+
+// TM Original as the 0.3.0-rc test showed it (2026-11-12, RaceA1, 6 checkpoints): the host's OnCheckpoint hook sends
+// about 50 CHECKPOINT events within 0.1 s at every checkpoint, each with the next index, times -1 (or one stale value),
+// and the map file still holds the PB of that run (~280 splits of -1). Expected: 6 checkpoints, times from the run's
+// clock, the broken PB dropped, no rows before the first checkpoint, a small widget. Same code on ESWC and Sunrise.
+void runBursts(const Plugin& p, uint32_t game, const char* name) {
+    printf("===== wr-hunter, game %s, checkpoint event bursts (Original 0.3.0-rc)\n", name);
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string root = exe;
+    root.resize(root.find_last_of('\\') + 1);
+    root += std::string("wrh-") + name + "-burst\\";
+    CreateDirectoryA(root.c_str(), nullptr);
+    CreateDirectoryA((root + "wr-hunter\\").c_str(), nullptr);
+    CreateDirectoryA((root + "wr-hunter\\maps\\").c_str(), nullptr);
+    {
+        std::string pb = "[";
+        for (int i = 0; i < 275; i++) pb += "-1,";
+        pb += "21100]";
+        const std::string json = std::string("{\"format\": 1, \"key\": \"") + kUid + "\", \"uid\": \"" + kUid +
+                                 "\", \"name\": \"RaceA1\", \"attempts\": 4, \"resets\": 0, \"finishes\": 3, \"pb\": " + pb + ", \"golds\": " + pb +
+                                 ", \"runs\": [{\"at\": 1, \"time\": 21100, \"respawns\": -1, \"splits\": " + pb + "}]}";
+        FILE* f = nullptr;
+        if (fopen_s(&f, (root + "wr-hunter\\maps\\" + kUid + ".json").c_str(), "wb") == 0 && f) {
+            fwrite(json.data(), 1, json.size(), f);
+            fclose(f);
+        }
+    }
+    chost::setup(game, root, "wr-hunter");
+    chost::settings.clear();
+    chost::settings["Target"] = "0"; // the PB only
+    chost::buildWorld(false, kUid, L"RaceA1");
+    const HorizonHostApi api = chost::api();
+    check(p.init(&api) == 0, "Init returns 0");
+    HorizonMapInfo mi = chost::mapInfo("RaceA1", "", 24000);
+    HorizonEvent e = chost::event(HORIZON_EVENT_MAP_LOADED);
+    e.map = &mi;
+    send(p, e);
+    frame(p, false);
+    std::string s = state(p);
+    check(field(s, "pbSplits") == 0 && field(s, "pb") == -1 && field(s, "finishes") == 3, "the broken PB from the file is dropped: " + s);
+    p.hook("layout 1", nullptr, 0);
+
+    const int cps[] = {4900, 7300, 11100, 15400, 16500, 18600};
+    auto clockAt = [&](uint64_t ms) {
+        char cmd[48];
+        snprintf(cmd, sizeof(cmd), "clock %llu", static_cast<unsigned long long>(ms));
+        p.hook(cmd, nullptr, 0);
+    };
+    uint64_t t0 = 5000000;
+    for (int hostTime : {-1, 19500}) {
+        t0 += 100000;
+        chost::gameState = HORIZON_STATE_SOLO_RACE;
+        clockAt(t0);
+        send(p, chost::event(HORIZON_EVENT_RACE_START));
+        ImVec2 hud = frameHud(p);
+        s = state(p);
+        check(field(s, "live") == 0 && field(s, "rows") == 0, "no rows before the first checkpoint: " + s);
+        int index = 0;
+        float maxW = hud.x, maxH = hud.y;
+        for (int cp : cps)
+            for (int k = 0; k < 50; k++) {
+                clockAt(t0 + static_cast<uint64_t>(cp) + static_cast<uint64_t>(k) * 2u);
+                HorizonEvent c = chost::event(HORIZON_EVENT_CHECKPOINT);
+                c.time_ms = hostTime;
+                c.checkpoint_index = index++;
+                send(p, c);
+                if (k % 10 == 9) {
+                    hud = frameHud(p);
+                    maxW = std::max(maxW, hud.x);
+                    maxH = std::max(maxH, hud.y);
+                }
+            }
+        s = state(p);
+        check(field(s, "live") == 6 && s.find("splits=4900,7300,11100,15400,16500,18600") != std::string::npos,
+              "300 events, 6 checkpoints, times from the run's clock: " + s);
+        clockAt(t0 + 21100);
+        HorizonEvent f = chost::event(HORIZON_EVENT_FINISH);
+        f.time_ms = 21100;
+        f.is_local_player = 1;
+        send(p, f);
+        hud = frameHud(p);
+        maxW = std::max(maxW, hud.x);
+        maxH = std::max(maxH, hud.y);
+        s = state(p);
+        check(field(s, "pbSplits") == 7 && field(s, "rows") == 7, "finish: PB with 6 splits and the finish, 7 rows: " + s);
+        char what[128];
+        snprintf(what, sizeof(what), "detailed widget stays small (%.0f x %.0f px)", maxW, maxH);
+        check(maxW > 0 && maxW < 520.0f && maxH < 420.0f, what);
+    }
+    p.hook("layout 0", nullptr, 0);
+    const ImVec2 compact = frameHud(p);
+    char what[128];
+    snprintf(what, sizeof(what), "compact widget stays small (%.0f x %.0f px)", compact.x, compact.y);
+    check(compact.x > 0 && compact.x < 420.0f && compact.y < 320.0f, what);
+    p.hook("clock 0", nullptr, 0);
+    p.shutdown();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -216,6 +345,7 @@ int main(int argc, char** argv) {
         const uint32_t bit = g == "eswc" ? HORIZON_GAME_ESWC : g == "sunrise" ? HORIZON_GAME_SUNRISE : g == "original" ? HORIZON_GAME_ORIGINAL
                              : g == "tmuf" ? HORIZON_GAME_TMUF : HORIZON_GAME_TMNF;
         runGame(mod, p, bit, g.c_str());
+        if (!(bit & HORIZON_GAME_FOREVER)) runBursts(p, bit, g.c_str());
     }
     printf("wr_hunter_fakehost: %s (%d failed)\n", g_fail ? "FAILED" : "all passed", g_fail);
     ImGui::DestroyContext();

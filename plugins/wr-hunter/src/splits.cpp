@@ -26,9 +26,56 @@ int sumOfBest(const MapStats& s) {
     return static_cast<int>(sum);
 }
 
-FinishResult applyFinish(MapStats& s, const std::vector<int>& splits, int respawns, long long now) {
+bool saneSplits(const std::vector<int>& splits) {
+    if (splits.empty() || splits.size() > kMaxSplits) return false;
+    int prev = 0;
+    for (int t : splits) {
+        if (t <= prev) return false;
+        prev = t;
+    }
+    return true;
+}
+
+void sanitize(MapStats& s) {
+    if (!s.pb.empty() && !saneSplits(s.pb)) {
+        s.pb.clear();
+        s.golds.clear();
+    }
+    if (s.golds.size() != s.pb.size()) s.golds = sectors(s.pb);
+    for (RunRecord& r : s.runs)
+        if (!saneSplits(r.splits)) r.splits = r.time > 0 ? std::vector<int>{r.time} : std::vector<int>();
+}
+
+void CpEvents::start(uint64_t nowMs) {
+    clear();
+    started_ = true;
+    start_ = nowMs;
+}
+
+void CpEvents::clear() { *this = CpEvents(); }
+
+bool CpEvents::add(int hostTime, uint64_t nowMs, int lastSplit, int* split) {
+    const long long clock = started_ && nowMs >= start_ ? static_cast<long long>(nowMs - start_) : -1;
+    // the host's time counts when it is known, new (not the same stale value again), later than the last split and
+    // not ahead of the run's clock (it may lag behind it: a paused game)
+    const bool hostOk = hostTime > 0 && hostTime < 86400000 && hostTime != lastHost_ && hostTime > lastSplit &&
+                        (clock < 0 || hostTime <= clock + 1500);
+    lastHost_ = hostTime;
+    const bool same = any_ && nowMs - last_ < static_cast<uint64_t>(kSameCpMs);
+    last_ = nowMs;
+    any_ = true;
+    if (same && !hostOk) return false;
+    *split = hostOk ? hostTime : (clock > lastSplit ? static_cast<int>(clock) : -1);
+    return true;
+}
+
+bool CpEvents::justTaken(uint64_t nowMs) const { return any_ && nowMs - last_ < static_cast<uint64_t>(kSameCpMs); }
+
+FinishResult applyFinish(MapStats& s, const std::vector<int>& splitsIn, int respawns, long long now) {
     FinishResult r;
-    if (splits.empty() || splits.back() <= 0) return r;
+    if (splitsIn.empty() || splitsIn.back() <= 0) return r;
+    // splits with unknown or out-of-order times: only the final time is kept
+    const std::vector<int> splits = saneSplits(splitsIn) ? splitsIn : std::vector<int>{splitsIn.back()};
     s.finishes++;
     RunRecord rec;
     rec.at = now;
@@ -43,6 +90,14 @@ FinishResult applyFinish(MapStats& s, const std::vector<int>& splits, int respaw
         r.pb = true;
         s.pb = splits;
         s.golds = sectors(splits);
+        for (size_t i = 0; i < r.gold.size(); i++) r.gold[i] = true;
+        return r;
+    }
+    if (s.pb.size() == 1 && splits.size() > 1 && splits.back() < s.pb.back()) {
+        // the PB had only its final time (checkpoint times unknown then): a faster run with splits replaces it
+        s.pb = splits;
+        s.golds = sectors(splits);
+        r.pb = true;
         for (size_t i = 0; i < r.gold.size(); i++) r.gold[i] = true;
         return r;
     }
@@ -175,7 +230,7 @@ bool fromJson(const std::string& text, MapStats* s) {
                 if (rec.time > 0) out.runs.push_back(rec);
             }
     }
-    if (out.golds.size() != out.pb.size()) out.golds = sectors(out.pb);
+    sanitize(out);
     *s = out;
     return true;
 }

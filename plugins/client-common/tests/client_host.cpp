@@ -67,6 +67,38 @@ uintptr_t obj(size_t size) {
     return o;
 }
 
+// ---------------------------------------------------------------- fake engine reflection
+// The car's classes as Forever registers them (TMNF/TMUF, static RE): CSceneVehicleCar 0x0a02b000 -> CSceneVehicle
+// 0x0a060000 -> CSceneMobil 0x0a011000, the first two with an EMPTY name. CMwClassInfo: +04 id, +08 parent,
+// +14 name, +18 next, +20 params, +24 param count. The car's vtable slot 2 is `mov eax, classinfo; ret`.
+uintptr_t g_carVtable = 0, g_carClasses = 0;
+uintptr_t fakeClass(uint32_t id, const char* name, uintptr_t parent, uintptr_t next) {
+    const uintptr_t c = alloc(0x28);
+    const size_t n = strlen(name) + 1;
+    const uintptr_t s = alloc(n);
+    memcpy(reinterpret_cast<void*>(s), name, n);
+    put32(c + 0x04, id);
+    put32(c + 0x08, static_cast<uint32_t>(parent));
+    put32(c + 0x14, static_cast<uint32_t>(s));
+    put32(c + 0x18, static_cast<uint32_t>(next));
+    return c;
+}
+uintptr_t carVtable() {
+    if (g_carVtable) return g_carVtable;
+    const uintptr_t mobil = fakeClass(0x0a011000u, "CSceneMobil", 0, 0);
+    const uintptr_t vehicle = fakeClass(0x0a060000u, "", mobil, mobil);
+    g_carClasses = fakeClass(0x0a02b000u, "", vehicle, vehicle);
+    const uintptr_t ret = alloc(1);
+    *reinterpret_cast<uint8_t*>(ret) = 0xc3;
+    const uintptr_t getInfo = alloc(6); // mov eax, imm32; ret
+    *reinterpret_cast<uint8_t*>(getInfo) = 0xb8;
+    put32(getInfo + 1, static_cast<uint32_t>(g_carClasses));
+    *reinterpret_cast<uint8_t*>(getInfo + 5) = 0xc3;
+    g_carVtable = alloc(16 * 4);
+    for (uintptr_t i = 0; i < 16; i++) put32(g_carVtable + i * 4, static_cast<uint32_t>(i == 2 ? getInfo : ret));
+    return g_carVtable;
+}
+
 // CMwId::GetString's first bytes and the table address, in this exe's image: the plugins find the id table
 // with the same scan as in the games.
 unsigned char g_idCode[0x48] = {1};
@@ -572,6 +604,7 @@ void buildWorld(bool forever, const char* uid, const wchar_t* mapName) {
     world.info = obj(0x400);
     world.gameMobil = obj(0x40);
     world.vehicle = obj(0x800);
+    if (forever) put32(world.vehicle, static_cast<uint32_t>(carVtable())); // CSceneVehicleCar, for setReflection
     world.ghost = obj(0x120);
     world.cpItems = alloc(8 * 64);
     const uintptr_t players = alloc(16);
@@ -639,6 +672,43 @@ void setGhost(int raceTime, const std::vector<int>& cps) {
 }
 
 void clearRace() { g_haveRace = false; }
+
+void setTargetInfo(bool on) {
+    put32(world.race + static_cast<uintptr_t>(off().target), on ? static_cast<uint32_t>(world.info) : 0u);
+}
+
+uintptr_t moveCarHigh() {
+    void* p = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
+    if (!p) return 0;
+    memcpy(p, reinterpret_cast<const void*>(world.vehicle), 0x800);
+    world.vehicle = reinterpret_cast<uintptr_t>(p);
+    put32(world.gameMobil + static_cast<uintptr_t>(off().mScene), static_cast<uint32_t>(world.vehicle));
+    return world.vehicle;
+}
+
+// The registry head the plugins' reflect module finds for an unknown exe: the registration code's pattern
+// `mov ecx, [head]; mov [eax+18h], ecx; mov [head], eax` in an executable section of this exe.
+uintptr_t g_reflectHead = 0;
+#pragma pack(push, 1)
+struct RegistryCode {
+    uint8_t movEcx[2];
+    uintptr_t* head1;
+    uint8_t movNext[3];
+    uint8_t movHead;
+    uintptr_t* head2;
+    uint8_t pad[32];
+};
+#pragma pack(pop)
+#pragma section(".hzreg", read, execute)
+extern const RegistryCode kRegistryCode;
+__declspec(allocate(".hzreg")) const RegistryCode kRegistryCode = {{0x8b, 0x0d}, &g_reflectHead, {0x89, 0x48, 0x18}, 0xa3, &g_reflectHead, {0xc3}};
+
+void setReflection(bool on) {
+    volatile uint8_t keep = kRegistryCode.movHead; // keeps the pattern in the image
+    (void)keep;
+    carVtable();
+    g_reflectHead = on ? g_carClasses : 0;
+}
 
 HorizonMapInfo mapInfo(const char* name, const char* uid, int authorTime) {
     HorizonMapInfo m = {};

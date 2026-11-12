@@ -77,8 +77,9 @@ Layout resolveLayout(Engine e, OffsetFn fn, std::string* log) {
     take(&L.piStart, fn, "CTrackManiaPlayerInfo", "RaceStartTime", e == Engine::Forever ? &missing : nullptr);
     take(&L.piCurCp, fn, "CTrackManiaPlayerInfo", "CurCheckpoint", &missing);
     if (e == Engine::Forever) take(&L.piNow, fn, "CTrackManiaPlayerInfo", "CurrentTime", &missing);
-    // the car: by name when the class has reflection members (ESWC/Sunrise CSceneToyVehicle; Forever's
-    // CSceneVehicleCar may not), else the defaults above
+    // the car: by name when the class has reflection members (ESWC/Sunrise CSceneToyVehicle), else the defaults
+    // above (Forever: CSceneVehicleCar has no members and no name; VehicleInputSteer/Gas/BrakeSet write
+    // +0x58/+0x50/+0x54, TMNF 0x007bfd80.., TMUF 0x007bf880..)
     bool s = false, g = false, b = false;
     for (const char* cls : {L.vehicleClass, "CSceneVehicle", "CSceneVehicleCar", "CSceneToyVehicle"}) {
         if (!s) take(&L.vSteer, fn, cls, "InputSteer", nullptr, &s);
@@ -265,10 +266,33 @@ bool sehCopy(void* dst, const void* src, size_t n) {
 }
 const HorizonHostApi* g_host = nullptr;
 bool g_reflect = false;
+
+// Forever registers some engine classes with an empty name, the car among them: CSceneVehicleCar (id 0x0a02b000)
+// -> CSceneVehicle (0x0a060000) -> CSceneMobil, all three registered, only the last one named (registration code
+// TMNF 0x00b05e10 / 0x00b05fb0, TMUF 0x00b05730 / 0x00b058d0: the name is the empty string literal). By name the
+// car is never found; these two match by class id when the class has no name.
+struct UnnamedClass {
+    const char* name;
+    uint32_t id;
+};
+const UnnamedClass kUnnamed[] = {{"CSceneVehicleCar", 0x0a02b000u}, {"CSceneVehicle", 0x0a060000u}};
+
+bool classIs(const reflect::ClassInfo* c, const char* cls) {
+    uint32_t id = 0;
+    for (const UnnamedClass& u : kUnnamed)
+        if (strcmp(u.name, cls) == 0) id = u.id;
+    for (int depth = 0; c && depth < 32; c = reflect::parent(c), depth++) {
+        const char* n = reflect::className(c);
+        if (!n) continue;
+        if (strcmp(n, cls) == 0 || (id && !*n && reflect::classId(c) == id)) return true;
+    }
+    return false;
+}
 } // namespace
 
 bool LiveMem::read(uintptr_t addr, void* out, size_t n) {
-    if (addr <= 0x10000 || addr + n < addr || addr >= 0x7fff0000u) return false;
+    // up to 4 GB: TMLoader's TmForever.exe is large address aware, so game objects can lie above 2 GB
+    if (addr <= 0x10000 || addr + n < addr || addr + n > 0xffff0000u) return false;
     return sehCopy(out, reinterpret_cast<const void*>(addr), n);
 }
 
@@ -280,12 +304,12 @@ bool LiveMem::isKind(uintptr_t obj, const char* cls) {
     }
     const reflect::ClassInfo* c = reflect::classOfObject(reinterpret_cast<const void*>(obj));
     if (!c) {
-        // a class without reflection registration (e.g. Forever's car): accept a readable vtable,
-        // the values are checked for plausibility by the caller
+        // no class info in the vtable: accept a readable vtable when the class is not registered by that name
+        // either, the values are checked for plausibility by the caller
         uint32_t vt = 0;
         return get(obj, &vt) && vt > 0x10000u && !reflect::findClass(cls);
     }
-    return reflect::isKindOf(c, cls);
+    return classIs(c, cls);
 }
 
 bool liveReflectInit(const HorizonHostApi* host) {

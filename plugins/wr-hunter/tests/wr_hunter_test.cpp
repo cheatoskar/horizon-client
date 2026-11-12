@@ -255,10 +255,71 @@ void testReplay() {
     check(ck::lzoDecompress(lzo, sizeof(lzo), out, 5) && memcmp(out, "hello", 5) == 0, "LZO literal run");
 }
 
+// The host's CHECKPOINT events as TM Original sent them (0.3.0-rc test log 2026-11-12, RaceA1): about 50 events within
+// 0.13 s at each of the 6 checkpoints, each with the next index, times -1 (first run) or 19500 every time (second run).
+void testCpEvents() {
+    const int cps[] = {4900, 7300, 11100, 15400, 16500, 18600};
+    for (int hostTime : {-1, 19500}) {
+        wrh::CpEvents ev;
+        const uint64_t t0 = 1000000;
+        ev.start(t0);
+        std::vector<int> live;
+        for (int cp : cps)
+            for (int k = 0; k < 50; k++) {
+                int split = -1;
+                const int last = live.empty() ? 0 : live.back();
+                if (ev.add(hostTime, t0 + static_cast<uint64_t>(cp) + static_cast<uint64_t>(k) * 2u, last, &split)) live.push_back(split);
+            }
+        check(live.size() == 6, "a burst of checkpoint events counts once (6 checkpoints, 300 events)");
+        bool times = live.size() == 6;
+        for (size_t i = 0; i < live.size() && i < 6; i++) times = times && live[i] == cps[i];
+        check(times, "unknown or stale host times replaced by the run's clock");
+        check(ev.justTaken(t0 + 18600 + 150) && !ev.justTaken(t0 + 21100), "finish right after a burst is seen");
+    }
+    // ESWC: exact times from the game's list, two checkpoints in the same poll are both kept
+    wrh::CpEvents ev;
+    ev.start(5000);
+    int a = -1, b = -1, c = -1;
+    check(ev.add(5300, 5000 + 5310, 0, &a) && a == 5300, "ESWC time taken");
+    check(ev.add(5420, 5000 + 5310, 5300, &b) && b == 5420, "second checkpoint in the same poll kept");
+    check(!ev.add(5420, 5000 + 5320, 5420, &c), "the same time again is the same checkpoint");
+    // a time that lags the clock (pause) is still the game's
+    check(ev.add(9000, 5000 + 15000, 5420, &c) && c == 9000, "host time behind the clock kept");
+    // plugin switched on mid-run (no start): the host's times
+    wrh::CpEvents late;
+    check(late.add(12000, 77, 0, &c) && c == 12000, "no start seen: host time");
+
+    // the stats file 0.3.0-rc wrote on Original: ~280 splits of -1 as the PB
+    wrh::MapStats bad;
+    bad.key = "pfG3yOqWJaTihqfo7OOE4Pf9iBf";
+    bad.pb.assign(275, -1);
+    bad.pb.push_back(21100);
+    bad.golds = wrh::sectors(bad.pb);
+    wrh::RunRecord rr;
+    rr.time = 21100;
+    rr.splits = bad.pb;
+    bad.runs.push_back(rr);
+    bad.finishes = 1;
+    wrh::MapStats back;
+    check(wrh::fromJson(wrh::toJson(bad), &back) && back.pb.empty() && back.golds.empty() && back.runs.size() == 1 &&
+              back.runs[0].splits == std::vector<int>{21100},
+          "broken PB dropped on load, the run keeps its time");
+    // a run with unknown split times: only its time; the next run with real splits replaces that PB when faster
+    wrh::MapStats s;
+    std::vector<int> unknown(6, -1);
+    unknown.push_back(21100);
+    wrh::applyFinish(s, unknown, -1, 1);
+    check(s.pb == std::vector<int>{21100}, "unknown splits: the PB is the final time only");
+    const wrh::FinishResult r = wrh::applyFinish(s, {4900, 7300, 11100, 15400, 16500, 18600, 21000}, -1, 2);
+    check(r.pb && s.pb.size() == 7 && s.golds.size() == 7, "faster run with splits replaces a time-only PB");
+    check(wrh::saneSplits({1, 2, 3}) && !wrh::saneSplits({1, 1}) && !wrh::saneSplits({}) && !wrh::saneSplits({-1, 5}), "sane split lists");
+}
+
 } // namespace
 
 int main() {
     testSplits();
+    testCpEvents();
     testIdTable();
     testReader();
     testReplay();

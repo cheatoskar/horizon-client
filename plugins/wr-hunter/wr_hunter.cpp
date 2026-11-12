@@ -5,7 +5,8 @@
 // folder (horizon\data\wr-hunter\maps\<uid>.json).
 //
 // Where the times come from:
-//   ESWC, Sunrise: the host's CHECKPOINT / FINISH events.
+//   ESWC, Sunrise, Original: the host's CHECKPOINT / FINISH events; a burst of CHECKPOINT events (Original sends
+//               ~50 per checkpoint) counts once, unknown times come from the run's own clock (wrh::CpEvents).
 //   TMNF, TMUF: read-only polling of the local player's checkpoint list (client-common/gameread), by
 //               reflection member names; no hook, no write, no game call (Competition Patch 2.0 rule).
 // TMX rules: split times are allowed online; nothing shows where a checkpoint is, nothing draws a path.
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
@@ -66,8 +68,14 @@ std::vector<int> g_live;
 int g_runState = 0; // 0 none, 1 running, 2 finished
 int g_nowMs = -1;
 int g_respawns = -1;
+wrh::CpEvents g_cpEvents;    // ESWC/Sunrise/Original: the host's CHECKPOINT events -> real checkpoints
+uint64_t g_testClock = 0;    // test hook "clock <ms>": a fixed wall clock instead of GetTickCount64
 wrh::FinishResult g_lastFinish;
 uint64_t g_flashUntil = 0;
+// the detailed table: at most this many split lines, then it scrolls
+const size_t kRowsShown = 8;
+int g_rowsShown = 0;         // lines in the last drawn table (test hook)
+size_t g_rowsFollowed = 0;
 
 // the target
 enum Target { kTargetPb = 0, kTargetTmx = 1, kTargetGhost = 2, kTargetFile = 3 };
@@ -95,6 +103,8 @@ struct MapRow {
 };
 std::vector<MapRow> g_allMaps;
 bool g_allMapsLoaded = false;
+
+uint64_t clockMs() { return g_testClock ? g_testClock : GetTickCount64(); }
 
 int setting(const char* k, int fallback) { return g_host->get_int(g_host->plugin, k, fallback); }
 void setSetting(const char* k, int v) { g_host->set_int(g_host->plugin, k, v); }
@@ -250,14 +260,26 @@ void startRun() {
     g_live.clear();
     g_runState = 1;
     g_respawns = -1;
+    g_cpEvents.start(clockMs());
     g_lastFinish = wrh::FinishResult();
     save();
 }
 
 void addSplit(size_t index, int time) {
     if (g_runState != 1) return;
-    if (index != g_live.size()) return;
+    if (index != g_live.size() || g_live.size() >= wrh::kMaxSplits) return;
     g_live.push_back(time);
+}
+
+// ESWC/Sunrise/Original: a CHECKPOINT event of the host. Its index is not used: on Original the host sends one event
+// per OnCheckpoint call, about 50 at each checkpoint (wrh::CpEvents keeps the first of them).
+void onCheckpointEvent(int hostTime) {
+    if (g_runState != 1) return;
+    int last = 0;
+    for (int t : g_live)
+        if (t > last) last = t;
+    int split = -1;
+    if (g_cpEvents.add(hostTime, clockMs(), last, &split)) addSplit(g_live.size(), split);
 }
 
 void finishRun(int time, int respawns) {
@@ -299,6 +321,7 @@ void loadMap(const HorizonEvent* e) {
     g_live.clear();
     g_runState = 0;
     g_nowMs = -1;
+    g_cpEvents.clear();
     g_lastFinish = wrh::FinishResult();
     g_host->log(g_host->plugin, HORIZON_LOG_INFO, "map %s (%s): %d attempts, PB %s", g_mapName.c_str(), g_uidKnown ? "UID" : "local key",
                 g_stats.attempts, fmtTime(g_stats.pbTime()).c_str());
@@ -473,64 +496,79 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
     ImGui::PopStyleColor();
     const bool haveTarget = !g_target.splits.empty();
     const int cols = haveTarget ? 5 : 4;
+    // only the checkpoints this run crossed, at most kRowsShown lines (scrolls, follows the latest); fixed width
+    const size_t crossed = std::min(g_live.size(), rows.size());
+    g_rowsShown = static_cast<int>(crossed);
     ImGui::PushFont(mono);
-    if (rows.empty()) {
+    if (crossed == 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
         ImGui::TextUnformatted(g_haveMap ? "No splits yet" : "No map");
         ImGui::PopStyleColor();
-    } else if (ImGui::BeginTable("##splits", cols, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX)) {
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 44.0f * s);
-        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 74.0f * s);
-        ImGui::TableSetupColumn("PB", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
-        if (haveTarget) ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
-        ImGui::TableSetupColumn("Sector", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
-        ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-        ImGui::TableHeadersRow();
-        ImGui::PopStyleColor();
-        const size_t current = g_live.size();
-        for (const wrh::Row& r : rows) {
-            ImGui::TableNextRow();
-            if (static_cast<size_t>(r.index) == current && g_runState == 1)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ck::u32(p.accent, 0.18f));
-            ImGui::TableNextColumn();
-            ImGui::PushStyleColor(ImGuiCol_Text, p.text2);
-            if (r.finish) ImGui::TextUnformatted("Fin");
-            else ImGui::Text("%d", r.index + 1);
+    } else {
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const float rowH = ImGui::GetTextLineHeight() + st.CellPadding.y * 2.0f;
+        const float tableW = (44.0f + 74.0f + 62.0f + (haveTarget ? 62.0f : 0.0f) + 62.0f) * s + st.CellPadding.x * 2.0f * static_cast<float>(cols) +
+                             st.WindowPadding.x;
+        const float tableH = rowH * static_cast<float>(std::min(crossed, kRowsShown) + 1) + 2.0f;
+        if (ImGui::BeginTable("##splits", cols, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY,
+                              ImVec2(tableW, tableH))) {
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 44.0f * s);
+            ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 74.0f * s);
+            ImGui::TableSetupColumn("PB", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
+            if (haveTarget) ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
+            ImGui::TableSetupColumn("Sector", ImGuiTableColumnFlags_WidthFixed, 62.0f * s);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
+            ImGui::TableHeadersRow();
             ImGui::PopStyleColor();
-            ImGui::TableNextColumn();
-            if (r.time >= 0) {
-                ImGui::TextUnformatted(fmtTime(r.time).c_str());
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-                ImGui::TextUnformatted(r.pbSplit >= 0 ? fmtTime(r.pbSplit).c_str() : "-");
-                ImGui::PopStyleColor();
-            }
-            ImGui::TableNextColumn();
-            if (r.dPb != kNoDelta) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ck::deltaColour(p, r.dPb, r.prevDPb, r.isGold));
-                ImGui::TextUnformatted(fmtDelta(r.dPb).c_str());
-                ImGui::PopStyleColor();
-            }
-            if (haveTarget) {
+            for (size_t k = 0; k < crossed; k++) {
+                const wrh::Row& r = rows[k];
+                ImGui::TableNextRow();
+                if (k + 1 == crossed && g_runState == 1) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ck::u32(p.accent, 0.18f));
+                if (k + 1 == crossed && crossed != g_rowsFollowed) {
+                    ImGui::SetScrollHereY(1.0f); // the latest split stays in view
+                    g_rowsFollowed = crossed;
+                }
                 ImGui::TableNextColumn();
-                if (r.dTarget != kNoDelta) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ck::deltaColour(p, r.dTarget, r.prevDTarget, false));
-                    ImGui::TextUnformatted(fmtDelta(r.dTarget).c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text, p.text2);
+                if (r.finish) ImGui::TextUnformatted("Fin");
+                else ImGui::Text("%d", r.index + 1);
+                ImGui::PopStyleColor();
+                ImGui::TableNextColumn();
+                if (r.time >= 0) {
+                    ImGui::TextUnformatted(fmtTime(r.time).c_str());
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
+                    ImGui::TextUnformatted(r.pbSplit >= 0 ? fmtTime(r.pbSplit).c_str() : "-");
+                    ImGui::PopStyleColor();
+                }
+                ImGui::TableNextColumn();
+                if (r.dPb != kNoDelta) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ck::deltaColour(p, r.dPb, r.prevDPb, r.isGold));
+                    ImGui::TextUnformatted(fmtDelta(r.dPb).c_str());
+                    ImGui::PopStyleColor();
+                }
+                if (haveTarget) {
+                    ImGui::TableNextColumn();
+                    if (r.dTarget != kNoDelta) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ck::deltaColour(p, r.dTarget, r.prevDTarget, false));
+                        ImGui::TextUnformatted(fmtDelta(r.dTarget).c_str());
+                        ImGui::PopStyleColor();
+                    }
+                }
+                ImGui::TableNextColumn();
+                if (r.sector > 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, r.isGold ? p.gold : p.text2);
+                    ImGui::TextUnformatted(fmtTime(r.sector).c_str() + (r.sector < 60000 ? 2 : 0));
+                    ImGui::PopStyleColor();
+                } else if (r.gold > 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
+                    ImGui::TextUnformatted(fmtTime(r.gold).c_str() + (r.gold < 60000 ? 2 : 0));
                     ImGui::PopStyleColor();
                 }
             }
-            ImGui::TableNextColumn();
-            if (r.sector > 0) {
-                ImGui::PushStyleColor(ImGuiCol_Text, r.isGold ? p.gold : p.text2);
-                ImGui::TextUnformatted(fmtTime(r.sector).c_str() + (r.sector < 60000 ? 2 : 0));
-                ImGui::PopStyleColor();
-            } else if (r.gold > 0) {
-                ImGui::PushStyleColor(ImGuiCol_Text, p.muted);
-                ImGui::TextUnformatted(fmtTime(r.gold).c_str() + (r.gold < 60000 ? 2 : 0));
-                ImGui::PopStyleColor();
-            }
+            ImGui::EndTable();
         }
-        ImGui::EndTable();
     }
     ImGui::PopFont();
     ImGui::Separator();
@@ -554,6 +592,7 @@ void HORIZON_CALL drawSplits(void*) {
     const ck::Palette p = ck::palette(g_host);
     const std::vector<wrh::Row> rows = wrh::buildRows(g_live, g_stats, g_target);
     ImGui::PushID("wrh-splits");
+    g_rowsShown = 0;
     if (setting("Layout", 0) == 1) drawDetailed(p, rows);
     else drawCompact(p, rows);
     if (g_runState == 2 && GetTickCount64() < g_flashUntil && g_lastFinish.pb) {
@@ -818,12 +857,14 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
     case HORIZON_EVENT_MAP_LOADED: loadMap(e); break;
     case HORIZON_EVENT_RACE_START: startRun(); break;
     case HORIZON_EVENT_CHECKPOINT:
-        if (!g_forever && e->checkpoint_index >= 0) addSplit(static_cast<size_t>(e->checkpoint_index), e->time_ms);
+        if (!g_forever) onCheckpointEvent(e->time_ms);
         break;
     case HORIZON_EVENT_RESPAWN: g_respawns = e->respawns; break;
     case HORIZON_EVENT_FINISH:
         if (e->is_local_player) {
             if (g_forever) pollForever(); // splits up to the finish first
+            // events of the finish line itself (the hook may fire there too) are not a checkpoint
+            else if (g_runState == 1 && !g_live.empty() && g_cpEvents.justTaken(clockMs())) g_live.pop_back();
             finishRun(e->time_ms, e->respawns >= 0 ? e->respawns : g_respawns);
         }
         break;
@@ -831,6 +872,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
         save();
         g_runState = 0;
         g_live.clear();
+        g_cpEvents.clear();
         break;
     default: break;
     }
@@ -933,7 +975,12 @@ HORIZON_EXPORT int32_t __cdecl HorizonClient_TestHook(const char* cmd, char* out
         reply = "map=" + g_stats.key + " uid=" + (g_uidKnown ? "1" : "0") + " live=" + std::to_string(g_live.size()) + " run=" + std::to_string(g_runState) +
                 " pb=" + std::to_string(g_stats.pbTime()) + " sob=" + std::to_string(wrh::sumOfBest(g_stats)) + " attempts=" +
                 std::to_string(g_stats.attempts) + " resets=" + std::to_string(g_stats.resets) + " finishes=" + std::to_string(g_stats.finishes) +
-                " target=" + std::to_string(g_target.time) + " targetSplits=" + std::to_string(g_target.splits.size()) + " now=" + std::to_string(g_nowMs);
+                " target=" + std::to_string(g_target.time) + " targetSplits=" + std::to_string(g_target.splits.size()) + " now=" + std::to_string(g_nowMs) +
+                " pbSplits=" + std::to_string(g_stats.pb.size()) + " rows=" + std::to_string(g_rowsShown) + " splits=";
+        for (size_t i = 0; i < g_live.size(); i++) reply += (i ? "," : "") + std::to_string(g_live[i]);
+    } else if (!strncmp(cmd, "clock ", 6)) {
+        g_testClock = static_cast<uint64_t>(strtoull(cmd + 6, nullptr, 10));
+        reply = "ok";
     } else if (!strncmp(cmd, "target ", 7)) {
         setSetting("Target", atoi(cmd + 7));
         refreshTarget();

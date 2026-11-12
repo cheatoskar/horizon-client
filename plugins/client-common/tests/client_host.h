@@ -65,6 +65,13 @@ void setRun(int state, int timeMs, const std::vector<int>& cps);   // RaceState,
 void setCar(float steer, float gas, float brake, int speedKmh, int gear, float rpm);
 void setGhost(int raceTime, const std::vector<int>& cps);
 void clearRace();                                                   // menus: no race object
+void setTargetInfo(bool on);   // race.TMTargetPlayerInfo set (false: solo before the start, players[0] is the local one)
+// Engine reflection for the plugins (call before their Init): a registry with the Forever car classes as the game
+// registers them, CSceneVehicleCar and CSceneVehicle WITHOUT a name, CSceneMobil named; the Forever car's vtable
+// points at CSceneVehicleCar. false: no registry (reflection not available).
+void setReflection(bool on);
+// Moves the car to a page at the top of the address space (above 2 GB when the exe is large address aware); returns it.
+uintptr_t moveCarHigh();
 
 // ---- events to the plugin
 HorizonMapInfo mapInfo(const char* name, const char* uid, int authorTime);
