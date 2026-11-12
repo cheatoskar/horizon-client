@@ -472,10 +472,16 @@ void hotkeysDetectExternal() {
     };
     std::vector<OtherMod>& others = state().otherMods;
     others.clear();
+    // one entry per product (TM Vibrant Shaders as a TMLoader mod has more than one DLL)
     auto other = [&](const std::string& name, const std::wstring& path, const char* kind, const char* keys, const char* note) {
+        for (const OtherMod& o : others)
+            if (o.name == name) return;
         const std::string p = utf8(path);
         others.push_back(OtherMod{name, fileVersion(path), p.substr(p.find_last_of('\\') + 1), kind, keys ? keys : "", note ? note : ""});
     };
+    // DLLs under our own plugins folder are Horizon modules (and their helper DLLs, e.g. tmvs-core.dll): never
+    // "other mods", their keys are registered with the host
+    const std::string pluginsDir = lower(utf8(state().baseFolder)) + "plugins\\";
     if (state().chainPresent) {
         const std::wstring chain = state().game.exeFolder + L"dinput8.chain.dll";
         if (state().chainIsAutosave) other("ESWC Autosave (old loader)", chain, "dinput8 chain", "F9 (save now)", "Saves replays itself: the Autosave module is paused.");
@@ -496,6 +502,7 @@ void hotkeysDetectExternal() {
             const bool inGame = full.rfind(gameDir, 0) == 0 && full.find('\\', gameDir.size()) == std::string::npos;
             static const char kProducts[] = "\\tmloader\\database\\tmforever\\products\\";
             const size_t prod = full.find(kProducts);
+            if (state().baseFolder.size() > 3 && full.rfind(pluginsDir, 0) == 0) continue; // a Horizon module
             if (file == "tmvibrantshaders.dll" || desc.find("vibrant shaders") != std::string::npos) {
                 state().tmvsLoaded = true;
                 for (const char* k : {"F5", "F6", "F7", "F8", "F12", "Shift+F6", "F3", "Ctrl+F3", "Ctrl+Shift+F3"}) add(k, "TM Vibrant Shaders");
@@ -531,8 +538,12 @@ void hotkeysDetectExternal() {
                 const std::string name = b != std::string::npos ? u.substr(a, b - a) : file;
                 if (name != "coremod" && name != "CoreMod" && name != "TmForever" && name != "Horizon Host" && file != "lua54.dll" && file != "modloader.dll")
                     other(name, wpath, "TMLoader mod", nullptr, nullptr);
-            } else if (inGame && file == "d3d9.dll") {
-                other("Direct3D wrapper (d3d9.dll)", wpath, "d3d9 proxy", nullptr, "Lies in the game folder; Horizon hooks the device it hands out.");
+            } else if (inGame && (file == "d3d9.dll" || file == "d3d9.chain.dll")) {
+                // the game's own Direct3D wrapper (dgVoodoo in the Sunrise Win10 repack, ...): part of the game
+                // setup, not a mod the player picks; logged, not listed
+                const bool dg = desc.find("dgvoodoo") != std::string::npos || lower(fileVersion(wpath)).find("dgvoodoo") != std::string::npos;
+                HLOG("game: %s in the game folder (%s): Horizon hooks the device it hands out", dg ? "dgVoodoo" : "the game's Direct3D wrapper",
+                     utf8(path).c_str());
             }
         }
     }
