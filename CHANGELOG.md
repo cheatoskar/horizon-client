@@ -2,6 +2,10 @@
 
 ## 0.3.0 (2026-11-12)
 
+- Modules in their own window (pop-out, the free window from the top bar): open at the module's size from `plugin.json` "ui" (`min_w`/`min_h`/`pref_w`/`pref_h`, logical px, defaults 480x320 / 820x560) times the UI scale, or at the size the player left them; clamped to the game window below the top bar and the menu's header; never smaller than the minimum; scroll instead of clipping. `ui_metrics()` `page_w`/`page_h` now describe the window or page the plugin is drawn in at that moment (no ABI change). WR Hunter, Input Display, TMX Upload, Performance, Autosave, Node Explorer and Controller hot-plug have a compact layout below 560 px x scale.
+- Top bar: stays in front of module windows; in a small game window the Menu, Layout, Log and TM Horizon buttons shrink to icons when the module icons do not fit. "Edit layout" refused (TMNF/TMUF during a race) shows its note at once, also while driving.
+- Shorter menu texts in the host and the modules (labels of one to three words, tooltips of one sentence). TMX Upload shows one status line: "Uploader: waiting (port 27311)" / "connected (TM Horizon)" / "off".
+
 - Version 0.3.0: "Horizon Client 0.3.0" in the menu and the log, `HorizonHost_Version` 0x000300, TMLoader version folder `Horizon Host\0.3.0\`. Merged from host-ui, tmo, bridge-playmap and autosave-legacy.
 - Display name "Horizon Client" (was "Horizon Host") wherever the player sees it: TMLoader product name and description, the player README, the install script's message, the menu footer and About page, the log header ("Horizon Client (host 0.3.0 ...)"), the owner line of the host's toasts, the plugin ABI status line, WR Hunter's "no bridge" status. The TMLoader product folder, DLL names, ids, exports, code and docs file names keep "Horizon Host".
 - Menu size: General -> Display, Auto (80 % of the screen at 1440p and up, 85 % below) or 60/70/80/90 %. Text and icons 80-125 % (Auto 90 % at 1440p and up), also Ctrl + mouse wheel in the menu; the fonts are rebuilt inside the same `ImFont` objects, so plugins' font pointers stay valid. Plugin ABI 1.4: `ui_metrics()` (scale, content scale, display, menu and page size).
