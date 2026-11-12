@@ -12,8 +12,9 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Split times against your best and the TMX record, with gold sectors and history.",
+  "description": "Splits against your PB and the TMX record.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": false
+  "enabled_by_default": false,
+  "ui": { "min_w": 380, "min_h": 300, "pref_w": 620, "pref_h": 560 }
 }
