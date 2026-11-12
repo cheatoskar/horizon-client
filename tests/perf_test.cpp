@@ -481,6 +481,23 @@ static void testSkipAndStart() {
     CHECK(ticks == 20 + 200 + 100); // settle 0.2 s + 2 s skipped + 1 s window
 }
 
+// Smooth / Low latency / Custom (the choice at the top of the page)
+static void testPresets() {
+    perf::SeriesOptions mine;
+    mine.count = 1;
+    mine.priority = 2; // High: only ever from Custom
+    mine.limitFps = 90;
+    mine.affinity = 1;
+    const perf::SeriesOptions smooth = perf::presetOptions(perf::PresetSmooth, 144, mine);
+    CHECK(smooth.filter == 1 && smooth.powerThrottlingOff == 1 && smooth.priority == 1 && smooth.limitFps == 144 && smooth.vsync == 0);
+    CHECK(smooth.affinity == 0 && smooth.fineTimer == 0 && smooth.count == 1);
+    const perf::SeriesOptions low = perf::presetOptions(perf::PresetLowLatency, 240, mine);
+    CHECK(low.vsync == 1 && low.limitFps == 240 && low.priority == 1);
+    CHECK(perf::presetOptions(perf::PresetSmooth, 0, mine).limitFps == 0); // refresh rate unknown: no limit
+    CHECK(perf::presetOptions(perf::PresetSmooth, 1, mine).limitFps == 0);
+    CHECK(perf::presetOptions(perf::PresetCustom, 144, mine) == mine);
+    CHECK(perf::presetOptions(7, 144, mine) == mine);
+}
 static int unit() {
     testStats();
     testSkipAndStart();
@@ -490,6 +507,7 @@ static int unit() {
     testRequest();
     testFiles();
     testSeries();
+    testPresets();
     printf("perf unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

@@ -35,6 +35,13 @@ struct SeriesOptions {
 };
 std::string seriesOptionsJson(const SeriesOptions& o); // {"count": 0, ...}
 
+// The choice at the top of the page. Smooth and Low latency set the options themselves when the module is on:
+// skip repeated states on (its own safety checks still apply), no power throttling, priority above normal (never
+// High: it can starve audio, voice chat and streaming), frame limit = the monitor's refresh rate. Smooth keeps the
+// game's V-Sync, Low latency turns it off. Custom: the player's own options. count (measuring) stays the player's.
+enum Preset { PresetSmooth = 0, PresetLowLatency = 1, PresetCustom = 2 };
+SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& custom);
+
 struct SeriesSet {
     std::string label; // shown and used in file names (made safe)
     SeriesOptions options;

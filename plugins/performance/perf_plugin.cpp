@@ -50,6 +50,7 @@ struct Settings {
     int limitFps = 0;       // 0 = off
     int vsync = 0;          // 0 = as the game sets it, 1 = off, 2 = on
     int priority = 0, affinity = 0, powerThrottlingOff = 0, fineTimer = 0;
+    int preset = 0;         // perf::Preset: 0 Smooth (default), 1 Low latency, 2 Custom
     int hangLog = 1;
     int hangMs = 1500;
     int benchSeconds = 30;
@@ -78,6 +79,14 @@ void loadSettings() {
     S.affinity = gi("affinity", S.affinity);
     S.powerThrottlingOff = gi("power_throttling_off", S.powerThrottlingOff);
     S.fineTimer = gi("fine_timer", S.fineTimer);
+    // the choice: saved, or Custom for a player who set options before presets existed, else Smooth
+    S.preset = gi("preset", -1);
+    if (S.preset < perf::PresetSmooth || S.preset > perf::PresetCustom) {
+        bool own = false;
+        for (const char* k : {"count", "filter", "limit_fps", "vsync", "priority", "affinity", "power_throttling_off", "fine_timer"})
+            own = own || gi(k, -9999) != -9999;
+        S.preset = own ? perf::PresetCustom : perf::PresetSmooth;
+    }
     S.hangLog = gi("hang_log", S.hangLog);
     S.hangMs = gi("hang_ms", S.hangMs);
     S.benchSeconds = gi("bench_seconds", S.benchSeconds);
@@ -644,6 +653,36 @@ void readLauncherRequest() {
 }
 
 // ---- options
+perf::SeriesOptions g_custom; // the player's own options (Custom), as in the settings file
+int g_refreshHz = 0;          // refresh rate of the monitor the game window is on (0 unknown)
+bool g_vsyncPending = false;  // the V-Sync choice changed: the device takes it at the next start or Alt+Enter
+
+int monitorRefreshHz() {
+    HMONITOR mon = MonitorFromWindow(g_window ? g_window : GetDesktopWindow(), MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!mon || !GetMonitorInfoW(mon, &mi)) return 0;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (!EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) return 0;
+    return dm.dmDisplayFrequency > 1 ? static_cast<int>(dm.dmDisplayFrequency) : 0; // 0/1: "hardware default"
+}
+
+// The options in effect from the choice at the top: Smooth / Low latency fill them in, Custom uses the player's.
+void applyPreset() {
+    if (g_series.active()) return; // a benchmark series sets its own options
+    g_refreshHz = monitorRefreshHz();
+    const perf::SeriesOptions o = perf::presetOptions(S.preset, g_refreshHz, g_custom);
+    S.count = o.count;
+    S.filter = o.filter;
+    S.limitFps = o.limitFps;
+    S.vsync = o.vsync;
+    S.priority = o.priority;
+    S.affinity = o.affinity;
+    S.powerThrottlingOff = o.powerThrottlingOff;
+    S.fineTimer = o.fineTimer;
+}
+
 void applyProcessOptions() {
     if (!perf::sys::setPriority(S.priority)) logf(HORIZON_LOG_WARN, "priority %d refused by Windows", S.priority);
     if (!perf::sys::setAffinity(S.affinity)) logf(HORIZON_LOG_WARN, "core selection %d refused by Windows", S.affinity);
@@ -683,6 +722,12 @@ void HORIZON_CALL cbDeviceCreated(void*, void* device, void* params) {
         if (SUCCEEDED(static_cast<IDirect3DDevice9*>(device)->GetCreationParameters(&cp)) && cp.hFocusWindow) g_window = cp.hFocusWindow;
     }
     perf::stall::note("device created");
+    if (S.preset != perf::PresetCustom && g_enabled) { // now the monitor of the game window is known
+        const int before = S.limitFps;
+        applyPreset();
+        applyProcessOptions();
+        if (S.limitFps != before) logf(HORIZON_LOG_INFO, "preset: frame limit %d fps (monitor %d Hz)", S.limitFps, g_refreshHz);
+    }
     ensureHooks(device);
 }
 void HORIZON_CALL cbAdjustParams(void*, void* params) {
@@ -1045,61 +1090,9 @@ void exportLast60() {
     g_lastResult = ok ? "Saved (CSV)" : "CSV not written";
 }
 
-void drawMenu() {
-    const double now = perf::sys::nowMs();
-    refreshLive(now);
-    const HorizonStyle* st = g_host->style();
-    const float sc = st && st->scale > 0 ? st->scale : 1.0f;
-    const float fieldW = 160.0f * sc; // input fields, scaled like the menu
-    if (g_competitionPatch) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Competition Patch: call counts off");
-
-    ImGui::SeparatorText("Measure");
-    ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
-                       static_cast<unsigned>(g_live.stutters));
-    dimWrapped("Game %.2f   Present %.2f   Wait %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
-    if (checkbox("Frame-time window", &S.overlay, "overlay")) registerOverlay();
-    hint("FPS, lows and a frame graph on screen.");
-    ImGui::BeginDisabled(!callsAllowed());
-    if (checkbox("Count Direct3D calls", &S.count, "count")) applyProcessOptions();
-    ImGui::EndDisabled();
-    hint("Calls per frame; costs a little time.");
-    if (S.count) {
-        ImGui::SameLine();
-        checkbox("In window", &S.overlayCalls, "overlay_calls");
-    }
-    if (perf::d3d::attached()) {
-        const auto& f = perf::d3d::facts();
-        dimWrapped("Device 0x%08lx  %s%s%s", static_cast<unsigned long>(f.behaviorFlags), f.pure ? "pure, " : "",
-                   f.mixed ? "mixed VP" : f.software ? "software VP" : "hardware VP", f.multithreaded ? ", multithreaded" : "");
-        if (g_ring.size() && g_ring.newest().hasCalls && g_ring.newest().calls.drawsSoftwareVP)
-            dimWrapped("Software-VP draws: %u per frame", g_ring.newest().calls.drawsSoftwareVP);
-    }
-    if (ImGui::Button("Save last 60 s")) exportLast60();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("CSV in the bench folder.");
-
-    ImGui::SeparatorText("Benchmark");
-    ImGui::SetNextItemWidth(fieldW);
-    if (ImGui::SliderInt("Seconds", &S.benchSeconds, 10, 120)) saveInt("bench_seconds", S.benchSeconds);
-    ImGui::SetNextItemWidth(fieldW);
-    if (ImGui::InputText("Label", S.benchLabel, sizeof(S.benchLabel))) g_host->set_string(g_host->plugin, "bench_label", S.benchLabel);
-    if (requestWaiting()) {
-        if (ImGui::Button("Start series")) g_keyEdge = true;
-        ImGui::SameLine();
-        ImGui::TextDisabled("Request waiting");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open the scene first.");
-    } else if (g_reqFromLauncher && g_bench != Bench::Idle) {
-        if (ImGui::Button("Stop")) g_keyEdge = true;
-    } else if (ImGui::Button(g_bench == Bench::Idle ? "Start" : "Stop")) {
-        startManualBench();
-    }
-    const char* hk = g_benchHotkey ? g_host->hotkey_text(g_host->plugin, g_benchHotkey) : "";
-    if (hk && *hk) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("Key: %s", hk);
-    }
-    if (!g_benchStatus.empty()) ImGui::TextWrapped("%s", g_benchStatus.c_str());
-    if (!g_lastResult.empty()) dimWrapped("%s", g_lastResult.c_str());
-
+// The options one by one (Custom). Every change is also the new Custom set.
+void drawCustomOptions(float fieldW) {
+    const perf::SeriesOptions before = currentOptions();
     ImGui::SeparatorText("Options");
     ImGui::SetNextItemWidth(fieldW);
     if (ImGui::InputInt("FPS limit", &S.limitFps, 10, 30)) {
@@ -1141,6 +1134,96 @@ void drawMenu() {
         ImGui::SameLine();
         ImGui::TextDisabled("%s", perf::sys::affinityNote());
     }
+    if (currentOptions() != before) g_custom = currentOptions();
+}
+
+void drawMenu() {
+    const double now = perf::sys::nowMs();
+    refreshLive(now);
+    const HorizonStyle* st = g_host->style();
+    const float sc = st && st->scale > 0 ? st->scale : 1.0f;
+    const float fieldW = 160.0f * sc; // input fields, scaled like the menu
+    if (g_competitionPatch) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Competition Patch: call counts off");
+
+    // the choice: Smooth / Low latency set the options, Custom shows them
+    {
+        static const char* kPreset[] = {"Smooth", "Low latency", "Custom"};
+        static const char* kTip[] = {"Frame limit at the refresh rate, V-Sync as the game has it.",
+                                     "Frame limit at the refresh rate, V-Sync off.", "Your own options."};
+        int pick = S.preset;
+        for (int i = 0; i < 3; i++) {
+            if (i) ImGui::SameLine();
+            ImGui::RadioButton(kPreset[i], &pick, i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kTip[i]);
+        }
+        if (pick != S.preset) {
+            const int vsyncBefore = S.vsync;
+            S.preset = pick;
+            saveInt("preset", pick);
+            applyPreset();
+            applyProcessOptions();
+            if (S.vsync != vsyncBefore) g_vsyncPending = true;
+            logf(HORIZON_LOG_INFO, "preset %s: limit %d fps, V-Sync %s, priority %d", kPreset[pick], S.limitFps,
+                 S.vsync == 0 ? "as the game" : S.vsync == 1 ? "off" : "on", S.priority);
+        }
+        if (S.preset != perf::PresetCustom) {
+            if (S.limitFps) dimWrapped("Limit %d fps (%d Hz)   V-Sync %s   Above normal", S.limitFps, g_refreshHz, S.vsync == 1 ? "off" : "game");
+            else dimWrapped("No limit (refresh rate unknown)   V-Sync %s   Above normal", S.vsync == 1 ? "off" : "game");
+        }
+        if (g_vsyncPending) dimWrapped("V-Sync: next start or Alt+Enter");
+    }
+
+    ImGui::SeparatorText("Measure");
+    ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
+                       static_cast<unsigned>(g_live.stutters));
+    dimWrapped("Game %.2f   Present %.2f   Wait %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
+    if (checkbox("Frame-time window", &S.overlay, "overlay")) registerOverlay();
+    hint("FPS, lows and a frame graph on screen.");
+    ImGui::BeginDisabled(!callsAllowed());
+    if (checkbox("Count Direct3D calls", &S.count, "count")) {
+        g_custom.count = S.count;
+        applyProcessOptions();
+    }
+    ImGui::EndDisabled();
+    hint("Calls per frame; costs a little time.");
+    if (S.count) {
+        ImGui::SameLine();
+        checkbox("In window", &S.overlayCalls, "overlay_calls");
+    }
+    if (perf::d3d::attached()) {
+        const auto& f = perf::d3d::facts();
+        dimWrapped("Device 0x%08lx  %s%s%s", static_cast<unsigned long>(f.behaviorFlags), f.pure ? "pure, " : "",
+                   f.mixed ? "mixed VP" : f.software ? "software VP" : "hardware VP", f.multithreaded ? ", multithreaded" : "");
+        if (g_ring.size() && g_ring.newest().hasCalls && g_ring.newest().calls.drawsSoftwareVP)
+            dimWrapped("Software-VP draws: %u per frame", g_ring.newest().calls.drawsSoftwareVP);
+    }
+    if (ImGui::Button("Save last 60 s")) exportLast60();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("CSV in the bench folder.");
+
+    ImGui::SeparatorText("Benchmark");
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::SliderInt("Seconds", &S.benchSeconds, 10, 120)) saveInt("bench_seconds", S.benchSeconds);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::InputText("Label", S.benchLabel, sizeof(S.benchLabel))) g_host->set_string(g_host->plugin, "bench_label", S.benchLabel);
+    if (requestWaiting()) {
+        if (ImGui::Button("Start series")) g_keyEdge = true;
+        ImGui::SameLine();
+        ImGui::TextDisabled("Request waiting");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open the scene first.");
+    } else if (g_reqFromLauncher && g_bench != Bench::Idle) {
+        if (ImGui::Button("Stop")) g_keyEdge = true;
+    } else if (ImGui::Button(g_bench == Bench::Idle ? "Start" : "Stop")) {
+        startManualBench();
+    }
+    const char* hk = g_benchHotkey ? g_host->hotkey_text(g_host->plugin, g_benchHotkey) : "";
+    if (hk && *hk) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Key: %s", hk);
+    }
+    if (!g_benchStatus.empty()) ImGui::TextWrapped("%s", g_benchStatus.c_str());
+    if (!g_lastResult.empty()) dimWrapped("%s", g_lastResult.c_str());
+
+    if (S.preset == perf::PresetCustom) drawCustomOptions(fieldW);
 
     ImGui::SeparatorText("Hang log");
     if (checkbox("Log stalls", &S.hangLog, "hang_log")) applyProcessOptions();
@@ -1205,6 +1288,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         perf::stall::setAssumeFront(g_assumeFront);
     }
     loadSettings();
+    g_custom = currentOptions();
+    applyPreset();
     perf::sys::captureOriginals();
 
     std::wstring gameFolder;
@@ -1289,6 +1374,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
         perf::stall::setEnabled(false);
         g_pacer.reset();
     } else {
+        applyPreset();
         applyProcessOptions();
     }
 }

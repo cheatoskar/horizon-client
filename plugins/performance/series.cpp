@@ -8,6 +8,18 @@
 
 namespace perf {
 
+SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& custom) {
+    if (preset != PresetSmooth && preset != PresetLowLatency) return custom;
+    SeriesOptions o;
+    o.count = custom.count;
+    o.filter = 1;
+    o.powerThrottlingOff = 1;
+    o.priority = 1;
+    o.limitFps = refreshHz >= 30 && refreshHz <= 1000 ? refreshHz : 0; // unknown: no limit
+    o.vsync = preset == PresetLowLatency ? 1 : 0;
+    return o;
+}
+
 std::string seriesOptionsJson(const SeriesOptions& o) {
     char b[300];
     snprintf(b, sizeof(b),

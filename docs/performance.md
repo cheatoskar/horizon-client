@@ -20,6 +20,22 @@ Everything is in the "Frame times" window (a Horizon HUD panel: FPS, lows, a gra
 
 Cost of measuring: the frame timer costs nothing measurable. The call counter goes through 36 hooked methods; in my synthetic test (200 draws, 1800 state calls, ~2600 hooked calls per frame) the difference was inside the noise (1.27 ms without, 1.40 ms with, +-0.2 ms between runs). **Benchmarks of other options run with the counter off.**
 
+## Smooth / Low latency / Custom (0.3.1)
+
+The choice at the top of the page; what the module does as soon as it is switched on (it is off by default):
+
+| | Smooth (default) | Low latency | Custom |
+|---|---|---|---|
+| Skip repeated states | on (its own checks still apply, off with the Competition Patch) | on | the player's |
+| Power throttling (EcoQoS) | off for the game | off | the player's |
+| Priority | Above normal | Above normal | the player's (High only here: it can starve audio, voice chat and streaming for little gain) |
+| Frame limit | refresh rate of the monitor the game window is on | same | the player's |
+| V-Sync | as the game has it | off (applies at the next start or Alt+Enter) | the player's |
+
+The refresh rate is read from the monitor of the game window (`EnumDisplaySettings`), again when the device is
+created; unknown = no limit. Measuring ("Count Direct3D calls") stays the player's choice. A player who set
+options before 0.3.1 starts on Custom. `perf::presetOptions` (series.h), unit test `testPresets`.
+
 ## Benchmark
 
 - **By hand:** Seconds and Label on the page, then "Start" (or the hotkey). It records from that moment.
