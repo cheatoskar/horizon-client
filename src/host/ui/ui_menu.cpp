@@ -635,7 +635,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
             drawText(dl, f.bodyBold, p, U(t.text), "Module icons");
             drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Only here in the game.");
             ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
-            const char* styles[2] = {"Saturn", "Distinct"};
+            const char* styles[2] = {"Distinct", "Saturn"};
             ImGui::PushFont(F(f.body));
             const int picked = segmented("iconstyle", styles, 2, model.iconStyle, 34.0f * s, F(f.body));
             ImGui::PopFont();

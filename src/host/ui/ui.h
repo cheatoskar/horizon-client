@@ -158,7 +158,7 @@ struct Model {
     std::string layoutWhy;                     // why not, short
     bool forever = false;                      // TMNF/TMUF: say that layout mode is only for the menus
     int widgetOpacity = 65;                    // widget background in % (host.json widgets.opacity)
-    int iconStyle = 0;                         // module icons: 0 Saturn (icon.png), 1 Distinct (icon-alt.png)
+    int iconStyle = 0;                         // module icons: 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
 };
 
 // One toast on screen (ABI minor 3), see drawToasts.
@@ -192,7 +192,7 @@ struct Actions {
     std::function<void(int pct)> setContentScale; // 0 = Auto, else 80..125
     std::function<void()> toggleLayout;           // "Edit layout" (closes the menu)
     std::function<void(int pct)> setWidgetOpacity; // widget background 20..100 %
-    std::function<void(int style)> setIconStyle;  // 0 Saturn, 1 Distinct
+    std::function<void(int style)> setIconStyle;  // 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
 };
 
 // Where the last menu frame was: the window and the room inside a plugin page's card (for ui_metrics).

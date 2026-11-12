@@ -339,7 +339,7 @@ ui::Model buildModel() {
     m.forever = (s.game.game & HORIZON_GAME_FOREVER) != 0;
     m.layoutAllowed = layoutAllowed(&m.layoutWhy);
     m.widgetOpacity = std::max(20, std::min(100, hostSettingInt("widgets.opacity", 65)));
-    m.iconStyle = hostSettingInt("ui.icons", 0) == 1 ? 1 : 0;
+    m.iconStyle = hostSettingInt("ui.icon_alt", 0) == 1 ? 1 : 0;
     if (g_menu)
         for (const ToastHistoryEntry& h : toastsHistory()) m.recentToasts.push_back(ui::Model::Recent{h.owner, h.title, h.text, h.kind, h.missed});
     m.notes = s.notes;
@@ -387,7 +387,7 @@ ui::Actions makeActions() {
     };
     a.toggleLayout = []() { setLayoutMode(!g_layout, "the menu"); };
     a.setIconStyle = [](int style) {
-        hostSetSettingInt("ui.icons", style == 1 ? 1 : 0);
+        hostSetSettingInt("ui.icon_alt", style == 1 ? 1 : 0);
         g_reloadIcons = true;
     };
     a.setWidgetOpacity = [](int pct) { hostSetSettingInt("widgets.opacity", std::max(20, std::min(100, pct))); };

@@ -48,20 +48,22 @@ struct Known {
 const Known kKnown[] = {{"TM Vibrant Shaders", 110}, {"CenterSpeed", 111}, {"Twinkie", 112}, {"TMInterface", 113},
                         {"TMUnlimiter", 114}, {"Competition Patch", 115}, {"KimMod", 116}, {"100% TMX + Bingo", 117}};
 
-// Plugin icons in the player's style (General -> Display, host.json "ui.icons"): 0 = Saturn = icon.png (or
-// plugin.json "icon"), 1 = Distinct = icon-alt.png. The other file is the fallback, then the coloured initials.
+// Plugin icons in the player's style (General -> Display, host.json "ui.icon_alt"): 0 = the plugin's icon (icon.png
+// or plugin.json "icon"; our modules: the Distinct set, the default since 0.3.0), 1 = icon-alt.png (our modules: the
+// Saturn set). The other file is the fallback, then the coloured initials.
+// "ui.icons" (0.2.x: 0 Saturn, 1 Distinct) is not read any more.
 std::vector<uint64_t> g_pluginIcons; // made here, released when the style changes
 
 int loadPluginIcons() {
     for (uint64_t t : g_pluginIcons) releaseTexture(t);
     g_pluginIcons.clear();
-    const bool distinct = hostSettingInt("ui.icons", 0) == 1;
+    const bool useAlt = hostSettingInt("ui.icon_alt", 0) == 1;
     int icons = 0;
     for (auto& up : plugins()) {
         const Plugin* p = up.get();
-        const std::string saturn = p->manifest.icon.empty() ? std::string("icon.png") : p->manifest.icon;
+        const std::string main = p->manifest.icon.empty() ? std::string("icon.png") : p->manifest.icon;
         const std::string alt = "icon-alt.png";
-        const std::string first = distinct ? alt : saturn, second = distinct ? saturn : alt;
+        const std::string first = useAlt ? alt : main, second = useAlt ? main : alt;
         uint64_t t = fileExists(p->folder + wide(first)) ? fromFile(p->folder + wide(first)) : 0;
         if (!t && fileExists(p->folder + wide(second))) t = fromFile(p->folder + wide(second));
         ui::setIcon(p->id, t);
@@ -79,7 +81,7 @@ int loadPluginIcons() {
 
 void texturesReloadPluginIcons() {
     const int n = loadPluginIcons();
-    HLOG("overlay: plugin icons in the %s style (%d loaded)", hostSettingInt("ui.icons", 0) == 1 ? "Distinct" : "Saturn", n);
+    HLOG("overlay: plugin icons in the %s style (%d loaded)", hostSettingInt("ui.icon_alt", 0) == 1 ? "Saturn" : "Distinct", n);
 }
 
 // After the overlay is ready on the device (game thread).

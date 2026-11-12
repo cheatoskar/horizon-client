@@ -167,7 +167,7 @@ bool keyCaptureActive();
 void d3dInstall();
 void overlayCreateContext();
 void texturesLoad(); // logo, plugin and other-mod icons (textures.cpp), after the device exists
-void texturesReloadPluginIcons(); // after the icon style changed (host.json "ui.icons"), between frames
+void texturesReloadPluginIcons(); // after the icon style changed (host.json "ui.icon_alt"), between frames
 void* gameDevice();
 void overlayDeviceCreated(void* device, HWND window, void* params);
 void overlayBeforeReset();
