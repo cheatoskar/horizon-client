@@ -213,7 +213,7 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) {
     static const HorizonPluginInfo info = {HORIZON_ABI,
                                            "input-display",
                                            "Input Display",
-                                           "0.1.0",
+                                           "0.1.1",
                                            HORIZON_GAME_ALL,
                                            HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY,
                                            HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,

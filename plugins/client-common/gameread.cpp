@@ -200,11 +200,24 @@ void Reader::poll(Mem& m, uintptr_t race) {
         if (haveCur) lastCurCp_ = r.state == 0 ? 0 : cur;
         // the car
         uintptr_t gm = 0, veh = 0;
-        if (m.ptr(player, L_.playerMobil, &gm) && m.ptr(gm, L_.mobilScene, &veh)) {
+        bool haveVeh = false;
+        if (m.ptr(player, L_.playerMobil, &gm)) {
+            // ESWC/Sunrise: the player's Mobil IS the car (CSceneToyVehicleTrackMania, read in ESWC 1.80 2026-11-12); its
+            // +0x14 is another scene object whose zeros passed as "no input". Forever: CGameMobil -> SceneMobil.
+            if (L_.engine == Engine::Legacy && m.isKind(gm, L_.vehicleClass)) {
+                veh = gm;
+                haveVeh = true;
+            } else {
+                haveVeh = m.ptr(gm, L_.mobilScene, &veh);
+            }
+        }
+        if (haveVeh) {
             float s = 0, g = 0, b = 0;
-            if (m.get(veh + static_cast<uintptr_t>(L_.vSteer), &s) && m.get(veh + static_cast<uintptr_t>(L_.vGas), &g) &&
-                m.get(veh + static_cast<uintptr_t>(L_.vBrake), &b) && plausibleInput(s, g, b) &&
-                (L_.vNamed || m.isKind(veh, L_.vehicleClass) || m.isKind(veh, "CSceneVehicle"))) {
+            // Legacy: the object must be the car class even when the offsets came by name (zeros elsewhere look plausible)
+            const bool carClass = L_.engine == Engine::Legacy ? m.isKind(veh, L_.vehicleClass)
+                                                              : (L_.vNamed || m.isKind(veh, L_.vehicleClass) || m.isKind(veh, "CSceneVehicle"));
+            if (carClass && m.get(veh + static_cast<uintptr_t>(L_.vSteer), &s) && m.get(veh + static_cast<uintptr_t>(L_.vGas), &g) &&
+                m.get(veh + static_cast<uintptr_t>(L_.vBrake), &b) && plausibleInput(s, g, b)) {
                 c.ok = true;
                 c.steer = s < -1 ? -1 : (s > 1 ? 1 : s);
                 c.gas = g < 0 ? 0 : (g > 1 ? 1 : g);

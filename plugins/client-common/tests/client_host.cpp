@@ -163,6 +163,20 @@ const Off kLegacy = {0x20, 0x10c, -1, -1, -1, 0x34, 0x24, 0x14, -1, 0x1f4, -1, 0
 const Off& off() { return world.forever ? kForever : kLegacy; }
 bool g_haveRace = false;
 
+// The car under the player as each game keeps it: Forever player.Mobil -> CGameMobil -> SceneMobil (the car);
+// ESWC/Sunrise player.Mobil is the car itself (CSceneToyVehicleTrackMania; its +0x14 is another scene object,
+// left pointing at an empty one here so a reader that follows it reads zeros, as in the game).
+void linkCar() {
+    const Off& o = off();
+    if (world.forever) {
+        put32(world.player + static_cast<uintptr_t>(o.pMobil), static_cast<uint32_t>(world.gameMobil));
+        put32(world.gameMobil + static_cast<uintptr_t>(o.mScene), static_cast<uint32_t>(world.vehicle));
+    } else {
+        put32(world.player + static_cast<uintptr_t>(o.pMobil), static_cast<uint32_t>(world.vehicle));
+        put32(world.vehicle + static_cast<uintptr_t>(o.mScene), static_cast<uint32_t>(world.gameMobil));
+    }
+}
+
 // ---------------------------------------------------------------- API
 void HORIZON_CALL f_log(HorizonPluginHandle, int32_t level, const char* fmt, ...) {
     char buf[2048];
@@ -613,8 +627,7 @@ void buildWorld(bool forever, const char* uid, const wchar_t* mapName) {
     put32(world.race + static_cast<uintptr_t>(o.players) + 4, static_cast<uint32_t>(players));
     put32(world.race + static_cast<uintptr_t>(o.target), static_cast<uint32_t>(world.info));
     put32(world.player + static_cast<uintptr_t>(o.pInfo), static_cast<uint32_t>(world.info));
-    put32(world.player + static_cast<uintptr_t>(o.pMobil), static_cast<uint32_t>(world.gameMobil));
-    put32(world.gameMobil + static_cast<uintptr_t>(o.mScene), static_cast<uint32_t>(world.vehicle));
+    linkCar();
     if (o.cpList >= 0) put32(world.info + static_cast<uintptr_t>(o.cpList) + 4, static_cast<uint32_t>(world.cpItems));
     if (o.ghosts >= 0) {
         const uintptr_t ghosts = alloc(8);
@@ -682,7 +695,7 @@ uintptr_t moveCarHigh() {
     if (!p) return 0;
     memcpy(p, reinterpret_cast<const void*>(world.vehicle), 0x800);
     world.vehicle = reinterpret_cast<uintptr_t>(p);
-    put32(world.gameMobil + static_cast<uintptr_t>(off().mScene), static_cast<uint32_t>(world.vehicle));
+    linkCar();
     return world.vehicle;
 }
 

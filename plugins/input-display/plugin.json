@@ -1,7 +1,7 @@
 {
   "id": "input-display",
   "name": "Input Display",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "dll": "input-display.dll",
   "games": [
     "eswc",
