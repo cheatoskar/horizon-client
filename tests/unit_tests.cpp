@@ -17,6 +17,7 @@
 #include "host/game/forever_poll.h"
 #include "host/bridge_logic.h"
 #include "host/exe_known.h"
+#include "host/input_gate.h"
 #include "gamectl/gamectl_pick.h"
 #include "host/stats_log.h"
 #include "host/toast_queue.h"
@@ -815,6 +816,78 @@ static void testExeIdentification() {
 
 // play_map_file: the copied map is found among the infos the rescan added by its gold time, never by counting.
 // TM Sunrise (owner's log): "challenge infos 207 -> 208, 2 new", the old code refused with "expected 1, got 2".
+// The menu's hold-back against a fake buffered keyboard/mouse: no key stays down in the game.
+static bool g_physRight = false, g_physLeftButton = false;
+static bool fakePhys(int kind, DWORD ofs) {
+    if (kind == InputGate::kKeyboard) return ofs == 0xCD && g_physRight; // DIK_RIGHT
+    return ofs == InputGate::kMouseButton0 && g_physLeftButton;
+}
+static GateEvent g_buf[8];
+static DWORD gateRead(InputGate& g, int kind, bool blocked, std::initializer_list<std::pair<DWORD, DWORD>> evs) {
+    DWORD n = 0;
+    for (const auto& e : evs) {
+        g_buf[n] = GateEvent{e.first, e.second, 0, n + 1, 0};
+        n++;
+    }
+    g.filter(kind, blocked, g_buf, sizeof(GateEvent), &n, 8, &fakePhys);
+    return n;
+}
+static void testInputGate() {
+    const int K = InputGate::kKeyboard, M = InputGate::kMouse;
+    const DWORD kRight = 0xCD, kUp = 0xC8, kButton0 = InputGate::kMouseButton0;
+    {
+        // press -> menu opens -> release while blocked -> the release reaches the game, a new press does not
+        InputGate g;
+        g_physRight = true;
+        CHECK(gateRead(g, K, false, {{kRight, 0x80}}) == 1 && g.held(K, kRight));
+        g_physRight = false;
+        CHECK(gateRead(g, K, true, {{kRight, 0x00}, {kUp, 0x80}}) == 1 && g_buf[0].dwOfs == kRight && g_buf[0].dwData == 0);
+        CHECK(!g.held(K, kRight));
+        CHECK(gateRead(g, K, true, {{kUp, 0x00}}) == 0); // release of a key the game never saw: dropped
+        CHECK(gateRead(g, K, false, {}) == 0);            // menu closed: nothing to add
+    }
+    {
+        // press -> menu opens -> the release never comes through -> menu closes: a release is added
+        InputGate g;
+        g_physRight = true;
+        gateRead(g, K, false, {{kRight, 0x80}});
+        g_physRight = false;
+        gateRead(g, K, true, {});
+        CHECK(gateRead(g, K, false, {{kUp, 0x80}}) == 2 && g_buf[0].dwOfs == kUp && g_buf[1].dwOfs == kRight && g_buf[1].dwData == 0);
+        CHECK(!g.held(K, kRight) && g.held(K, kUp));
+    }
+    {
+        // a key still held through the menu stays down (no release made up)
+        InputGate g;
+        g_physRight = true;
+        gateRead(g, K, false, {{kRight, 0x80}});
+        gateRead(g, K, true, {});
+        CHECK(gateRead(g, K, false, {}) == 0 && g.held(K, kRight));
+        g_physRight = false;
+    }
+    {
+        // a full buffer: the added release waits for the next read
+        InputGate g;
+        g_physRight = true;
+        gateRead(g, K, false, {{kRight, 0x80}});
+        g_physRight = false;
+        gateRead(g, K, true, {});
+        DWORD n = 8;
+        for (DWORD i = 0; i < 8; i++) g_buf[i] = GateEvent{kUp, (i % 2) ? 0u : 0x80u, 0, i + 1, 0};
+        g.filter(K, false, g_buf, sizeof(GateEvent), &n, 8, &fakePhys);
+        CHECK(n == 8 && g.held(K, kRight));
+        CHECK(gateRead(g, K, false, {}) == 1 && g_buf[0].dwOfs == kRight && !g.held(K, kRight));
+    }
+    {
+        // mouse: button 0 down -> menu -> its release passes, axes are dropped while blocked
+        InputGate g;
+        g_physLeftButton = true;
+        gateRead(g, M, false, {{kButton0, 0x80}});
+        g_physLeftButton = false;
+        CHECK(gateRead(g, M, true, {{0 /* X axis */, 5}, {kButton0, 0x00}}) == 1 && g_buf[0].dwOfs == kButton0 && !g.held(M, kButton0));
+    }
+}
+
 static void testPickNewChallenge() {
     int objs[16] = {};
     std::map<void*, int> gold;
@@ -911,6 +984,7 @@ int main() {
     testStatsLines();
     testExeIdentification();
     testPickNewChallenge();
+    testInputGate();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }
