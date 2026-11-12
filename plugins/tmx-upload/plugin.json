@@ -12,8 +12,9 @@
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Offers your new replays to TM Horizon or the browser extension for upload to TMX.",
+  "description": "Lets the TMX uploader pick up your new replays.",
   "author": "cheatoskar",
   "icon": "icon.png",
-  "enabled_by_default": false
+  "enabled_by_default": false,
+  "ui": { "min_w": 360, "min_h": 260, "pref_w": 520, "pref_h": 420 }
 }
