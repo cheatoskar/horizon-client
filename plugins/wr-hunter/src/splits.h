@@ -70,6 +70,35 @@ int splitCount(const std::vector<int>& live, const MapStats& s, const Comparison
 // player is behind by at least (now - that split). kNoDelta while still in time.
 int runningDelta(const std::vector<int>& live, int nowMs, const std::vector<int>& cmp);
 
+// A usable split list: 1..kMaxSplits times, each > 0, strictly increasing (the finish last).
+constexpr size_t kMaxSplits = 256;
+bool saneSplits(const std::vector<int>& splits);
+// Drops what an unusable split list left in the stats (0.3.0-rc on Original stored ~280 splits of -1 as the PB):
+// a PB that is not sane goes with its golds, a run keeps only its final time.
+void sanitize(MapStats& s);
+
+// The host's CHECKPOINT events (ESWC, Sunrise, Original) -> real checkpoints. On Original the OnCheckpoint hook fires
+// about 50 times within 0.1 s at every checkpoint (one event per call, each with the next index), with times that are
+// -1 or stale. Events less than kSameCpMs after the previous one are the same checkpoint, unless their time is good
+// and later than the last split (two checkpoints in one poll on ESWC). A time that is unknown, repeated or ahead of
+// the run's own clock (ms since RACE_START) is replaced by that clock.
+constexpr int kSameCpMs = 300;
+class CpEvents {
+public:
+    void start(uint64_t nowMs);   // RACE_START
+    void clear();                 // no run (map load, menu)
+    // A CHECKPOINT event with the host's time at wall clock nowMs. True: a new checkpoint, *split its race time
+    // (-1 unknown). lastSplit: the run's last split so far (0 none).
+    bool add(int hostTime, uint64_t nowMs, int lastSplit, int* split);
+    // True when the last checkpoint came less than kSameCpMs before nowMs (the finish line's own events).
+    bool justTaken(uint64_t nowMs) const;
+
+private:
+    bool started_ = false, any_ = false;
+    uint64_t start_ = 0, last_ = 0;
+    int lastHost_ = -2;
+};
+
 // JSON (UTF-8) of the stats, and back. False on bad JSON.
 std::string toJson(const MapStats& s);
 bool fromJson(const std::string& text, MapStats* s);
