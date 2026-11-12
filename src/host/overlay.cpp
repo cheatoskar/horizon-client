@@ -276,9 +276,9 @@ ui::Model buildModel() {
         v.statusText = p->statusText;
         if (p->running && p->enabled && pluginGated(p)) {
             v.status = ui::PluginStatus::Blocked;
-            v.statusText = game().onlineKnown() ? "solo only: paused while online" : "solo only: paused (online state unknown here)";
+            v.statusText = game().onlineKnown() ? "solo only: paused online" : "solo only: paused";
         }
-        if (p->restartNote && v.status == ui::PluginStatus::On) v.statusText = "some changes apply after a restart";
+        if (p->restartNote && v.status == ui::PluginStatus::On) v.statusText = "restart for some changes";
         v.enabled = pluginSwitchPosition(p);
         v.hasMenu = p->running && p->drawMenu != nullptr;
         v.liveToggle = p->live;
@@ -296,6 +296,10 @@ ui::Model buildModel() {
                 v.winH = h;
             }
         }
+        v.minW = p->manifest.uiMinW;
+        v.minH = p->manifest.uiMinH;
+        v.prefW = p->manifest.uiPrefW;
+        v.prefH = p->manifest.uiPrefH;
         for (auto& pv : v.panels) pv.label = panelTabLabel(pv);
         m.plugins.push_back(v);
     }
@@ -465,11 +469,11 @@ bool layoutModeOn() { return g_layout; }
 bool layoutAllowed(std::string* why) {
     // TMNF/TMUF (Competition Patch rules): never take input during a race, so only in the game's menus
     if ((state().game.game & HORIZON_GAME_FOREVER) != 0 && (racing() || game().gameState() != HORIZON_STATE_MAIN_MENU)) {
-        if (why) *why = "TMNF/TMUF: only in the game's menus, not during a race.";
+        if (why) *why = "TMNF/TMUF: game menus only";
         return false;
     }
     if (captureActive()) {
-        if (why) *why = "Not while a photo or video is taken.";
+        if (why) *why = "Not during a capture";
         return false;
     }
     return true;
@@ -484,6 +488,7 @@ void setLayoutMode(bool on, const char* why) {
         t.kind = HORIZON_TOAST_INFO;
         t.title = "Edit layout";
         t.text = no.c_str();
+        t.flags = HORIZON_TOAST_IMPORTANT; // the answer to a key press: shown now, also while driving
         toastsPush("Horizon", t);
         HLOG("layout: not now (%s)", no.c_str());
         return;

@@ -149,6 +149,21 @@ PluginManifest parsePluginManifest(const std::string& text, const std::string& f
     m.startupOnly = getBool(root, "startup_only", false);
     const Json* abi = root.get("abi");
     m.abi = abi && abi->type == Json::Number ? static_cast<int>(abi->num) : 0;
+    if (const Json* ui = root.get("ui")) {
+        if (ui->type == Json::Object) {
+            // numbers from 160 to 4000 logical pixels; anything else keeps the default
+            auto num = [&](const char* key, float& out) {
+                const Json* v = ui->get(key);
+                if (v && v->type == Json::Number && v->num >= 160.0 && v->num <= 4000.0) out = static_cast<float>(v->num);
+            };
+            num("min_w", m.uiMinW);
+            num("min_h", m.uiMinH);
+            num("pref_w", m.uiPrefW);
+            num("pref_h", m.uiPrefH);
+            if (m.uiPrefW < m.uiMinW) m.uiPrefW = m.uiMinW;
+            if (m.uiPrefH < m.uiMinH) m.uiPrefH = m.uiMinH;
+        }
+    }
     m.valid = true;
     return m;
 }

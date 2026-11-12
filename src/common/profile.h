@@ -44,6 +44,9 @@ struct PluginManifest {
     bool enabledByDefault = true; // "enabled_by_default": false = off until switched on (no profile.json)
     bool startupOnly = false;     // "startup_only": true = hooks the game at start: switching it on later needs a restart
     int abi = 0;
+    // "ui": {"min_w", "min_h", "pref_w", "pref_h"}: the plugin's own window (pop-out, free window) in logical
+    // pixels at UI scale 1. The host multiplies by the UI scale and clamps to the screen.
+    float uiMinW = 480.0f, uiMinH = 320.0f, uiPrefW = 820.0f, uiPrefH = 560.0f;
 };
 
 // Parses plugin.json. folderId: the folder name, which must equal "id".

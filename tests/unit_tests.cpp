@@ -93,6 +93,13 @@ static void testManifest() {
     CHECK(parsePluginManifest(R"({"icon":"icon.png"})", "x").icon == "icon.png");
     CHECK(parsePluginManifest(R"({"icon":"..\\x.png"})", "x").icon.empty()); // icon must stay in the folder
     CHECK(parsePluginManifest(R"({"icon":"sub/x.png"})", "x").icon.empty());
+    // "ui": the size of the module's own window (logical px), defaults 480x320 / 820x560
+    PluginManifest ui0 = parsePluginManifest(R"({})", "x");
+    CHECK(ui0.uiMinW == 480.0f && ui0.uiMinH == 320.0f && ui0.uiPrefW == 820.0f && ui0.uiPrefH == 560.0f);
+    PluginManifest ui1 = parsePluginManifest(R"({"ui":{"min_w":520,"min_h":360,"pref_w":860,"pref_h":600}})", "x");
+    CHECK(ui1.valid && ui1.uiMinW == 520.0f && ui1.uiMinH == 360.0f && ui1.uiPrefW == 860.0f && ui1.uiPrefH == 600.0f);
+    PluginManifest ui2 = parsePluginManifest(R"({"ui":{"min_w":700,"pref_w":600,"min_h":"x","pref_h":99999}})", "x");
+    CHECK(ui2.valid && ui2.uiMinW == 700.0f && ui2.uiPrefW == 700.0f && ui2.uiMinH == 320.0f && ui2.uiPrefH == 560.0f);
     // save_replay names
     CHECK(replayStemFromName(L"My run.Replay.Gbx") == L"My run");
     CHECK(replayStemFromName(L"a\\b/c:d*?.replay.gbx") == L"a_b_c_d__");

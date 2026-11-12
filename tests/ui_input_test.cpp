@@ -125,15 +125,20 @@ int main() {
     pv.hasMenu = true;
     pv.winX = 5000; // remembered off screen: must be clamped
     pv.winY = 4000;
-    pv.winW = 400;
-    pv.winH = 300;
+    pv.winW = 600;
+    pv.winH = 400;
     g_model.plugins.push_back(pv);
     PluginView pv2 = pv;
     pv2.id = "second";
     pv2.name = "Second";
     pv2.winX = pv2.winY = -1;
     g_model.plugins.push_back(pv2);
-    g_actions.drawPluginPage = [](const std::string&) { ImGui::Button("Demo button"); };
+    static float s_roomW = 0.0f, s_availW = 0.0f;
+    g_actions.drawPluginPage = [](const std::string&) {
+        s_roomW = menuMetrics().pageW; // ui_metrics page_w while the plugin draws
+        s_availW = ImGui::GetContentRegionAvail().x;
+        ImGui::Button("Demo button");
+    };
     g_actions.saveWindow = [](const std::string&, float x, float y, float w, float h) {
         ++g_saved;
         g_savedRect[0] = x; g_savedRect[1] = y; g_savedRect[2] = w; g_savedRect[3] = h;
@@ -153,16 +158,32 @@ int main() {
     check(pluginWindowOpen("demo") && anyPluginWindowOpen(), "left click on the icon opens the window");
     drawWins(5, ImVec2(10, 10));
     check(g_saved >= 1 && g_savedRect[0] <= 1600 - 100 && g_savedRect[1] <= 900 - 40 && g_savedRect[0] >= 0, "remembered position off screen is clamped");
-    check(g_savedRect[2] == 400 && g_savedRect[3] == 300, "remembered size is kept");
+    check(g_savedRect[2] == 600 && g_savedRect[3] == 400, "remembered size is kept");
+    check(s_roomW > 0.0f && s_roomW == s_availW && s_roomW < 600.0f, "page_w is the free window's room while it draws");
+    check(menuMetrics().pageW != s_roomW, "page_w is restored after the draw call");
     togglePluginWindow("second");
     drawWins(5, ImVec2(10, 10));
     check(pluginWindowOpen("demo") && pluginWindowOpen("second"), "several windows can be open at once");
+    {
+        ImGuiWindow* w2 = ImGui::FindWindowByName("Second###hzwin.second");
+        check(w2 && static_cast<int>(w2->Size.x) == 820 && static_cast<int>(w2->Size.y) == 560, "a new window opens at the preferred size (820x560)");
+        check(w2 && w2->Pos.y >= 56.0f, "a new window opens below the top bar");
+    }
     drawWins(5, ImVec2(g_savedRect[0] + 100, g_savedRect[1] + 100));
     check(hoveredRoot().find("hzwin.") != std::string::npos, "pointer over a free window hits that window");
     io.DisplaySize = ImVec2(640, 480); // Reset to a smaller display: windows are clamped again
     g_saved = 0;
     drawWins(5, ImVec2(10, 10));
     check(g_saved >= 1 && g_savedRect[0] <= 640 - 100 && g_savedRect[2] <= 640, "after a Reset the windows are clamped to the screen");
+    {
+        // fitWindow: minimum, clamp to the screen below the top bar
+        const WinRect a = fitWindow(-1, -1, 100, 100, 480, 320, 1600, 900, 0);
+        check(a.w == 480 && a.h == 320 && a.y >= 56.0f, "fitWindow: never below the minimum");
+        const WinRect b = fitWindow(-1, -1, 820, 560, 480, 320, 640, 480, 0);
+        check(b.w == 640 && b.y + b.h <= 480.0f && b.y >= 56.0f && b.h < 480.0f, "fitWindow: 640x480 clamps below the top bar");
+        const WinRect c = fitWindow(5000, -50, 600, 400, 480, 320, 1920, 1080, 0);
+        check(c.x == 1920 - 600 && c.y >= 56.0f, "fitWindow: saved place off screen comes back");
+    }
     togglePluginWindow("demo");
     togglePluginWindow("second");
     drawWins(3, ImVec2(10, 10));
