@@ -15,12 +15,20 @@
     }
   ],
   "defaults": {
-    "legacy-randomizer": false
+    "legacy-randomizer": false,
+    "tmvs": false,
+    "tmvs-capture": false,
+    "tmvs-upscaling": false,
+    "tmvs-packs": false
   },
   "previous_defaults": {
     "scripts": true,
     "tmx-browser": false,
     "tmx-upload": false,
-    "legacy-randomizer": true
+    "legacy-randomizer": true,
+    "tmvs": true,
+    "tmvs-capture": true,
+    "tmvs-upscaling": true,
+    "tmvs-packs": true
   }
 }

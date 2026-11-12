@@ -22,7 +22,7 @@ and `defaults` in `dist/manifest.json`, so TM Horizon can show the same list.
       ]
     }
   ],
-  "defaults": { "legacy-randomizer": false },
+  "defaults": { "legacy-randomizer": false, "tmvs": false, "tmvs-capture": false, "tmvs-upscaling": false, "tmvs-packs": false },
   "previous_defaults": { "scripts": true, "tmx-browser": false, "tmx-upload": false, "legacy-randomizer": true }
 }
 ```
@@ -63,6 +63,7 @@ host.json marks that this ran.
 | Horizon Scripts | off | Clock and Map Info are also hidden until shown |
 | Input Display, WR Hunter, Performance | off | |
 | Legacy Randomizer | off | installed separately |
+| TM Vibrant Shaders modules (tmvs, tmvs-capture, tmvs-upscaling, tmvs-packs) | off | on when TM Horizon switches TMVS on (profile.json) |
 | Node Explorer | not shipped | developer tool (`package.py --dev`) |
 
 Code: `src/common/modules.h` (parser, unit test `testModulesConfig`), `src/host/plugins.cpp` (defaults),
