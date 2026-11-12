@@ -1,88 +1,158 @@
-# Copies the packaged 0.3.1 build (tools\package.py, dist\) into my test folders: the TMLoader product test folder
-# and the three legacy test copies (host.dll, our modules, the example scripts). Backups: *.bak-vor-031, made once.
-# A copy whose game is running is skipped. Never touched: settings, data, logs, the Legacy Loader (dinput8.dll,
-# unchanged in 0.3.1), the legacy-randomizer module, %LOCALAPPDATA%\TMLoader and any real game folder.
+# Horizon Client 0.3.1 (release candidate) into my test folders, everything client-related in one go:
+#   - the three legacy test copies (ESWC, Sunrise, Original): host.dll, modules.json + icons, all our modules,
+#     the example scripts, the Legacy Loader (horizon\loader and dinput8.dll in the game folder if it changed),
+#     and the TM Vibrant Shaders modules from the TMVS 1.6 / 2.0 release candidate (tmvs, tmvs-capture,
+#     tmvs-upscaling; tmvs-packs is Forever only and is moved out);
+#   - the TMLoader test product (tmloader-products\Horizon Host\0.3.1 + description.yaml) with all four TMVS modules.
+# Node Explorer (developer tool, not in the release any more) is moved out of the copies.
+# One backup per copy before anything changes:
+#   <copy>\_horizon-backup\0.3.1-rc-<time>\  (host.dll, modules.json, icons, plugins, scripts, loader, dinput8.dll)
+#   tmloader-products\_before-031rc\<time>\  (Horizon Host\0.3.1 and description.yaml)
+# A copy whose game runs is skipped (TMLoader: any TmForever.exe). Never touched: settings, data, logs, the
+# legacy-randomizer module, the TM Vibrant Shaders product folder, %LOCALAPPDATA%\TMLoader, any real game folder.
 #   powershell -ExecutionPolicy Bypass -File tools\deploy-test.ps1 [-DryRun]
-param([switch]$DryRun)
+param(
+    [switch]$DryRun,
+    [string]$Package = 'C:\Users\osaro\Downloads\TM-Horizon-Test\release-client-0.3.1-rc',
+    [string]$Tmvs = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmvs-1.6-2.0-rc',
+    [string]$Products = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmloader-products'
+)
 $ErrorActionPreference = 'Stop'
-$W = Split-Path -Parent $PSScriptRoot
 $version = '0.3.1'
-$tag = 'bak-vor-031'
-$zips = Join-Path $W 'dist\release'
-$out = @()
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$keep = @('legacy-randomizer')                  # other people's modules: never replaced, never removed
+$gone = @('node-explorer')                      # not in the release: moved into the backup
+$tmvsLegacy = @('tmvs', 'tmvs-capture', 'tmvs-upscaling')
+$tmvsAll = $tmvsLegacy + @('tmvs-packs')
+$out = New-Object System.Collections.Generic.List[string]
 
-function Do-Copy($from, $to, [switch]$Recurse) {
-    if ($DryRun) { $script:out += "  would copy $from -> $to"; return }
-    if ($Recurse) { Copy-Item $from $to -Recurse -Force } else { Copy-Item $from $to -Force }
+function Say($s) { if ($DryRun) { Write-Host "[dry run] $s" } else { Write-Host $s } }
+function Copy-To($from, $to) {
+    Say "  copy $from -> $to"
+    if ($DryRun) { return }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+    Copy-Item -LiteralPath $from -Destination $to -Recurse -Force
 }
-function Do-Remove($path) {
-    if ($DryRun) { $script:out += "  would remove $path"; return }
-    Remove-Item $path -Recurse -Force
+function Remove-Path($p) {
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    Say "  remove $p"
+    if (-not $DryRun) { Remove-Item -LiteralPath $p -Recurse -Force }
 }
 function Running-In($dir) {
-    Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) }
+    @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
 }
+function Hash($p) { if (Test-Path -LiteralPath $p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash } else { '' } }
 
-foreach ($z in 'ESWC', 'Sunrise', 'Original', 'TMLoader') {
-    if (-not (Test-Path "$zips\Horizon-Client-$version-$z.zip")) { throw "missing $zips\Horizon-Client-$version-$z.zip: run build.cmd package first" }
+# --- the sources must be complete
+$zips = Join-Path $Package 'release'
+foreach ($z in 'ESWC', 'Sunrise', 'Original') {
+    if (-not (Test-Path "$zips\Horizon-Client-$version-$z.zip")) { throw "missing $zips\Horizon-Client-$version-$z.zip" }
 }
+$prodSrc = Join-Path $Package "tmloader\Horizon Host\$version"
+if (-not (Test-Path "$prodSrc\HorizonHost.dll")) { throw "missing $prodSrc\HorizonHost.dll" }
+if (-not (Test-Path "$prodSrc\modules.json")) { throw "missing $prodSrc\modules.json (an older package?)" }
+foreach ($m in $tmvsAll) { if (-not (Test-Path "$Tmvs\horizon\$m\$m.dll")) { throw "missing $Tmvs\horizon\$m\$m.dll" } }
 
-# TMLoader product test folder: the new version folder next to the old ones, description.yaml updated
-$prod = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmloader-products\Horizon Host'
-$src = Join-Path $W "dist\tmloader\Horizon Host\$version"
-if (Test-Path $prod) {
-    $dst = Join-Path $prod $version
-    if (Test-Path $dst) {
-        if (-not (Test-Path "$dst.$tag")) { Do-Copy $dst "$dst.$tag" -Recurse }
-        Do-Remove $dst
-    }
-    Do-Copy $src $dst -Recurse
-    $desc = Join-Path $prod 'description.yaml'
-    if ((Test-Path $desc) -and -not (Test-Path "$desc.$tag")) { Do-Copy $desc "$desc.$tag" }
-    Do-Copy (Join-Path $W 'dist\tmloader\Horizon Host\description.yaml') $desc
-    $out += "tmloader-products: Horizon Host\$version + description.yaml"
-} else {
-    $out += "tmloader-products: $prod not found, skipped"
-}
-
-# legacy test copies
+# --- the three legacy test copies
 $copies = @(
     @{ dir = 'C:\Users\osaro\Games\TMN-ESWC-horizon-next'; zip = 'ESWC' },
     @{ dir = 'C:\Users\osaro\Games\TMSunrise-horizon-next'; zip = 'Sunrise' },
     @{ dir = 'C:\Users\osaro\Games\TMO-horizon-test'; zip = 'Original' }
 )
-$tmp = Join-Path $env:TEMP 'horizon-deploy-031'
+$tmp = Join-Path $env:TEMP "horizon-deploy-031rc-$stamp"
 foreach ($c in $copies) {
-    $hz = Join-Path $c.dir 'horizon'
-    if (-not (Test-Path "$hz\host.dll")) { $out += "$($c.dir): no horizon\host.dll, skipped"; continue }
-    $running = Running-In $c.dir
-    if ($running) { $out += "$($c.dir): SKIPPED, game running ($($running.Name -join ', '))"; continue }
+    $dir = $c.dir
+    $hz = Join-Path $dir 'horizon'
+    Write-Host "== $dir"
+    if (-not (Test-Path "$hz\host.dll")) { $out.Add("$dir : no horizon\host.dll, skipped"); continue }
+    $running = Running-In $dir
+    if ($running.Count) { $out.Add("$dir : SKIPPED, game running ($($running.Name -join ', '))"); continue }
+
     $unz = Join-Path $tmp $c.zip
-    if (Test-Path $unz) { Remove-Item $unz -Recurse -Force }
     Expand-Archive "$zips\Horizon-Client-$version-$($c.zip).zip" $unz
     $st = "$unz\horizon"
-    if (-not (Test-Path "$hz\host.dll.$tag")) { Do-Copy "$hz\host.dll" "$hz\host.dll.$tag" }
-    Do-Copy "$st\host.dll" "$hz\host.dll"
-    $pb = "$hz\plugins.$tag"
-    if (-not (Test-Path $pb) -and -not $DryRun) { New-Item -ItemType Directory $pb | Out-Null }
-    $ids = @()
+
+    # one backup of everything this run replaces or removes
+    $bk = Join-Path $dir "_horizon-backup\$version-rc-$stamp"
+    Say "  backup -> $bk"
+    if (-not $DryRun) {
+        New-Item -ItemType Directory -Force -Path "$bk\horizon" | Out-Null
+        foreach ($n in 'host.dll', 'modules.json', 'icons', 'plugins', 'scripts', 'loader') {
+            if (Test-Path -LiteralPath "$hz\$n") { Copy-Item -LiteralPath "$hz\$n" -Destination "$bk\horizon\$n" -Recurse -Force }
+        }
+        if (Test-Path -LiteralPath "$dir\dinput8.dll") { Copy-Item -LiteralPath "$dir\dinput8.dll" -Destination "$bk\dinput8.dll" -Force }
+    }
+
+    # host, modules.json, icons, loader
+    Copy-To "$st\host.dll" "$hz\host.dll"
+    Copy-To "$st\modules.json" "$hz\modules.json"
+    Remove-Path "$hz\icons"
+    Copy-To "$st\icons" "$hz\icons"
+    Remove-Path "$hz\loader"
+    Copy-To "$st\loader" "$hz\loader"
+    $loaderNote = 'loader unchanged'
+    if ((Test-Path "$dir\dinput8.dll") -and (Hash "$st\loader\dinput8.dll") -ne (Hash "$dir\dinput8.dll")) {
+        Copy-To "$st\loader\dinput8.dll" "$dir\dinput8.dll"
+        $loaderNote = 'dinput8.dll updated'
+    }
+
+    # our modules (whole folders: no stale files), then the TMVS modules
+    $ids = New-Object System.Collections.Generic.List[string]
     foreach ($p in Get-ChildItem "$st\plugins" -Directory) {
-        if ($p.Name -eq 'legacy-randomizer') { continue } # never ours to replace
-        $dst = "$hz\plugins\$($p.Name)"
-        if ((Test-Path $dst) -and -not (Test-Path "$pb\$($p.Name)")) { Do-Copy $dst "$pb\$($p.Name)" -Recurse }
-        if (Test-Path $dst) { Do-Remove $dst }
-        Do-Copy $p.FullName $dst -Recurse
-        $ids += $p.Name
+        if ($keep -contains $p.Name) { continue }
+        Remove-Path "$hz\plugins\$($p.Name)"
+        Copy-To $p.FullName "$hz\plugins\$($p.Name)"
+        $ids.Add($p.Name)
     }
-    if ((Test-Path "$hz\scripts") -and -not (Test-Path "$hz\scripts.$tag")) { Do-Copy "$hz\scripts" "$hz\scripts.$tag" -Recurse }
-    if (-not (Test-Path "$hz\scripts") -and -not $DryRun) { New-Item -ItemType Directory "$hz\scripts" | Out-Null }
+    foreach ($m in $tmvsLegacy) {
+        Remove-Path "$hz\plugins\$m"
+        Copy-To "$Tmvs\horizon\$m" "$hz\plugins\$m"
+        $ids.Add($m)
+    }
+    foreach ($m in $gone + @('tmvs-packs')) { Remove-Path "$hz\plugins\$m" }
+
+    # example scripts (only the folders the package has; the player's own scripts stay)
     foreach ($s in Get-ChildItem "$st\scripts" -Directory) {
-        $dst = "$hz\scripts\$($s.Name)"
-        if (Test-Path $dst) { Do-Remove $dst }
-        Do-Copy $s.FullName $dst -Recurse
+        Remove-Path "$hz\scripts\$($s.Name)"
+        Copy-To $s.FullName "$hz\scripts\$($s.Name)"
     }
-    $sha = if ($DryRun) { '(dry run)' } else { (Get-FileHash "$hz\host.dll" -Algorithm SHA256).Hash.Substring(0, 12) }
-    $out += "$($c.dir): host.dll $sha, " + ($ids -join ', ') + ", scripts"
+    $sha = if ($DryRun) { '(dry run)' } else { (Hash "$hz\host.dll").Substring(0, 12) }
+    $out.Add("$dir : host.dll $sha, $($ids -join ', '), scripts, modules.json, $loaderNote; backup $bk")
 }
 if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+
+# --- the TMLoader test product
+Write-Host "== $Products"
+$prod = Join-Path $Products 'Horizon Host'
+$tmf = @(Get-Process -Name TmForever -ErrorAction SilentlyContinue)
+if (-not (Test-Path $prod)) {
+    $out.Add("tmloader-products: $prod not found, skipped")
+} elseif ($tmf.Count) {
+    $out.Add("tmloader-products: SKIPPED, TmForever.exe runs (pid $($tmf.Id -join ', '))")
+} else {
+    $dst = Join-Path $prod $version
+    $bk = Join-Path $Products "_before-031rc\$stamp"
+    $kept = @()
+    Say "  backup -> $bk"
+    if (-not $DryRun) {
+        New-Item -ItemType Directory -Force -Path "$bk\Horizon Host" | Out-Null
+        if (Test-Path "$prod\description.yaml") { Copy-Item "$prod\description.yaml" "$bk\Horizon Host\description.yaml" -Force }
+    }
+    if (Test-Path $dst) {
+        Say "  move $dst -> $bk\Horizon Host\$version"
+        if (-not $DryRun) { Move-Item -LiteralPath $dst -Destination "$bk\Horizon Host\$version" }
+    }
+    Copy-To $prodSrc $dst
+    foreach ($m in $tmvsAll) { Copy-To "$Tmvs\horizon\$m" "$dst\plugins\$m" }
+    foreach ($k in $keep) { # someone else's module that was there stays
+        $old = if ($DryRun) { "$dst\plugins\$k" } else { "$bk\Horizon Host\$version\plugins\$k" }
+        if (Test-Path -LiteralPath $old) { Copy-To $old "$dst\plugins\$k"; $kept += $k }
+    }
+    Copy-To (Join-Path $Package 'tmloader\Horizon Host\description.yaml') "$prod\description.yaml"
+    $sha = if ($DryRun) { '(dry run)' } else { (Hash "$dst\HorizonHost.dll").Substring(0, 12) }
+    $out.Add("tmloader-products: Horizon Host\$version (HorizonHost.dll $sha) + TMVS modules $($tmvsAll -join ', ')" +
+        $(if ($kept.Count) { " + kept $($kept -join ', ')" } else { '' }) + "; backup $bk")
+}
+
+Write-Host ''
 $out
