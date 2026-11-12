@@ -6,6 +6,8 @@
 //   host_test host <dir> [safe] [expect-plugin|expect-no-plugin] [expect-abi12]
 //                                 HorizonHostInit in test mode, then a D3D9 device on a hidden window, frames
 //                                 with the menu open (HORIZON_TEST_MENU=1), a PNG of the frame into screens\.
+//                                 widgets / widgets-anchored: the sample's Clock widget through a play session
+//                                 (testWidgets below).
 // Exit code 0 = all checks passed. The host log of the run is checked for the expected lines.
 #define DIRECTINPUT_VERSION 0x0800
 #include <windows.h>
@@ -14,9 +16,12 @@
 #include <dinput.h>
 #include <wincodec.h>
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
+
+#include "horizon_plugin.h" // HORIZON_EVENT_* for the widgets run
 
 static int g_failed = 0;
 static void check(bool ok, const char* what) {
@@ -124,6 +129,127 @@ static size_t countOf(const std::string& log, const char* text) {
     return n;
 }
 
+// widgets / widgets-anchored: the sample's Clock widget (a HUD panel kept on screen) through what a play session
+// does to it: menu closed, map load, race start, checkpoint, finish, race end, the next map, the game menu, the
+// Horizon menu, Resets at the same and at a smaller size and back. It must stay on screen the whole time, at the
+// place saved in host.json (run_tests.cmd seeds it), and come back there after the smaller window.
+//   widgets:          a pixel entry from 0.3.0 at 1300,40
+//   widgets-anchored: the shared setup (HORIZON_SETUP_DIR) with an anchored entry: right edge, 10 % of the
+//                     width from it, 40/900 of the height from the top
+static bool g_widgets = false, g_anchored = false;
+
+static void testWidgets(HMODULE host, IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS& pp, HWND hwnd, const std::wstring& dir) {
+    using PanelFn = int(__cdecl*)(const char*, const char*, float*);
+    using EventFn = int(__cdecl*)(int, const char*);
+    using FaultFn = int(__cdecl*)(int);
+    auto panel = reinterpret_cast<PanelFn>(GetProcAddress(host, "HorizonHost_TestPanel"));
+    auto event = reinterpret_cast<EventFn>(GetProcAddress(host, "HorizonHost_TestEvent"));
+    auto overlay = reinterpret_cast<FaultFn>(GetProcAddress(host, "HorizonHost_TestOverlayFault"));
+    check(panel && event && overlay, "widgets: test exports (TestPanel, TestEvent, TestOverlayFault)");
+    if (!panel || !event || !overlay) return;
+    auto frames = [&](int n) {
+        for (int i = 0; i < n; i++) {
+            dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_XRGB(24, 30, 52), 1.0f, 0);
+            dev->BeginScene();
+            dev->EndScene();
+            dev->Present(nullptr, nullptr, nullptr, nullptr);
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        }
+    };
+    auto resize = [&](int w, int h) {
+        SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        pp.BackBufferWidth = static_cast<UINT>(w);
+        pp.BackBufferHeight = static_cast<UINT>(h);
+        const HRESULT r = dev->Reset(&pp);
+        char what[96];
+        snprintf(what, sizeof(what), "widgets: Reset to %dx%d", w, h);
+        check(SUCCEEDED(r), what);
+        frames(6);
+    };
+    float r[6] = {};
+    // where it belongs at this size
+    auto expected = [&](float screenW, float screenH, float w, float& ex, float& ey) {
+        if (g_anchored) {
+            ex = screenW - 0.1f * screenW - w;
+            ey = std::floor(40.0f / 900.0f * screenH + 0.5f);
+        } else {
+            ex = 1300.0f;
+            ey = 40.0f;
+        }
+        ex = std::floor(ex + 0.5f);
+    };
+    auto onScreenAtPlace = [&](const char* when) {
+        const int shown = panel("sample", "clock", r);
+        float ex, ey;
+        expected(static_cast<float>(g_w), static_cast<float>(g_h), r[2], ex, ey);
+        char what[160];
+        snprintf(what, sizeof(what), "widgets: %s: Clock on screen at its place (%.0f,%.0f, wanted %.0f,%.0f)", when, r[0], r[1], ex, ey);
+        check(shown == 1 && std::fabs(r[0] - ex) <= 1.5f && std::fabs(r[1] - ey) <= 1.5f, what);
+    };
+
+    overlay(3); // the Horizon menu closed: widgets alone on screen
+    frames(6);
+    check((overlay(0) & 1) == 0, "widgets: menu closed");
+    onScreenAtPlace("menu closed");
+    const struct {
+        int type;
+        const char* map;
+        const char* what;
+    } steps[] = {
+        {HORIZON_EVENT_MAP_LOADED, "A01-Race", "map loaded"},
+        {HORIZON_EVENT_RACE_START, nullptr, "race start"},
+        {HORIZON_EVENT_CHECKPOINT, nullptr, "checkpoint"},
+        {HORIZON_EVENT_RESPAWN, nullptr, "respawn"},
+        {HORIZON_EVENT_FINISH, nullptr, "finish"},
+        {HORIZON_EVENT_RACE_END, nullptr, "race end"},
+        {HORIZON_EVENT_MAP_LOADED, "A02-Race", "next map loaded"},
+        {HORIZON_EVENT_RACE_START, nullptr, "next race start"},
+        {HORIZON_EVENT_FINISH, nullptr, "next finish"},
+        {HORIZON_EVENT_MENU_ENTERED, nullptr, "game menu"},
+        {HORIZON_EVENT_MAP_LOADED, "A03-Race", "third map loaded"},
+    };
+    for (const auto& s : steps) {
+        event(s.type, s.map);
+        frames(4);
+        onScreenAtPlace(s.what);
+    }
+    overlay(2);
+    frames(4);
+    onScreenAtPlace("Horizon menu open");
+    overlay(3);
+    frames(4);
+    onScreenAtPlace("Horizon menu closed again");
+    resize(g_w, g_h); // a Reset at the same size (the game does one per map load on some setups)
+    onScreenAtPlace("Reset, same size");
+
+    // a smaller window: kept on screen, at the right edge, without losing the saved place
+    const int bigW = g_w, bigH = g_h;
+    g_w = 1024;
+    g_h = 768;
+    resize(g_w, g_h);
+    const int shown = panel("sample", "clock", r);
+    check(shown == 1 && r[0] >= 0.0f && r[0] + r[2] <= 1024.5f && r[1] >= 0.0f && r[1] + r[3] <= 768.5f, "widgets: 1024x768: Clock fully on screen");
+    check(r[0] > 512.0f, "widgets: 1024x768: still on the right side");
+    if (g_anchored) onScreenAtPlace("1024x768, anchored to the right edge");
+    else check(std::fabs(r[4] - 1300.0f) < 0.5f && std::fabs(r[5] - 40.0f) < 0.5f, "widgets: 1024x768: the saved place stays 1300,40");
+    event(HORIZON_EVENT_MAP_LOADED, "A04-Race");
+    frames(4);
+    check(panel("sample", "clock", r) == 1, "widgets: 1024x768: map loaded, Clock still on screen");
+    g_w = bigW;
+    g_h = bigH;
+    resize(g_w, g_h);
+    onScreenAtPlace("back to the first size");
+    std::string l = hostLog(dir);
+    check(!has(l, "crashed"), "widgets: no plugin crashed");
+    if (g_anchored) {
+        check(has(l, "setup: shared ("), "shared setup: the host reads the shared setup");
+        check(has(l, "bridge: off"), "shared setup: the TM Horizon switch stays per game (bridge.enabled in the shared file is ignored)");
+    }
+    overlay(2); // as the other runs: the menu open for what follows
+    frames(4);
+}
+
 static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
     struct Info {
         unsigned api, size, flags;
@@ -219,6 +345,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
             check(!has(l, "[abi12] started"), "startup_only: not loaded while running");
         }
     }
+    if (g_widgets) testWidgets(host, dev, pp, hwnd, dir);
     // Reset as the game does on a resolution change: the overlay must survive it
     const HRESULT rr = dev->Reset(&pp);
     check(SUCCEEDED(rr), "Reset through the hook");
@@ -239,7 +366,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         auto version = reinterpret_cast<U32Fn>(GetProcAddress(host, "HorizonHost_Version"));
         check(uiState && setCapture && version, "handshake exports present");
         if (uiState && setCapture && version) {
-            check(version() == 0x000300u, "HorizonHost_Version = 0.3.0");
+            check(version() == 0x000301u, "HorizonHost_Version = 0.3.1");
             check((uiState() & 1u) != 0, "UI state: menu open");
             if (expectPlugin == 1) check((uiState() & 4u) != 0, "UI state: the sample's Clock window is on screen");
             setCapture(1);
@@ -341,6 +468,8 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"expect-abi12") abi12 = true;
         else if (a == L"runtime-load") g_runtimeLoad = true;
         else if (a == L"crash") g_crash = true;
+        else if (a == L"widgets") g_widgets = true;
+        else if (a == L"widgets-anchored") g_widgets = g_anchored = true;
         else if (a == L"layout") SetEnvironmentVariableW(L"HORIZON_TEST_LAYOUT", L"1"); // screens of layout mode
         else if (a.rfind(L"size=", 0) == 0) swscanf_s(a.c_str() + 5, L"%dx%d", &g_w, &g_h);
         else if (a.rfind(L"page=", 0) == 0) SetEnvironmentVariableW(L"HORIZON_TEST_PAGE", a.c_str() + 5);

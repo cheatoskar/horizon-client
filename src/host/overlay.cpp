@@ -348,8 +348,15 @@ ui::Model buildModel() {
     m.layoutAllowed = layoutAllowed(&m.layoutWhy);
     m.widgetOpacity = std::max(20, std::min(100, hostSettingInt("widgets.opacity", 65)));
     m.iconStyle = hostSettingInt("ui.icon_alt", 0) == 1 ? 1 : 0;
-    if (g_menu)
+    if (g_menu) {
         for (const ToastHistoryEntry& h : toastsHistory()) m.recentToasts.push_back(ui::Model::Recent{h.owner, h.title, h.text, h.kind, h.missed});
+        // the shared setup (the folder listing only while the menu is open)
+        const SetupStatus st = setupStatus();
+        m.setupAvailable = st.available;
+        m.setupShared = st.wanted;
+        m.setupRestart = st.restartNeeded;
+        m.setupFiles = st.exports;
+    }
     m.notes = s.notes;
     m.notes.push_back(std::string("Game: ") + game().status());
     if (s.tmvsLoaded) m.notes.push_back("TM Vibrant Shaders keeps its own Direct3D hook and menu.");
@@ -403,6 +410,41 @@ ui::Actions makeActions() {
         g_barEnabled = on;
         hostSetSettingInt("bar", on ? 1 : 0);
         HLOG("menu: top-edge bar %s", on ? "on" : "off");
+    };
+    // shared setup: a toast says what happened
+    auto toast = [](unsigned kind, const char* title, const std::string& text) {
+        HorizonToast t = {};
+        t.size = sizeof(t);
+        t.kind = kind;
+        t.title = title;
+        t.text = text.c_str();
+        toastsPush("Horizon", t);
+    };
+    a.setSharedSetup = [toast](bool on) {
+        if (setupSetShared(on)) toast(HORIZON_TOAST_INFO, on ? "Shared setup on" : "Shared setup off", "Restart to apply.");
+    };
+    a.copySetupFromGame = [toast]() {
+        if (setupCopyFromGame()) toast(HORIZON_TOAST_OK, "Setup copied", setupStatus().active ? "Restart to apply." : "");
+    };
+    a.resetSharedSetup = [toast]() {
+        if (setupReset()) toast(HORIZON_TOAST_OK, "Shared setup reset", setupStatus().active ? "Restart to apply." : "");
+    };
+    a.exportSetup = [toast]() {
+        std::string file, err;
+        if (setupExport(file, err)) toast(HORIZON_TOAST_OK, "Setup exported", file);
+        else toast(HORIZON_TOAST_ERROR, "Export failed", err);
+    };
+    a.importSetup = [toast](const std::string& file) {
+        std::string err;
+        if (setupImport(file, err)) toast(HORIZON_TOAST_OK, "Setup imported", "Restart to apply.");
+        else toast(HORIZON_TOAST_ERROR, "Import failed", err);
+    };
+    a.openSetupFolder = []() {
+        const SetupStatus st = setupStatus();
+        if (st.folder.empty()) return;
+        const std::wstring folder = st.folder + L"setups\\";
+        ensureDir(folder);
+        ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     };
     return a;
 }
@@ -833,13 +875,14 @@ void overlayAfterFault(bool giveUp) {
 } // namespace horizon
 
 // Test program only (tests\host_test.cpp). action 1: the next frame throws in host code; 2: open the menu;
-// 0: state. Returns bits 1 = menu open, 2 = layout mode, 4 = game input held back, 8 = Horizon UI off.
-// -1 in a game.
+// 3: close the menu; 0: state. Returns bits 1 = menu open, 2 = layout mode, 4 = game input held back,
+// 8 = Horizon UI off. -1 in a game.
 extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestOverlayFault(int action) {
     using namespace horizon;
     if (state().loader != LoaderKind::Test) return -1;
     if (action == 1) g_testFault = true;
     if (action == 2) setMenuOpen(true, "test program");
+    if (action == 3) setMenuOpen(false, "test program");
     return (g_menu ? 1 : 0) | (g_layout ? 2 : 0) | (dinputBlocked() ? 4 : 0) | (g_uiOff ? 8 : 0);
 }
 

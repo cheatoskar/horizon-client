@@ -99,3 +99,36 @@ void eventsFrame() {
 }
 
 } // namespace horizon
+
+// Test program only (tests\host_test.cpp): fires a game event as the adapters do (HORIZON_EVENT_*). mapName is
+// used for MAP_LOADED. Returns 0, or -1 in a game.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestEvent(int type, const char* mapName) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test) return -1;
+    HorizonEvent e = {};
+    e.type = static_cast<uint32_t>(type);
+    if (type == HORIZON_EVENT_MAP_LOADED) {
+        HorizonMapInfo mi = {};
+        mi.size = sizeof(mi);
+        mi.name = mapName ? mapName : "Test map";
+        mi.uid = "";
+        mi.path = "";
+        mi.author = "Nadeo";
+        mi.environment = "Speed";
+        mi.author_time = 23140;
+        mi.gold_time = 25000;
+        mi.silver_time = 30000;
+        mi.bronze_time = 38000;
+        mi.author_score = -1;
+        setCurrentMap(&mi);
+    } else if (type == HORIZON_EVENT_MENU_ENTERED) {
+        setCurrentMap(nullptr);
+    }
+    if (type == HORIZON_EVENT_FINISH) {
+        e.time_ms = 24010;
+        e.is_local_player = 1;
+        e.respawns = 0;
+    }
+    dispatchEvent(e);
+    return 0;
+}

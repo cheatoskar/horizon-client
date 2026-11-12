@@ -508,7 +508,11 @@ void loadOne(Plugin* p) {
                     entry->version.c_str(), p->version.c_str());
         }
     }
-    p->settings.load(state().dataRoot + L"settings\\" + wide(p->id) + L".json");
+    bool sharedSettings = false;
+    const std::wstring settingsPath = pluginSettingsPath(*p, &sharedSettings);
+    p->settings.setMerging(sharedSettings); // the shared setup: other games may write the same file
+    if (!p->settings.load(settingsPath)) logLine(HORIZON_LOG_WARN, p->id.c_str(), "settings file is not a JSON object, using defaults");
+    if (sharedSettings) logLine(HORIZON_LOG_INFO, p->id.c_str(), "settings from the shared setup");
     p->dataFolderW = state().dataRoot + L"data\\" + wide(p->id) + L"\\";
     ensureDir(p->dataFolderW);
     p->dataFolder = utf8(p->dataFolderW);

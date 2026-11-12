@@ -115,7 +115,7 @@ Times are milliseconds, `-1` = unknown. Strings may be `""` when the host cannot
 
 ## Settings and data folder
 
-- `get_int/set_int/get_float/set_float/get_string/set_string(plugin, key, ...)`: stored by the host in `horizon\settings\<id>.json`, written on change. Defaults are the `fallback` argument, so there is nothing to register.
+- `get_int/set_int/get_float/set_float/get_string/set_string(plugin, key, ...)`: stored by the host in `horizon\settings\<id>.json` (with the shared setup on and a module made for every game: `%APPDATA%\Horizon Client\shared\<id>.json`, [shared-setup.md](shared-setup.md)), written on change. Read at start; a module may cache what it read. Defaults are the `fallback` argument, so there is nothing to register.
 - `data_folder(plugin)` / `data_folder_w(plugin)`: `horizon\data\<id>\` with a trailing backslash, already created. Use it for caches and history, never the game folder.
 - `log(plugin, HORIZON_LOG_INFO, "fmt", ...)`: one line in the host log, prefixed with the id. Plain printf formats, UTF-8.
 
@@ -218,7 +218,7 @@ host->register_panel(host->plugin, &d);
 - With the menu closed, kept windows have no title bar and can't be moved; they take mouse clicks unless they are click-through.
 - `HORIZON_PANEL_HUD`: starts popped out and kept open (a timer, a split display). The player can still bring it into the menu.
 - `HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN` (host 0.3.0, no ABI change; an older host ignores the bit and shows the widget at once): a widget that is off until the player shows it, from the list of hidden widgets in layout mode ("+ Title") or "Show" on its tab. Its tab then has "Hide". Reset in layout mode leaves hidden ones hidden. Horizon Scripts registers every script widget (`UI::AddWidget`) this way.
-- The host saves the layout per plugin id + key in `horizon\settings\host.json` (`panel.<plugin>.<key>`).
+- The host saves the layout per plugin id + key in `horizon\settings\host.json` (`panel.<plugin>.<key>`), or with the shared setup on in `%APPDATA%\Horizon Client\shared\host.json` ([shared-setup.md](shared-setup.md)).
 - Panels of a plugin that is off, failed or gated online are not drawn. `panel_visible(plugin, key)` says whether the body was drawn in the last frame (skip work otherwise).
 - The sample plugin shows both kinds: "Events" (a tab) and "Clock" (a HUD window).
 
@@ -230,7 +230,7 @@ Fonts: `style()->font_*` keep the same `ImFont*` for the whole start. When the p
 - Moving a widget (with the menu open or in layout mode) snaps it to the screen edges, the centre lines and the edges of other widgets.
 - Layout mode ("Edit layout", Ctrl+Insert by default, also a button in the top bar and on General): every widget gets a frame. Drag to move, the corner to resize, the two buttons top right minimise it to a small icon at the nearest screen edge (click the icon to bring it back) or hide it (the bar at the top lists hidden widgets to show again). The same key, Esc or "Done" ends it. While it is on, the host draws its own pointer and keeps the mouse (ESWC and Sunrise: also DirectInput) from the game, as with the menu. On TMNF/TMUF (Competition Patch rules) it only starts in the game's menus, never during a race, and ends by itself when a race starts.
 - Resizing a widget whose window fits its content (w/h 0) scales it: the host sets `style()->scale` and the window font scale for that panel's draw call, so draw with `style()->scale` (read inside `draw`) and the widget grows and shrinks as a whole. A widget with a fixed size (w/h > 0) gets the new size.
-- Saved in `settings\host.json` as before (`panel.<plugin>.<key>`, two fields appended: minimised, scale). Older hosts ignore the extra fields.
+- Saved in `settings\host.json` as before (`panel.<plugin>.<key>`, two fields appended: minimised, scale). Older hosts ignore the extra fields. Since 0.3.1 four more: the anchor (nearest edge per axis and the gap as a share of the window), so a widget keeps its edge at any window size; only the player's moves change it, never a smaller window ([shared-setup.md](shared-setup.md)).
 
 ## Free plugin windows (host, no ABI change)
 

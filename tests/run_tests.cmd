@@ -76,6 +76,35 @@ for %%M in (menu overlay) do (
 )
 build\test\host_test.exe host "%CD%\%T%" expect-plugin crash page=plugin:crashmenu || set FAIL=1
 
+echo === widgets stay on screen and in place: map loads, race, finish, next map, menus, Resets, a smaller window
+set "T=build\test\run-widgets"
+if exist %T% rmdir /s /q %T%
+mkdir %T%\horizon\plugins\sample
+copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+mkdir %T%\horizon\settings
+rem the Clock widget where a 0.3.0 host saved it (pixels, no anchor)
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0, "panel.sample.clock": "1,1,0,0,1,100,1300,40,0,0,0,1.00"}
+copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
+build\test\host_test.exe host "%CD%\%T%" expect-plugin widgets || set FAIL=1
+
+echo === shared setup: the widget from the shared folder (anchored to the right edge), TM Horizon switch per game
+set "T=build\test\run-shared"
+if exist %T% rmdir /s /q %T%
+mkdir %T%\horizon\plugins\sample
+mkdir %T%\appdata\shared
+copy /y dist\legacy\horizon\host.dll %T%\horizon\ >nul
+mkdir %T%\horizon\settings
+> %T%\horizon\settings\host.json echo {"bridge.enabled": 0, "setup.shared": 1, "panel.sample.clock": "1,1,0,0,1,100,20,600,0,0,0,1.00"}
+> %T%\appdata\shared\host.json echo {"bridge.enabled": 1, "widgets.opacity": 40, "panel.sample.clock": "1,1,0,0,1,100,1300,40,0,0,0,1.00,2,0,0.10000,0.04444"}
+copy /y build\plugins\sample\sample.dll %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\plugin.json %T%\horizon\plugins\sample\ >nul
+copy /y build\plugins\sample\icon.png %T%\horizon\plugins\sample\ >nul
+set "HORIZON_SETUP_DIR=%CD%\%T%\appdata"
+build\test\host_test.exe host "%CD%\%T%" expect-plugin widgets-anchored || set FAIL=1
+set "HORIZON_SETUP_DIR="
+
 echo === safe mode: no plugins
 set "T=build\test\run-safe"
 if exist %T% rmdir /s /q %T%

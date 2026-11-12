@@ -1,8 +1,9 @@
 // Clock: the real time and how long the game has been running, as a widget.
 // Runs unchanged on ESWC, Sunrise, Original, TMNF and TMUF: it only uses UI, Time and settings.
 // The widget is off until you show it (Ctrl+Insert, "+ Clock" in the bar at the top, or "Show" on its tab on the
-// Horizon Scripts page). Drag it in layout mode; Horizon keeps the place. It fades out "Hide after" seconds after
-// a map loads and comes back while the menu is open and after the "Show script widgets" hotkey (OnPeek()).
+// Horizon Scripts page). Drag it in layout mode; Horizon keeps the place. It stays on screen in menus, races and
+// across map loads. With "Hide after" above 0 it fades out that many seconds after a map loads and comes back
+// while the menu is open and after the "Show script widgets" hotkey (OnPeek()).
 
 [Setting name="Format" options="24 hours|12 hours"]
 int hours = 0;
@@ -13,8 +14,8 @@ bool seconds = true;
 [Setting name="Session time"]
 bool showSession = true;
 
-[Setting name="Hide after" description="Seconds after a map start. 0 = always." min=0 max=120]
-int hideAfter = 10;
+[Setting name="Hide after" description="Seconds after a map start. 0 = always shown." min=0 max=120]
+int hideAfter = 0;
 
 [Setting name="Large text"]
 bool large = true;

@@ -212,17 +212,56 @@ void runGame(const char* dll, const std::string& examples, const std::string& ro
     check(widgetCount() == 2 && wc && wm && g_widgetHeight[wc->key] > 10.0f && g_widgetHeight[wm->key] > 10.0f, "online: both still drawn (online-ok)");
     testhost::online = false;
     x.onEvent(&e);
-    e.type = HORIZON_EVENT_MENU_ENTERED;
-    x.onEvent(&e);
-    testhost::menuOpen = false; // the Horizon menu closed: widgets fade
-    for (int i = 0; i < 50; i++) { // the fade runs on real time (Time::Delta): 0.4 s
-        Sleep(12);
-        frame(x, true);
+
+    // A play session with the Horizon menu closed (0.3.0: both faded out 10 s after a map load and Map Info
+    // disappeared in the game's menus). With the default settings both stay on screen the whole time.
+    testhost::menuOpen = false;
+    auto settle = [&](int ms) { // the fade runs on real time (Time::Delta): 0.4 s
+        for (int t = 0; t < ms; t += 12) {
+            Sleep(12);
+            frame(x, false);
+        }
+    };
+    auto bothVisible = [&](const std::string& when) {
+        const testhost::Panel* c = widget("w-clock-clock-");
+        const testhost::Panel* m = widget("w-map-info-map-info-");
+        check(c && m && widgetAlpha(*c) > 200 && widgetAlpha(*m) > 200, "menu closed, " + when + ": clock and map info on screen");
+    };
+    const struct {
+        uint32_t type;
+        const char* map;
+        const char* what;
+    } session[] = {
+        {HORIZON_EVENT_MAP_LOADED, "A01-Race", "map loaded"},     {HORIZON_EVENT_RACE_START, nullptr, "race start"},
+        {HORIZON_EVENT_CHECKPOINT, nullptr, "checkpoint"},        {HORIZON_EVENT_FINISH, nullptr, "finish"},
+        {HORIZON_EVENT_RACE_END, nullptr, "race end"},            {HORIZON_EVENT_MAP_LOADED, "A02-Race", "next map loaded"},
+        {HORIZON_EVENT_RACE_START, nullptr, "next race start"},   {HORIZON_EVENT_MENU_ENTERED, nullptr, "game menu"},
+        {HORIZON_EVENT_MAP_LOADED, "A03-Race", "third map loaded"},
+    };
+    for (const auto& st : session) {
+        HorizonEvent ev = {};
+        ev.size = sizeof(ev);
+        ev.type = st.type;
+        ev.time_ms = st.type == HORIZON_EVENT_FINISH ? 24010 : 5120;
+        ev.game_state = HORIZON_STATE_SOLO_RACE;
+        if (st.map) {
+            mi.name = st.map;
+            ev.map = &mi;
+        }
+        x.onEvent(&ev);
+        settle(500);
+        bothVisible(st.what);
     }
-    wc = widget("w-clock-clock-");
-    wm = widget("w-map-info-map-info-");
-    check(wm && widgetAlpha(*wm) == 0, "menu: map-info fades out (UI::WidgetAlpha, background too)");
-    check(wc && widgetAlpha(*wc) > 200, "menu: clock stays");
+    if (game == HORIZON_GAME_ESWC) { // once: longer than the 10 s 0.3.0 faded them after
+        settle(11000);
+        bothVisible("11 s after the map load");
+    }
+    HorizonEvent menu = {};
+    menu.size = sizeof(menu);
+    menu.type = HORIZON_EVENT_MENU_ENTERED;
+    x.onEvent(&menu);
+    settle(500);
+    bothVisible("game menu (map info: No map)");
     testhost::menuOpen = true;
 
     const std::string& L = testhost::logs();

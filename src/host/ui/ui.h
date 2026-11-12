@@ -160,6 +160,11 @@ struct Model {
     bool forever = false;                      // TMNF/TMUF: say that layout mode is only for the menus
     int widgetOpacity = 65;                    // widget background in % (host.json widgets.opacity)
     int iconStyle = 0;                         // module icons: 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
+    // Shared setup (General): one setup for every game install of this Windows user
+    bool setupAvailable = false;               // false in the test program (no shared folder)
+    bool setupShared = false;                  // the switch (applies after a restart)
+    bool setupRestart = false;                 // switched, copied, reset or imported: restart to apply
+    std::vector<std::string> setupFiles;       // exported setups (setups\*.json), newest first
 };
 
 // One toast on screen (ABI minor 3), see drawToasts.
@@ -194,6 +199,12 @@ struct Actions {
     std::function<void()> toggleLayout;           // "Edit layout" (closes the menu)
     std::function<void(int pct)> setWidgetOpacity; // widget background 20..100 %
     std::function<void(int style)> setIconStyle;  // 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
+    std::function<void(bool on)> setSharedSetup;  // General > Shared setup
+    std::function<void()> copySetupFromGame;      // this game's own setup becomes the shared one
+    std::function<void()> resetSharedSetup;       // the shared setup back to the defaults
+    std::function<void()> exportSetup;            // the setup in use into setups\setup-<time>.json
+    std::function<void(const std::string& file)> importSetup; // a file from setups\ (name only)
+    std::function<void()> openSetupFolder;        // Explorer on ...\Horizon Client\setups
 };
 
 // Where the last menu frame was: the window and the room inside a plugin page's card (for ui_metrics).

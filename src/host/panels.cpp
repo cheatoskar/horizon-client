@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "common/setup.h"
 #include "common/util.h"
 #include "host/plugins.h"
 #include "imgui.h"
@@ -40,9 +41,15 @@ struct HostPanel {
     float x = -1, y = -1, w = 0, h = 0; // pixels; x < 0 = not placed yet
     bool minimized = false;         // shown as a small icon at the nearest screen edge
     float scale = 1.0f;             // widgets that fit their content: resized = scaled (0.5..2.5)
+    // The place as a share of the screen from the nearest edge (common/setup.h), saved with x/y: the widget
+    // keeps its edge at any window size and in every game of the shared setup. x/y are where it is now.
+    setup::Anchor anchor;
     // per session
     bool placeNext = true;          // apply x/y/w/h when the window is drawn next
     int slotFrames = 0;             // > 0: being put into its slot (the size is known after a frame or two)
+    int anchorFrames = 0;           // > 0: placed from its anchor (again once its size is known)
+    float placedW = 0, placedH = 0; // the size it was placed from its anchor with
+    bool userDrag = false;          // the player holds the mouse on it (menu open): moves and sizes are saved
     float lastW = 0, lastH = 0;     // size drawn last frame
     bool shown = false, shownLast = false;
 };
@@ -57,18 +64,41 @@ float uiScale() {
 
 std::string settingKey(const HostPanel& q) { return "panel." + q.plugin->id + "." + q.key; }
 
-void save(const HostPanel& q) {
-    char buf[200];
-    snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%d,%.2f", q.detached ? 1 : 0, q.keepOpen ? 1 : 0, q.locked ? 1 : 0,
-             q.clickThrough ? 1 : 0, q.hideInCapture ? 1 : 0, q.opacity, q.x, q.y, q.w, q.h, q.minimized ? 1 : 0, q.scale);
+// The anchor from where the widget is now (the player or its slot put it there).
+void reanchor(HostPanel& q) {
+    const float w = q.lastW > 0.0f ? q.lastW : q.w, h = q.lastH > 0.0f ? q.lastH : q.h;
+    if (q.x < 0.0f) q.anchor = setup::Anchor{};
+    else if (g_screen.x > 0.0f && g_screen.y > 0.0f && w > 0.0f) q.anchor = setup::anchorOf(q.x, q.y, w, h, g_screen.x, g_screen.y);
+}
+
+void save(HostPanel& q) {
+    // an entry from before 0.3.1 (pixels only) gets its anchor the first time it is saved
+    if (q.x < 0.0f || !q.anchor.valid) reanchor(q);
+    char buf[240];
+    int n = snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%d,%.2f", q.detached ? 1 : 0, q.keepOpen ? 1 : 0, q.locked ? 1 : 0,
+                     q.clickThrough ? 1 : 0, q.hideInCapture ? 1 : 0, q.opacity, q.x, q.y, q.w, q.h, q.minimized ? 1 : 0, q.scale);
+    if (q.anchor.valid && n > 0 && n < static_cast<int>(sizeof(buf)))
+        snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n), ",%d,%d,%.5f,%.5f", static_cast<int>(q.anchor.ax * 2.0f + 0.5f),
+                 static_cast<int>(q.anchor.ay * 2.0f + 0.5f), q.anchor.ox, q.anchor.oy);
     hostSetSetting(settingKey(q), buf);
 }
 
 bool load(HostPanel& q) {
     const std::string v = hostSetting(settingKey(q), "");
-    int d = 0, k = 0, l = 0, c = 0, hc = 1, o = 100, mn = 0;
-    float x = -1, y = -1, w = 0, h = 0, sc = 1.0f;
-    if (v.empty() || sscanf_s(v.c_str(), "%d,%d,%d,%d,%d,%d,%f,%f,%f,%f,%d,%f", &d, &k, &l, &c, &hc, &o, &x, &y, &w, &h, &mn, &sc) < 6) return false;
+    int d = 0, k = 0, l = 0, c = 0, hc = 1, o = 100, mn = 0, ax = -1, ay = -1;
+    float x = -1, y = -1, w = 0, h = 0, sc = 1.0f, ox = 0, oy = 0;
+    const int got = v.empty() ? 0
+                              : sscanf_s(v.c_str(), "%d,%d,%d,%d,%d,%d,%f,%f,%f,%f,%d,%f,%d,%d,%f,%f", &d, &k, &l, &c, &hc, &o, &x, &y, &w, &h,
+                                         &mn, &sc, &ax, &ay, &ox, &oy);
+    if (got < 6) return false;
+    q.anchor = setup::Anchor{};
+    if (got >= 16 && ax >= 0 && ax <= 2 && ay >= 0 && ay <= 2 && ox > -1.0f && ox < 1.0f && oy > -1.0f && oy < 1.0f && x >= 0.0f) {
+        q.anchor.ax = static_cast<float>(ax) * 0.5f;
+        q.anchor.ay = static_cast<float>(ay) * 0.5f;
+        q.anchor.ox = ox;
+        q.anchor.oy = oy;
+        q.anchor.valid = true;
+    }
     q.detached = d != 0;
     q.keepOpen = k != 0;
     q.locked = l != 0;
@@ -526,6 +556,8 @@ std::string panelTabLabel(const ui::PanelView& v) { return iconUtf8(v.icon) + v.
 bool panelsDrawWindows(const PanelsFrame& f) {
     const bool capture = capturing();
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    // no size (minimised, Alt+Tab): nothing to place; the widgets keep their places for when it is back
+    if (screen.x < 1.0f || screen.y < 1.0f) return false;
     if (screen.x != g_screen.x || screen.y != g_screen.y) {
         // first frame or a new display size (Reset): place every window again, clamped to the screen
         g_screen = screen;
@@ -565,6 +597,12 @@ bool panelsDrawWindows(const PanelsFrame& f) {
             fit = ui::fitWindow(q.x, q.y, w0, h0, q.plugin->manifest.uiMinW * s, q.plugin->manifest.uiMinH * s, screen.x, screen.y, 0);
             ImGui::SetNextWindowSizeConstraints(ImVec2(fit.minW, fit.minH), ImVec2(FLT_MAX, FLT_MAX));
         }
+        // a widget that fits its content and sits at the right or bottom edge (or the centre): when its content
+        // grows or shrinks, the anchored edge stays where the player put it
+        if (widget && autoSize && q.anchor.valid && (q.anchor.ax != 0.0f || q.anchor.ay != 0.0f) && !q.placeNext && !q.userDrag && !f.layout &&
+            q.slotFrames == 0 && q.anchorFrames == 0 && q.lastW > 0.0f &&
+            (std::fabs(q.lastW - q.placedW) > 0.5f || std::fabs(q.lastH - q.placedH) > 0.5f))
+            q.anchorFrames = 1;
         if (q.placeNext) {
             q.placeNext = false;
             if (popout) {
@@ -572,6 +610,14 @@ bool panelsDrawWindows(const PanelsFrame& f) {
                 ImGui::SetNextWindowSize(ImVec2(fit.w, fit.h), ImGuiCond_Always);
             } else if (q.x < 0.0f && hud) {
                 q.slotFrames = 3; // a new widget: into its slot once its size is known
+            } else if (q.anchor.valid && q.x >= 0.0f) {
+                // its edge on this screen; once more when its size is known (a widget that fits its content)
+                q.anchorFrames = autoSize && q.lastW <= 0.0f ? 3 : 1;
+                if (!autoSize) {
+                    const float w = q.w > 0.0f ? q.w : q.dw * screen.x;
+                    const float h = q.h > 0.0f ? q.h : (q.dh > 0.0f ? q.dh * screen.y : 0.0f);
+                    ImGui::SetNextWindowSize(ImVec2(std::fmin(w, screen.x), std::fmin(h, screen.y)), ImGuiCond_Always);
+                }
             } else {
                 const float w = q.w > 0.0f ? q.w : q.dw * screen.x;
                 const float h = q.h > 0.0f ? q.h : (q.dh > 0.0f ? q.dh * screen.y : 0.0f);
@@ -593,8 +639,18 @@ bool panelsDrawWindows(const PanelsFrame& f) {
                 const float h = q.h > 0.0f ? q.h : (q.dh > 0.0f ? q.dh * screen.y : 0.0f);
                 ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
             }
+        } else if (q.anchorFrames > 0) {
+            const float w = autoSize ? q.lastW : (q.w > 0.0f ? q.w : q.dw * screen.x);
+            const float h = autoSize ? q.lastH : (q.h > 0.0f ? q.h : (q.dh > 0.0f ? q.dh * screen.y : 0.0f));
+            setup::placeAt(q.anchor, std::fmin(w, screen.x), std::fmin(h, screen.y), screen.x, screen.y, q.x, q.y);
+            ImGui::SetNextWindowPos(ImVec2(q.x, q.y), ImGuiCond_Always);
+            q.placedW = w;
+            q.placedH = h;
         } else if (f.layout && widget && q.x >= 0.0f) {
-            // layout mode moves and sizes the window from the frame
+            // layout mode moves and sizes the window from the frame; the frame starts where the window is seen
+            // (a place kept from a larger window is pulled onto this one)
+            if (q.lastW > 0.0f) q.x = std::fmax(0.0f, std::fmin(q.x, screen.x - std::fmin(q.lastW, screen.x)));
+            if (q.lastH > 0.0f) q.y = std::fmax(0.0f, std::fmin(q.y, screen.y - std::fmin(q.lastH, screen.y)));
             ImGui::SetNextWindowPos(ImVec2(q.x, q.y), ImGuiCond_Always);
             if (!autoSize && q.w > 0.0f) ImGui::SetNextWindowSize(ImVec2(q.w, q.h), ImGuiCond_Always);
         }
@@ -630,21 +686,40 @@ bool panelsDrawWindows(const PanelsFrame& f) {
                 if (--q.slotFrames == 0) {
                     q.x = pos.x;
                     q.y = pos.y;
+                    reanchor(q);
                     save(q);
                     logLine(HORIZON_LOG_INFO, q.plugin->id.c_str(), "widget \"%s\" placed in its slot at %.0f,%.0f", q.key.c_str(), pos.x, pos.y);
                 }
+            } else if (q.anchorFrames > 0) {
+                q.anchorFrames--; // placed from its anchor: nothing to save
             } else {
-                // remember where the player put it
+                // Remember where the player put it: only what the mouse did to this window with the menu open
+                // (drag, edges). A window that moved for another reason (kept on a smaller screen by Dear ImGui, a
+                // Reset, a loading screen) keeps its saved place, so it comes back there.
+                if (q.x < 0.0f) {
+                    // first time on screen at its default place: known from now on (layout mode, snapping), saved
+                    // once the player moves it
+                    q.x = pos.x;
+                    q.y = pos.y;
+                }
+                ImGuiWindow* self = ImGui::GetCurrentWindow();
+                const bool grabbed = (g.MovingWindow && g.MovingWindow->RootWindow == self) ||
+                                     (g.ActiveIdWindow && g.ActiveIdWindow->RootWindow == self);
+                if (menuOpen && !f.layout && ImGui::IsMouseDown(ImGuiMouseButton_Left) && grabbed) q.userDrag = true;
                 const bool moved = std::fabs(pos.x - q.x) > 0.5f || std::fabs(pos.y - q.y) > 0.5f;
                 const bool resized = !autoSize && (std::fabs(size.x - q.w) > 0.5f || std::fabs(size.y - q.h) > 0.5f);
-                if ((moved || resized) && !f.layout) {
+                if (q.userDrag && (moved || resized)) {
                     q.x = pos.x;
                     q.y = pos.y;
                     if (!autoSize) {
                         q.w = size.x;
                         q.h = size.y;
                     }
-                    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) save(q); // once the drag is over
+                }
+                if (q.userDrag && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { // once the drag is over
+                    q.userDrag = false;
+                    reanchor(q);
+                    save(q);
                 }
             }
             any = true;
@@ -718,9 +793,15 @@ void panelsResetLayout() {
         q.minimized = false;
         q.placeNext = true;
         q.slotFrames = 0;
+        q.anchorFrames = 0;
         save(q);
     }
     HLOG("layout: every widget back in its slot");
+}
+
+void panelsSaveAll() {
+    for (auto& up : g_panels)
+        if (up->x >= 0.0f) save(*up);
 }
 
 void panelsDrawLayout() {
@@ -744,6 +825,7 @@ void panelsDrawLayout() {
     const ImU32 accent = tok(st->accent);
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && g_drag.panel) {
+        reanchor(*g_drag.panel);
         save(*g_drag.panel);
         g_drag = Drag{};
     }
@@ -866,3 +948,26 @@ void panelsDrawLayout() {
 }
 
 } // namespace horizon
+
+// Test program only (tests\host_test.cpp): where a panel's window is. out[0..5]: x, y, width, height of its window
+// in the last frame, then the place it keeps (x, y; -1 not placed). Returns 1 when it was drawn in the last
+// frame, 0 when not, -1 unknown panel or in a game.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestPanel(const char* pluginId, const char* key, float* out) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test || !pluginId || !key) return -1;
+    for (auto& up : g_panels) {
+        const HostPanel& q = *up;
+        if (q.plugin->id != pluginId || q.key != key) continue;
+        if (out) {
+            const ImGuiWindow* w = ImGui::GetCurrentContext() ? ImGui::FindWindowByName(("###hzpanel." + q.plugin->id + "." + q.key).c_str()) : nullptr;
+            out[0] = w ? w->Pos.x : -1.0f;
+            out[1] = w ? w->Pos.y : -1.0f;
+            out[2] = w ? w->Size.x : 0.0f;
+            out[3] = w ? w->Size.y : 0.0f;
+            out[4] = q.x;
+            out[5] = q.y;
+        }
+        return q.shown ? 1 : 0;
+    }
+    return -1;
+}

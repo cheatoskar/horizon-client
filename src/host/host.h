@@ -11,8 +11,8 @@
 
 namespace horizon {
 
-constexpr const char* kHostVersion = "0.3.0";
-constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 0u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
+constexpr const char* kHostVersion = "0.3.1";
+constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 1u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
 
 enum class LoaderKind : uint32_t { Legacy = 1, TMLoader = 2, Test = 3 };
 
@@ -142,6 +142,24 @@ int hostSettingInt(const std::string& key, int fallback);
 void hostSetSetting(const std::string& key, const std::string& value);
 void hostSetSettingInt(const std::string& key, int value);
 void hostConfigSave(bool force);
+// The shared setup (docs/shared-setup.md): one setup for every game install of this Windows user.
+struct Plugin;
+// settings\<id>.json, or the shared folder's <id>.json while the shared setup is on (modules made for every game).
+std::wstring pluginSettingsPath(const Plugin& p, bool* shared);
+struct SetupStatus {
+    bool available = false;     // a shared folder exists for this user (not in the test program)
+    bool wanted = false;        // the switch (setup.shared)
+    bool active = false;        // what this start uses
+    bool restartNeeded = false; // switched, copied, reset or imported since the start
+    std::wstring folder;        // ...\Horizon Client\ (shared\, setups\)
+    std::vector<std::string> exports; // setups\*.json, newest first
+};
+SetupStatus setupStatus();
+bool setupSetShared(bool on);  // applies after a restart; the first switch-on copies this game's setup
+bool setupCopyFromGame();      // this game's own setup becomes the shared one
+bool setupReset();             // the shared setup back to the defaults
+bool setupExport(std::string& fileName, std::string& err); // setups\setup-<time>.json
+bool setupImport(const std::string& fileName, std::string& err);
 // Hotkeys: owner "host" or a plugin id.
 int hotkeyAdd(const std::string& owner, const std::string& ownerName, const std::string& action, const std::string& name,
               const char* defaultKey, void (*callback)(void*), void* user);

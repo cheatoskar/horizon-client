@@ -654,8 +654,8 @@ Both live in `plugins\scripts\examples\`. Copy a folder into `<game>\horizon\scr
 Real time and session time as a widget. Permissions `ui`, `settings` and `read-game` (only for the map event that restarts the hide timer; it reads nothing from the game), so it runs everywhere, also online (`online = "online-ok"`).
 
 - `Main()` adds the widget: `UI::AddWidget("clock", "Clock", vec2(1, 0))`, top right. It is off until the player shows it (layout mode "+ Clock", or "Show" on the Clock tab of the Horizon Scripts page).
-- Settings: 24 or 12 hours, seconds, session time, "Hide after" (seconds, default 10, 0 = always), large text. Place, size and background are the host's.
-- Hiding: visible for "Hide after" seconds after the script starts or a map loads (`OnMapLoaded()`), then it fades out over 0.4 s with `UI::WidgetAlpha(alpha)`. Shown again while the Horizon menu or layout mode is open (`UI::IsMenuOpen()`, `UI::IsLayoutMode()`) and for the same time after the "Show script widgets" hotkey (`OnPeek()`). `TargetAlpha(sinceMs, seconds)` is the pure function behind it; the alpha follows the target by frame time.
+- Settings: 24 or 12 hours, seconds, session time, "Hide after" (seconds, default 0 = always shown; 0.3.0 had 10), large text. Place, size and background are the host's.
+- Hiding (only with "Hide after" above 0): visible for that many seconds after the script starts or a map loads (`OnMapLoaded()`), then it fades out over 0.4 s with `UI::WidgetAlpha(alpha)`. Shown again while the Horizon menu or layout mode is open (`UI::IsMenuOpen()`, `UI::IsLayoutMode()`) and for the same time after the "Show script widgets" hotkey (`OnPeek()`). `TargetAlpha(sinceMs, seconds)` is the pure function behind it; the alpha follows the target by frame time.
 - `ClockText()` builds the format text and calls `Time::Format`:
 
 ```angelscript
@@ -684,7 +684,7 @@ void Main() {
 ```
 
 - `OnMapLoaded(Game::Map@ map)` copies the values into globals (the map object is reused), `OnMenu()` clears them.
-- Same hiding as the clock ("Hide after", default 10 s after the map loaded; menu, layout mode and `OnPeek()` show it again). Without a map, and with "Hide while driving" during a run (`Game::InRace()`), it fades out; with the menu open it shows "No map".
+- Same hiding as the clock ("Hide after", default 0 = always shown; menu, layout mode and `OnPeek()` show it again). Without a map it shows "No map" (it fades out there only with "Hide without map" on), and with "Hide while driving" it fades out during a run (`Game::InRace()`).
 - The author line is left out when `mapAuthor.isEmpty()`, because some games do not tell it for maps from their own menus.
 - One `MedalRow` per medal with a drawn medal (`UI::WindowDrawCircleFilled` and friends, tinted with the fade alpha because draw-list shapes do not follow the style alpha); rows with `-1` are skipped. On a stunts map it shows `authorScore` instead.
 
@@ -699,6 +699,6 @@ plugins\scripts\tests\run_tests.cmd
 It runs two programs:
 
 - `build\test\scripts\scripts_test.exe`: unit and engine tests (manifest, gate, time budget, settings metadata, file names, the engine with test scripts, Competition Patch rule).
-- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, Original, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel, the Options panel and the two widgets, and checks that both examples ran unchanged, registered their widgets (HUD, off until shown, top right / top left), drew into them, that Map Info fades out in the menu with the menu closed, and that nothing bad was logged.
+- `build\test\scripts\scripts_fakehost.exe build\plugins\scripts\scripts.dll plugins\scripts\examples`: loads `scripts.dll` in a stub host once per game (ESWC, Sunrise, Original, TMNF, TMUF), copies the examples folder into that game's `horizon\scripts\`, fires a race's events (map, start, checkpoint, finish, end, menu), draws frames with the overlay, the Scripts panel, the Options panel and the two widgets, and checks that both examples ran unchanged, registered their widgets (HUD, off until shown, top right / top left), drew into them, that both stay on screen with the Horizon menu closed through map load, race start, checkpoint, finish, race end, the next map and the game menu (on ESWC also 11 s after a map load), and that nothing bad was logged.
 
 The exit code is non-zero when a check fails. The fake host has no real engine objects, so `Reflection::` finds nothing there: a script that reads the game has to handle failure (and it should anyway). Real reads are only testable in the game.

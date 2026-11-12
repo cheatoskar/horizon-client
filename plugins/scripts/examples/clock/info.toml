@@ -1,7 +1,7 @@
 # Clock: real time and session time as a widget.
 name = "Clock"
 author = "cheatoskar"
-version = "1.2.0"
+version = "1.3.0"
 description = "Time and session time as a widget."
 games = ["eswc", "sunrise", "original", "tmnf", "tmuf"]
 online = "online-ok"

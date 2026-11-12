@@ -599,6 +599,54 @@ void drawGeneral(const Model& model, const Actions& actions) {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
 
+        // Shared setup: one setup for every game of this Windows user (docs/shared-setup.md)
+        if (model.setupAvailable) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            drawText(dl, f.bodyBold, p, U(t.text), "Shared setup");
+            std::string sub = model.setupShared ? "All games" : "This game only";
+            if (model.setupRestart) sub += "  \xC2\xB7  Restart to apply";
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(model.setupRestart ? t.warn : t.muted), sub);
+            const ImVec2 swSize(44.0f * s, 24.0f * s);
+            const ImVec2 swPos(p.x + w - swSize.x, p.y + 8.0f * s);
+            if (inlineSwitch("##sharedsetup", swPos, swSize, model.setupShared, actions.setSharedSetup != nullptr, nullptr) && actions.setSharedSetup)
+                actions.setSharedSetup(!model.setupShared);
+            ImGui::SetCursorScreenPos(p);
+            ImGui::Dummy(ImVec2(w, 44.0f * s));
+            if (ImGui::Button("Copy from this game") && actions.copySetupFromGame) actions.copySetupFromGame();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("This game's setup becomes the shared one.");
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##sharedsetup")) ImGui::OpenPopup("##resetsetup");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shared setup back to defaults.");
+            if (ImGui::BeginPopup("##resetsetup")) {
+                ImGui::TextUnformatted("Reset shared setup?");
+                if (ImGui::Button("Reset##confirm") && actions.resetSharedSetup) {
+                    actions.resetSharedSetup();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel##resetsetup")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Export") && actions.exportSetup) actions.exportSetup();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Saves the setup as a file.");
+            ImGui::SameLine();
+            if (ImGui::Button("Import")) ImGui::OpenPopup("##importsetup");
+            if (ImGui::BeginPopup("##importsetup")) {
+                if (model.setupFiles.empty()) ImGui::TextDisabled("No files");
+                for (size_t i = 0; i < model.setupFiles.size() && i < 12; i++) {
+                    if (ImGui::Selectable(model.setupFiles[i].c_str()) && actions.importSetup) actions.importSetup(model.setupFiles[i]);
+                }
+                ImGui::Separator();
+                if (ImGui::Selectable("Open folder") && actions.openSetupFolder) actions.openSetupFolder();
+                ImGui::EndPopup();
+            }
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+        }
+
         // Display: menu size and text size
         {
             const ImVec2 p = ImGui::GetCursorScreenPos();

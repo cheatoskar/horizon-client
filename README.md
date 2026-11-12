@@ -86,6 +86,7 @@ tests\run_perf_tests.cmd
 
 - [docs/plugin-abi.md](docs/plugin-abi.md): writing a module
 - [docs/scripting.md](docs/scripting.md): scripts for Horizon Scripts (AngelScript)
+- [docs/shared-setup.md](docs/shared-setup.md): one setup for every game (shared setup, export/import, widget anchors)
 - [docs/profile-json.md](docs/profile-json.md): how TM Horizon switches modules on
 - [docs/client-bridge.md](docs/client-bridge.md): the local protocol between the game and TM Horizon
 - [docs/performance.md](docs/performance.md): Horizon Performance and the benchmark

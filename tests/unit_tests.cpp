@@ -1,6 +1,7 @@
 // Unit tests for the host's pure logic: profile.json, plugin.json, hotkeys, settings, JSON writer.
 #include <windows.h>
 
+#include <cmath>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -9,6 +10,7 @@
 #include "common/json.h"
 #include "common/profile.h"
 #include "common/settings.h"
+#include "common/setup.h"
 #include "common/util.h"
 #include "horizon_plugin.h"
 #include "host/game/forever_poll.h"
@@ -177,6 +179,127 @@ static void testSettings() {
     CHECK(t.getFloat("Volume", 0) == 0.25f);
     CHECK(t.getInt("Mode", 3) == 3); // not a number
     CHECK(!t.loadText("[1,2]"));
+}
+
+// The shared setup: which keys stay per game, copy/replace, merging saves of two games, export/import, anchors.
+static bool autosaveOnly(const std::string& id, void*) { return id == "eswc-autosave"; }
+static bool localPick(const std::string& key, void*) { return setup::isLocalHostKey(key, &autosaveOnly, nullptr); }
+static bool sharedPick(const std::string& key, void*) { return !setup::isLocalHostKey(key, &autosaveOnly, nullptr); }
+
+static void testSharedSetup() {
+    // key classes
+    CHECK(setup::pluginOfKey("plugin.wr-hunter.enabled") == "wr-hunter");
+    CHECK(setup::pluginOfKey("panel.scripts.w-clock-clock-d7a888") == "scripts");
+    CHECK(setup::pluginOfKey("hotkey.horizon.menu") == "horizon");
+    CHECK(setup::pluginOfKey("ui.content_scale").empty() && setup::pluginOfKey("plugin.").empty());
+    CHECK(setup::pluginGameSpecific(HORIZON_GAME_LEGACY));
+    CHECK(setup::pluginGameSpecific(HORIZON_GAME_ESWC));
+    CHECK(!setup::pluginGameSpecific(HORIZON_GAME_ALL));
+    CHECK(!setup::pluginGameSpecific(0));
+    CHECK(localPick("bridge.key", nullptr) && localPick("bridge.instance", nullptr) && localPick("bridge.enabled", nullptr));
+    CHECK(localPick("setup.shared", nullptr) && localPick("OnlineFix", nullptr) && localPick("pwin.tmx-browser", nullptr));
+    CHECK(localPick("plugin.eswc-autosave.enabled", nullptr) && localPick("panel.eswc-autosave.status", nullptr));
+    CHECK(!localPick("plugin.scripts.enabled", nullptr) && !localPick("panel.scripts.w-clock-clock-d7a888", nullptr));
+    CHECK(!localPick("ui.content_scale", nullptr) && !localPick("widgets.opacity", nullptr) && !localPick("hotkey.horizon.menu", nullptr));
+    CHECK(!localPick("toasts.dnd", nullptr) && !localPick("bar", nullptr));
+    CHECK(!setup::isLocalHostKey("plugin.eswc-autosave.enabled", nullptr, nullptr)); // no plugin list: shared
+    CHECK(!setup::isExportableHostKey("bridge.key") && !setup::isExportableHostKey("setup.shared"));
+    CHECK(setup::isExportableHostKey("OnlineFix") && setup::isExportableHostKey("panel.scripts.w-x"));
+    // new install shared, existing install its own
+    CHECK(setup::sharedDefault(false) == 1 && setup::sharedDefault(true) == 0);
+
+    // "Copy from this game": the shared host.json gets this game's shared keys, nothing per game
+    SettingsFile game, shared;
+    CHECK(game.loadText(R"({"bridge.key":"secret","bridge.instance":"abc","setup.shared":1,"OnlineFix":0,"ui.content_scale":110,
+        "panel.scripts.w-clock-clock-d7a888":"1,1,0,0,1,100,1110,18,0,0,0,1.00","plugin.eswc-autosave.enabled":1,"plugin.wr-hunter.enabled":1})"));
+    CHECK(shared.loadText(R"({"ui.content_scale":90,"widgets.opacity":40,"bridge.key":"stray"})"));
+    setup::copyKeys(game, shared, &sharedPick, nullptr, true);
+    CHECK(shared.getInt("ui.content_scale", 0) == 110);
+    CHECK(!shared.has("widgets.opacity")); // replaced: the game had none
+    CHECK(shared.has("bridge.key"));        // not a shared key: left alone by the copy
+    CHECK(shared.getInt("plugin.wr-hunter.enabled", 0) == 1 && !shared.has("plugin.eswc-autosave.enabled"));
+    CHECK(shared.getString("panel.scripts.w-clock-clock-d7a888", "") == "1,1,0,0,1,100,1110,18,0,0,0,1.00");
+    CHECK(!shared.has("OnlineFix") && !shared.has("setup.shared") && !shared.has("bridge.instance"));
+    // values keep their type
+    SettingsFile typed;
+    typed.copyKey(game, "ui.content_scale");
+    CHECK(typed.toText().find("\"ui.content_scale\": 110") != std::string::npos);
+    typed.copyKey(game, "missing");
+    CHECK(!typed.has("missing"));
+    // the merged view a game reads: shared keys from the shared file, the rest from its own
+    SettingsFile merged;
+    setup::copyKeys(game, merged, &localPick, nullptr, false);
+    setup::copyKeys(shared, merged, &sharedPick, nullptr, false);
+    CHECK(merged.getString("bridge.key", "") == "secret" && merged.getInt("ui.content_scale", 0) == 110 && merged.getInt("OnlineFix", 1) == 0);
+
+    // merging saves: two games write the same shared file, neither loses the other's change
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    const std::wstring path = std::wstring(tmp) + L"horizon_unit_test\\Horizon Client\\shared\\host.json";
+    DeleteFileW(path.c_str());
+    SettingsFile a, b;
+    a.setMerging(true);
+    b.setMerging(true);
+    CHECK(a.load(path) && b.load(path));
+    a.setNumber("ui.content_scale", 105);
+    CHECK(a.saveIfDirty());
+    b.setNumber("widgets.opacity", 50);
+    CHECK(b.saveIfDirty());
+    CHECK(b.getInt("ui.content_scale", 0) == 105); // b picked up a's key while saving
+    a.remove("ui.content_scale");
+    a.setString("hotkey.horizon.menu", "F2");
+    CHECK(a.saveIfDirty());
+    SettingsFile c;
+    CHECK(c.load(path));
+    CHECK(!c.has("ui.content_scale") && c.getInt("widgets.opacity", 0) == 50 && c.getString("hotkey.horizon.menu", "") == "F2");
+    // Reset: clear() drops what is on disk too
+    a.clear();
+    a.setNumber("bar", 0);
+    CHECK(a.saveIfDirty());
+    CHECK(c.load(path) && c.keys().size() == 1 && c.getInt("bar", 1) == 0);
+    // a normal (not merging) file still writes exactly what it holds
+    SettingsFile plain;
+    CHECK(plain.load(path));
+    plain.setNumber("x", 1);
+    CHECK(plain.saveIfDirty() && c.load(path) && c.keys().size() == 2);
+
+    // export / import
+    std::vector<setup::PluginSettings> ps = {{"scripts", R"({"enabled.clock":1,"clock.hideAfter":"0"})"}, {"wr-hunter", "{}"}, {"Bad Id", R"({"a":1})"}};
+    const std::string file = setup::exportText(R"({"ui.content_scale":110,"bridge.key":"secret","nested":{"x":1}})", ps, "TrackMania Nations ESWC", "0.3.1");
+    setup::Imported im;
+    std::string err;
+    CHECK(setup::importText(file, im, err));
+    CHECK(im.game == "TrackMania Nations ESWC" && im.hostVersion == "0.3.1");
+    SettingsFile ih;
+    CHECK(ih.loadText(im.hostJson));
+    CHECK(ih.getInt("ui.content_scale", 0) == 110 && !ih.has("bridge.key") && !ih.has("nested"));
+    CHECK(im.plugins.size() == 1 && im.plugins[0].id == "scripts"); // empty and bad ids left out
+    SettingsFile is;
+    CHECK(is.loadText(im.plugins[0].json) && is.getInt("enabled.clock", 0) == 1 && is.getString("clock.hideAfter", "") == "0");
+    CHECK(!setup::importText(R"({"format":"something-else","version":1})", im, err) && !err.empty());
+    CHECK(!setup::importText(R"({"format":"horizon-setup","version":2})", im, err) && err.find("newer") != std::string::npos);
+    CHECK(!setup::importText("not json", im, err));
+    CHECK(setup::importText(R"({"format":"horizon-setup","version":1})", im, err) && im.plugins.empty());
+
+    // anchors: a widget keeps its edge at any window size
+    float x = 0, y = 0;
+    setup::Anchor tr = setup::anchorOf(1110, 18, 152, 60, 1280, 960); // top right at 1280x960
+    CHECK(tr.valid && tr.ax == 1.0f && tr.ay == 0.0f);
+    setup::placeAt(tr, 152, 60, 1280, 960, x, y);
+    CHECK(x == 1110.0f && y == 18.0f);
+    setup::placeAt(tr, 152, 60, 1920, 1080, x, y);
+    CHECK(std::fabs((1920.0f - x - 152.0f) - 18.0f * 1920.0f / 1280.0f) < 1.0f && std::fabs(y - 18.0f * 1080.0f / 960.0f) < 1.0f);
+    setup::placeAt(tr, 152, 60, 800, 600, x, y); // smaller window: still at the right edge, on screen
+    CHECK(x + 152.0f <= 800.0f && x > 600.0f && y >= 0.0f);
+    setup::Anchor bl = setup::anchorOf(10, 900, 200, 50, 1280, 960);
+    CHECK(bl.ax == 0.0f && bl.ay == 1.0f);
+    setup::placeAt(bl, 200, 50, 2560, 1440, x, y);
+    CHECK(std::fabs(x - 20.0f) < 1.0f && std::fabs((1440.0f - y - 50.0f) - 10.0f * 1440.0f / 960.0f) < 1.0f);
+    setup::Anchor mid = setup::anchorOf(565, 400, 150, 100, 1280, 960);
+    CHECK(mid.ax == 0.5f && mid.ay == 0.5f);
+    setup::placeAt(mid, 150, 100, 1280, 960, x, y);
+    CHECK(x == 565.0f && y == 400.0f);
+    CHECK(!setup::anchorOf(-1, -1, 10, 10, 1280, 960).valid && !setup::anchorOf(10, 10, 10, 10, 0, 0).valid);
 }
 
 static void testJsonRoundTrip() {
@@ -749,6 +872,7 @@ int main() {
     testManifest();
     testHotkeys();
     testSettings();
+    testSharedSetup();
     testJsonRoundTrip();
     testIds();
     testForeverObserve();

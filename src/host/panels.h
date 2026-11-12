@@ -35,5 +35,8 @@ bool panelsDrawWindows(const PanelsFrame& f);  // true: at least one window was 
 void panelsDrawLayout();
 // Every widget back to its slot, normal size, not minimised.
 void panelsResetLayout();
+// Writes every placed window's entry (with its anchor) into the host settings: before the setup is copied or
+// exported.
+void panelsSaveAll();
 
 } // namespace horizon

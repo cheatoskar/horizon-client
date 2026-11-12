@@ -1,8 +1,9 @@
 // Map Info: name, author and medal times of the running map, from OnMapLoaded, as a widget.
 // Name, "by <author>", then one row per medal (a drawn medal icon and the time).
 // The widget is off until you show it (Ctrl+Insert, "+ Map Info" in the bar at the top, or "Show" on its tab on
-// the Horizon Scripts page); layout mode moves and resizes it and Horizon keeps the place. It fades out
-// "Hide after" seconds after the map loads and comes back while the menu is open and after the
+// the Horizon Scripts page); layout mode moves and resizes it and Horizon keeps the place. It stays on screen
+// in races, menus and across map loads ("No map" in the game's menus). With "Hide after" above 0 it fades out
+// that many seconds after the map loads and comes back while the menu is open and after the
 // "Show script widgets" hotkey (default Ctrl+F4, the host calls OnPeek()).
 // Runs unchanged on ESWC, Sunrise, Original, TMNF and TMUF. Some games leave the author empty for maps
 // started from their own menus; then the line is simply left out.
@@ -13,8 +14,11 @@ bool showMedals = true;
 [Setting name="Hide while driving"]
 bool hideWhileDriving = false;
 
-[Setting name="Hide after" description="Seconds after a map start. 0 = always." min=0 max=120]
-int hideAfter = 10;
+[Setting name="Hide without map"]
+bool hideWithoutMap = false;
+
+[Setting name="Hide after" description="Seconds after a map start. 0 = always shown." min=0 max=120]
+int hideAfter = 0;
 
 // Medal colours
 const vec4 AUTHOR = vec4(0.18f, 0.80f, 0.44f, 1.0f);
@@ -109,7 +113,7 @@ void MedalTime(const vec4 &in color, int ms) {
 void RenderWidget(const string &in id) {
     bool preview = UI::IsMenuOpen() || UI::IsLayoutMode();
     float target = preview ? 1.0f : TargetAlpha(int64(Time::Now() - shownAt), hideAfter);
-    if (!preview && (!haveMap || (hideWhileDriving && Game::InRace()))) target = 0.0f;
+    if (!preview && ((!haveMap && hideWithoutMap) || (hideWhileDriving && Game::InRace()))) target = 0.0f;
     float step = Time::Delta() / FADE_MS;
     if (alpha < target) alpha = alpha + step > target ? target : alpha + step;
     else alpha = alpha - step < target ? target : alpha - step;

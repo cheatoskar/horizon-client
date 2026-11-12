@@ -2,12 +2,17 @@
 #include "host/host.h"
 
 #include <psapi.h>
+#include <shlobj.h>
 
+#include <algorithm>
 #include <mutex>
 
 #include "common/hotkeys.h"
 #include "common/settings.h"
+#include "common/setup.h"
 #include "common/util.h"
+#include "host/panels.h"
+#include "host/plugins.h"
 
 #pragma comment(lib, "psapi.lib")
 #pragma comment(lib, "version.lib")
@@ -66,15 +71,76 @@ std::string moduleDescription(HMODULE m) {
 }
 } // namespace
 
-void hostConfigLoad() {
-    const std::wstring path = state().dataRoot + L"settings\\host.json";
-    if (!g_host.load(path)) HWARN("settings: %s is not a JSON object, using defaults", utf8(path).c_str());
+// ---- the shared setup ---------------------------------------------------------------------------------------
+// settings\host.json is this game's own file. With the shared setup on, every key that is not per game
+// (common/setup.h) is read from and written to <setup root>shared\host.json instead, and modules made for
+// every game keep their settings there too (shared\<id>.json). The switch itself (setup.shared) and the
+// game's own copies of the shared keys stay in settings\host.json, so switching off brings them back.
+namespace {
+SettingsFile g_shared;
+std::wstring g_setupRoot;     // ...\Horizon Client\ with trailing backslash; "" = no shared setup (test program)
+bool g_sharedActive = false;  // this start reads the shared setup
+bool g_setupChanged = false;  // copied, reset or imported this start: restart to apply
+
+bool gameSpecificPlugin(const std::string& id, void*) {
+    const Plugin* p = findPlugin(id);
+    return p && setup::pluginGameSpecific(p->manifest.games);
+}
+bool keyIsLocal(const std::string& key, void*) { return setup::isLocalHostKey(key, &gameSpecificPlugin, nullptr); }
+bool keyIsShared(const std::string& key, void* u) { return !keyIsLocal(key, u); }
+bool keyIsExportable(const std::string& key, void*) { return setup::isExportableHostKey(key); }
+bool keyIsLocalExportable(const std::string& key, void* u) { return keyIsLocal(key, u) && setup::isExportableHostKey(key); }
+bool keyIsSharedExportable(const std::string& key, void* u) { return keyIsShared(key, u) && setup::isExportableHostKey(key); }
+
+SettingsFile& storeFor(const std::string& key) { return g_sharedActive && !keyIsLocal(key, nullptr) ? g_shared : g_host; }
+
+std::wstring sharedDir() { return g_setupRoot.empty() ? std::wstring() : g_setupRoot + L"shared\\"; }
+std::wstring localSettingsDir() { return state().dataRoot + L"settings\\"; }
+
+std::wstring setupRootFolder() {
+    wchar_t buf[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"HORIZON_SETUP_DIR", buf, MAX_PATH); // tests: a temp folder
+    if (n > 0 && n < MAX_PATH) {
+        std::wstring r = buf;
+        if (r.back() != L'\\') r += L'\\';
+        return r;
+    }
+    if (state().loader == LoaderKind::Test) return std::wstring(); // tests never touch the player's AppData
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, buf)) || !buf[0]) return std::wstring();
+    return std::wstring(buf) + L"\\Horizon Client\\";
 }
 
-std::string hostSetting(const std::string& key, const std::string& fallback) { return g_host.getString(key, fallback); }
-int hostSettingInt(const std::string& key, int fallback) { return g_host.getInt(key, fallback); }
-void hostSetSetting(const std::string& key, const std::string& value) { g_host.setString(key, value); }
-void hostSetSettingInt(const std::string& key, int value) { g_host.setNumber(key, value); }
+// The plugins whose settings follow the shared setup (made for every game).
+bool pluginShared(const Plugin& p) { return !setup::pluginGameSpecific(p.manifest.games); }
+} // namespace
+
+void hostConfigLoad() {
+    const std::wstring path = localSettingsDir() + L"host.json";
+    const bool existed = fileExists(path);
+    if (!g_host.load(path)) HWARN("settings: %s is not a JSON object, using defaults", utf8(path).c_str());
+    g_setupRoot = setupRootFolder();
+    if (g_setupRoot.empty()) {
+        HLOG("setup: this game's own (no shared setup in the test program)");
+        return;
+    }
+    if (!g_host.has("setup.shared")) {
+        // a new install starts on the shared setup; an existing one keeps its own until the player switches
+        g_host.setNumber("setup.shared", setup::sharedDefault(existed));
+    }
+    g_sharedActive = g_host.getInt("setup.shared", 0) != 0;
+    if (g_sharedActive) {
+        g_shared.setMerging(true); // several games may write it
+        if (!g_shared.load(sharedDir() + L"host.json")) HWARN("setup: shared host.json is not a JSON object, using defaults");
+        HLOG("setup: shared (%s), %zu keys", utf8(sharedDir()).c_str(), g_shared.keys().size());
+    } else {
+        HLOG("setup: this game's own%s", existed ? "" : " (new install)");
+    }
+}
+
+std::string hostSetting(const std::string& key, const std::string& fallback) { return storeFor(key).getString(key, fallback); }
+int hostSettingInt(const std::string& key, int fallback) { return storeFor(key).getInt(key, fallback); }
+void hostSetSetting(const std::string& key, const std::string& value) { storeFor(key).setString(key, value); }
+void hostSetSettingInt(const std::string& key, int value) { storeFor(key).setNumber(key, value); }
 
 void hostConfigSave(bool force) {
     static DWORD last = 0;
@@ -82,6 +148,189 @@ void hostConfigSave(bool force) {
     if (!force && now - last < 1000) return;
     last = now;
     if (g_host.dirty() && !g_host.saveIfDirty()) HWARN("settings: could not write host.json");
+    if (g_sharedActive && g_shared.dirty() && !g_shared.saveIfDirty()) HWARN("setup: could not write the shared host.json");
+}
+
+std::wstring pluginSettingsPath(const Plugin& p, bool* shared) {
+    const bool s = g_sharedActive && pluginShared(p);
+    if (shared) *shared = s;
+    return (s ? sharedDir() : localSettingsDir()) + wide(p.id) + L".json";
+}
+
+SetupStatus setupStatus() {
+    SetupStatus st;
+    st.available = !g_setupRoot.empty();
+    st.active = g_sharedActive;
+    st.wanted = g_host.getInt("setup.shared", 0) != 0;
+    st.restartNeeded = st.available && (st.wanted != st.active || g_setupChanged);
+    st.folder = g_setupRoot;
+    if (st.available) {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((g_setupRoot + L"setups\\*.json").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) st.exports.push_back(utf8(fd.cFileName));
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        std::sort(st.exports.rbegin(), st.exports.rend()); // newest first (the names hold the time)
+    }
+    return st;
+}
+
+namespace {
+// Copies this game's own setup (settings\host.json and settings\<id>.json) over the shared one. With the shared
+// setup active the copy also goes into what this start holds, so nothing older is written back later.
+void copyGameToShared() {
+    SettingsFile fileHost;
+    SettingsFile* dst = &g_shared;
+    if (!g_sharedActive) {
+        fileHost.load(sharedDir() + L"host.json");
+        dst = &fileHost;
+    }
+    setup::copyKeys(g_host, *dst, &keyIsShared, nullptr, true);
+    if (!dst->saveIfDirty()) HWARN("setup: could not write the shared host.json");
+    for (auto& up : plugins()) {
+        Plugin& p = *up;
+        if (!pluginShared(p)) continue;
+        const std::wstring localPath = localSettingsDir() + wide(p.id) + L".json";
+        const std::wstring sharedPath = sharedDir() + wide(p.id) + L".json";
+        SettingsFile fileSrc, fileDst;
+        const SettingsFile* src = &fileSrc;
+        if (!g_sharedActive && p.settings.path() == localPath) src = &p.settings; // loaded: what this start holds
+        else fileSrc.load(localPath);
+        SettingsFile* to = &fileDst;
+        if (g_sharedActive && p.settings.path() == sharedPath) to = &p.settings;
+        else fileDst.load(sharedPath);
+        setup::copyKeys(*src, *to, nullptr, nullptr, true);
+        if (!to->saveIfDirty()) logLine(HORIZON_LOG_WARN, p.id.c_str(), "setup: shared settings could not be written");
+    }
+}
+} // namespace
+
+bool setupSetShared(bool on) {
+    if (g_setupRoot.empty()) return false;
+    if (on && !g_sharedActive && !fileExists(sharedDir() + L"host.json")) {
+        // the first game switched on: its own setup becomes the shared one
+        panelsSaveAll();
+        copyGameToShared();
+        HLOG("setup: shared setup made from this game");
+    }
+    g_host.setNumber("setup.shared", on ? 1 : 0);
+    hostConfigSave(true);
+    HLOG("setup: shared %s (applies after a restart)", on ? "on" : "off");
+    return true;
+}
+
+bool setupCopyFromGame() {
+    if (g_setupRoot.empty()) return false;
+    if (!g_sharedActive) panelsSaveAll(); // anchors for the widgets of this game
+    hostConfigSave(true);
+    pluginsSaveSettings(true);
+    copyGameToShared();
+    if (g_sharedActive) g_setupChanged = true;
+    HLOG("setup: this game's setup copied to the shared setup");
+    return true;
+}
+
+bool setupReset() {
+    if (g_setupRoot.empty()) return false;
+    const std::wstring dir = sharedDir();
+    if (g_sharedActive) {
+        g_shared.clear();
+        if (!g_shared.saveIfDirty()) HWARN("setup: could not write the shared host.json");
+        g_setupChanged = true;
+    } else {
+        DeleteFileW((dir + L"host.json").c_str());
+    }
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*.json").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || _wcsicmp(fd.cFileName, L"host.json") == 0) continue;
+            const std::wstring path = dir + fd.cFileName;
+            bool held = false;
+            for (auto& up : plugins()) {
+                if (up->settings.path() == path) {
+                    up->settings.clear(); // this start holds it: write it empty, nothing old comes back
+                    up->settings.saveIfDirty();
+                    held = true;
+                }
+            }
+            if (!held) DeleteFileW(path.c_str());
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    HLOG("setup: shared setup reset");
+    return true;
+}
+
+bool setupExport(std::string& fileName, std::string& err) {
+    if (!g_setupRoot.empty()) panelsSaveAll();
+    // the setup in use: this game's own keys, and with the shared setup on the shared ones from there
+    SettingsFile view;
+    setup::copyKeys(g_host, view, g_sharedActive ? &keyIsLocalExportable : &keyIsExportable, nullptr, false);
+    if (g_sharedActive) setup::copyKeys(g_shared, view, &keyIsSharedExportable, nullptr, false);
+    std::vector<setup::PluginSettings> ps;
+    for (auto& up : plugins()) {
+        Plugin& p = *up;
+        const std::wstring path = pluginSettingsPath(p, nullptr);
+        if (p.settings.path() == path) {
+            ps.push_back(setup::PluginSettings{p.id, p.settings.toText()});
+        } else {
+            SettingsFile f;
+            f.load(path);
+            ps.push_back(setup::PluginSettings{p.id, f.toText()});
+        }
+    }
+    const std::wstring folder = (g_setupRoot.empty() ? state().dataRoot : g_setupRoot) + L"setups\\";
+    fileName = "setup-" + nowFileStamp() + ".json";
+    ensureDir(folder);
+    if (!writeFileAtomic(folder + wide(fileName), setup::exportText(view.toText(), ps, state().game.name, kHostVersion))) {
+        err = "could not write " + utf8(folder) + fileName;
+        HWARN("setup: %s", err.c_str());
+        return false;
+    }
+    HLOG("setup: exported to %s%s (%zu modules)", utf8(folder).c_str(), fileName.c_str(), ps.size());
+    return true;
+}
+
+bool setupImport(const std::string& fileName, std::string& err) {
+    if (g_setupRoot.empty() || fileName.find_first_of("\\/:") != std::string::npos) {
+        err = "not available";
+        return false;
+    }
+    std::string text;
+    if (!readFile(g_setupRoot + L"setups\\" + wide(fileName), text)) {
+        err = "file not found";
+        return false;
+    }
+    setup::Imported im;
+    if (!setup::importText(text, im, err)) {
+        HWARN("setup: %s not imported: %s", fileName.c_str(), err.c_str());
+        return false;
+    }
+    SettingsFile in;
+    in.loadText(im.hostJson);
+    for (const std::string& key : in.keys()) storeFor(key).copyKey(in, key);
+    size_t modules = 0;
+    for (const setup::PluginSettings& ps : im.plugins) {
+        Plugin* p = findPlugin(ps.id);
+        if (!p) continue; // not installed in this game
+        SettingsFile from, file;
+        from.loadText(ps.json);
+        const std::wstring path = pluginSettingsPath(*p, nullptr);
+        SettingsFile* to = p->settings.path() == path ? &p->settings : &file;
+        if (to == &file) file.load(path);
+        setup::copyKeys(from, *to, nullptr, nullptr, true);
+        to->saveIfDirty();
+        modules++;
+    }
+    hostConfigSave(true);
+    g_setupChanged = true;
+    HLOG("setup: imported %s (%zu host keys, %zu modules, made on %s)", fileName.c_str(), in.keys().size(), modules,
+         im.game.empty() ? "?" : im.game.c_str());
+    return true;
 }
 
 int hotkeyAdd(const std::string& owner, const std::string& ownerName, const std::string& action, const std::string& name,
@@ -92,8 +341,8 @@ int hotkeyAdd(const std::string& owner, const std::string& ownerName, const std:
         def = KeyCombo{};
     }
     const std::string settingKey = "hotkey." + owner + "." + action;
-    const bool hasOverride = g_host.has(settingKey);
-    const std::string overrideText = g_host.getString(settingKey, "");
+    const bool hasOverride = storeFor(settingKey).has(settingKey);
+    const std::string overrideText = storeFor(settingKey).getString(settingKey, "");
     std::lock_guard<std::recursive_mutex> lock(g_keysMutex);
     const int handle = g_keys.add(owner, ownerName, action, name, def, hasOverride ? &overrideText : nullptr, callback, user);
     const HotkeyEntry* e = g_keys.find(handle);
@@ -116,7 +365,7 @@ bool hotkeyRebind(int handle, const std::string& text) {
     if (!g_keys.rebind(handle, text)) return false;
     const HotkeyEntry* now = g_keys.find(handle);
     const std::string stored = now->key.empty() ? "None" : keyText(now->key);
-    g_host.setString("hotkey." + owner + "." + action, stored);
+    hostSetSetting("hotkey." + owner + "." + action, stored);
     HLOG("hotkey: %s/%s now %s%s%s", owner.c_str(), action.c_str(), stored.c_str(), now->conflict.empty() ? "" : " - ",
          now->conflict.c_str());
     return true;
