@@ -48,7 +48,7 @@ const PtrSig kEswcPtrs[] = {
     {0x00ad0038 + 0x88, 0x00543500}, // pad vtable: kind (2 = pad)
 };
 const GameTable kEswc = {"TrackMania Nations ESWC 1.80", 0x5ce7272f, 0x00c95184, 0x00acfe40, 0x00ad0038, 0x004647d0,
-                         0x00551be0, 0x00b53c5c, kEswcCode, 6, kEswcPtrs, 5};
+                         0x00551be0, 0x00b53c5c, kEswcCode, 6, kEswcPtrs, 5, &eswcBind};
 
 // ---- Sunrise (TmSunrise.exe Win10 community repack, sha256 e59dfc7e..., timestamp 5cc8f0cf)
 const uint8_t kTmsEnumCb[] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x4c, 0x24, 0x08, 0x50, 0xe8, 0x92, 0xf3, 0xff, 0xff, 0xc2, 0x08, 0x00};
@@ -71,7 +71,7 @@ const PtrSig kTmsPtrs[] = {
     {0x00a40af8 + 0x88, 0x005f9fb0},
 };
 const GameTable kTms = {"TrackMania Sunrise (Win10 repack)", 0x5cc8f0cf, 0x00b8bb88, 0x00a23d18, 0x00a40af8, 0x004ce7c0,
-                        0x0060a070, 0x00a6cc9c, kTmsCode, 6, kTmsPtrs, 5};
+                        0x0060a070, 0x00a6cc9c, kTmsCode, 6, kTmsPtrs, 5, &sunriseBind};
 
 // ---- Original (TMORIGINAL.EXE Online Patch v2 community exe, sha256 75e129d7..., timestamp 5d337477)
 // Every address matched to Sunrise's (masked byte match, the same instruction in the matched function, or the
@@ -96,7 +96,7 @@ const PtrSig kTmoPtrs[] = {
     {0x00a3c7f8 + 0x88, 0x005f98c0},
 };
 const GameTable kTmo = {"TrackMania Original (Online Patch v2)", 0x5d337477, 0x00b86de8, 0x00a1fcd8, 0x00a3c7f8, 0x004ce870,
-                        0x008b64d0, 0x00a6895c, kTmoCode, 6, kTmoPtrs, 5};
+                        0x008b64d0, 0x00a6895c, kTmoCode, 6, kTmoPtrs, 5, &originalBind};
 
 using EnumCbFn = BOOL(CALLBACK*)(const DIDEVICEINSTANCEW*, void*);
 using ReserveFn = void(__fastcall*)(void* array, void* edx, uint32_t n); // thiscall, ret 4
@@ -235,7 +235,11 @@ std::string toUtf8(const std::wstring& w) {
 }
 
 GameBackend::GameBackend(const GameTable* table, uintptr_t exeBase, LogFn log, void* logUser)
-    : table_(table), base_(exeBase), log_(log), logUser_(logUser) {}
+    : table_(table), base_(exeBase), log_(log), logUser_(logUser) {
+    if (table_ && table_->bind) binder_ = new Binder(&table_->bind(), base_, rb(table_->reserve8), log_, logUser_);
+}
+
+GameBackend::~GameBackend() { delete binder_; }
 
 void GameBackend::logf(int level, const char* fmt, ...) {
     if (!log_) return;
@@ -271,6 +275,7 @@ bool GameBackend::verify() {
     }
     verified_ = true;
     logf(0, "%s: game code checked (%d code signatures, %d table entries)", table_->name, table_->codeCount, table_->ptrCount);
+    if (binder_) binder_->verify(); // logs its own result; a mismatch only turns the bindings off
     return true;
 }
 
@@ -378,6 +383,8 @@ bool GameBackend::add(const Attached& d) {
              toUtf8(d.name).c_str(), before, after);
         return false;
     }
+    // the bindings a pad gets when it is there at start (saved ones from the profile, else the game's defaults)
+    if (binder_) binder_->apply(p, after - 1, d.name);
     return true;
 }
 

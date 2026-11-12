@@ -1,6 +1,6 @@
 # Controller fix
 
-Plugin id `controller-hotplug`, menu name "Controller fix", version 1.1.0. ESWC, Sunrise and Original, online-ok, live toggle, on by default. A game controller that you plug in (or switch on) after the game has started shows up in the game's input settings, without a restart.
+Plugin id `controller-hotplug`, menu name "Controller fix", version 1.2.0. ESWC, Sunrise and Original, online-ok, live toggle, on by default. A game controller that you plug in (or switch on) after the game has started works at once, with the bindings it would have had if it had been there at start, without a restart.
 
 ## What it does
 
@@ -13,7 +13,17 @@ ESWC, Sunrise and Original list the DirectInput game controllers only once, when
 - The game's binding tables get an empty slot for the new device, so nothing reads out of range.
 - A toast "Controller added: <name>" shows for a new pad, "Controller back: <name>" for one that is back again. A disconnect is only logged.
 
-Bindings are saved by the game per device (a hash of the DirectInput instance GUID). A pad that was bound before gets its bindings at the next race start (when the map loads). A pad plugged in mid-race is known at once; its bindings apply from the next race start (load the map again).
+### Bindings (1.2.0)
+
+The pad gets its bindings at once, the same way as a pad that is there at start (static analysis of all three exes, addresses in `plugins/controller-hotplug/hp_bind.h` and `hp_bind.cpp`):
+
+- At start the game runs a defaults pass for every profile's bindings config: every keyboard, mouse and pad the config has no binding for gets the game's defaults (`CTrackManiaRace::InputSetDefaultsBindings`, which the app keeps as a callback; for a pad: Accelerate = button 0 and 6, Brake = button 1 and 4, Steer = X axis, Respawn = button 2, Reset = button 5, Horn = button 8). A pad the profile already has bindings for keeps them. Bindings are saved in the profile per device id (a hash of the DirectInput instance GUID), so the same pad on the same USB port is the same device.
+- For a late pad the module calls that same defaults pass (ESWC 0x7171d0, Sunrise 0x821d50, Original 0x820230) for the current profile's config. A pad with saved bindings keeps them; a new pad gets the game's defaults, written into the profile like at start.
+- In a race, the race's binding table was built at race start without the pad. The module appends the pad's bindings from the config to that table (what the game's own AddBinding writes for the last device), so the pad drives in the running race. Without a race the config is enough: the next race start builds the table with the pad.
+- The "all objects" tables (pause menu and dialogs) get the pad's menu entries the game's builder adds for every pad: buttons 0-3, the POV and the X/Y axis.
+- The log names every binding that was applied with the action and the pad's object id ("bindings for <pad> (id ...): the game's defaults added to the profile, 8 binding(s): Reset=..., Respawn=..., Accelerate=..., ..." and "race table +8, ... menu binding(s) in ... table(s)").
+
+Online-safe: these are the bindings the game itself gives the pad; no input is read, changed or sent. If any of the 14 code signatures per game differs, the bindings part stays off (logged) and the pad is registered as before.
 
 ### Xbox controllers
 
@@ -59,9 +69,9 @@ No change to input values, no injected input, no remapping, no blocking of the g
 
 ## Known limits
 
-- Bindings of a pad that is new to the game apply from the next race start, not in the race where it was plugged in.
+- Bindings are matched like the game does it: by device id. A pad that gets a new instance GUID (another USB port) counts as a new pad and gets the defaults, not the bindings of the same model on the old port.
+- Other profiles of the same game get the pad's defaults when the game loads them next time (as at every start).
 - Sunrise and Original are untested in game.
-- A pad that gets a new instance GUID after being plugged into another USB port counts as a new device and needs new bindings.
 - A pad DirectInput does not list at all (an XInput-only device) cannot be added: the games read DirectInput only, and turning XInput into DirectInput input would be input emulation, which the module does not do.
 
 ## Standalone build

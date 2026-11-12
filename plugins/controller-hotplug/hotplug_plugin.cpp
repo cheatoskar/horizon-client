@@ -23,7 +23,7 @@
 
 namespace {
 
-constexpr char kVersion[] = "1.1.0";
+constexpr char kVersion[] = "1.2.0";
 constexpr char kId[] = "controller-hotplug";
 constexpr char kName[] = "Controller fix";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
