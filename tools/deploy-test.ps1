@@ -1,6 +1,6 @@
 # Horizon Client 0.3.1 (release candidate) into my test folders, everything client-related in one go:
 #   - the three legacy test copies (ESWC, Sunrise, Original): host.dll, modules.json + icons, all our modules,
-#     the example scripts, the Legacy Loader (horizon\loader and dinput8.dll in the game folder if it changed),
+#     the example scripts, the Legacy Loader (horizon\loader; dinput8.dll in the game folder only if its size changed or with -Loader),
 #     and the TM Vibrant Shaders modules from the TMVS 1.6 / 2.0 release candidate (tmvs, tmvs-capture,
 #     tmvs-upscaling; tmvs-packs is Forever only and is moved out);
 #   - the TMLoader test product (tmloader-products\Horizon Host\0.3.1 + description.yaml) with all four TMVS modules.
@@ -13,6 +13,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\deploy-test.ps1 [-DryRun]
 param(
     [switch]$DryRun,
+    [switch]$Loader,
     [string]$Package = 'C:\Users\osaro\Downloads\TM-Horizon-Test\release-client-0.3.1-rc',
     [string]$Tmvs = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmvs-1.6-2.0-rc',
     [string]$Products = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmloader-products'
@@ -91,7 +92,8 @@ foreach ($c in $copies) {
     Remove-Path "$hz\loader"
     Copy-To "$st\loader" "$hz\loader"
     $loaderNote = 'loader unchanged'
-    if ((Test-Path "$dir\dinput8.dll") -and (Hash "$st\loader\dinput8.dll") -ne (Hash "$dir\dinput8.dll")) {
+    # the loader has not changed since 0.3.0; every build differs in its time stamp, so only a size change or -Loader replaces it
+    if ((Test-Path "$dir\dinput8.dll") -and ($Loader -or (Get-Item "$st\loader\dinput8.dll").Length -ne (Get-Item "$dir\dinput8.dll").Length)) {
         Copy-To "$st\loader\dinput8.dll" "$dir\dinput8.dll"
         $loaderNote = 'dinput8.dll updated'
     }
