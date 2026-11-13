@@ -1,7 +1,8 @@
 // Game settings (game-settings) - a Horizon Host module for TrackMania Nations ESWC 1.80, TrackMania Sunrise
 // (Win10 repack) and TrackMania Original (Online Patch v2 exe).
 //
-// Volume (the game's Windows audio session), Music and Sounds (the game's own volumes, heard at once) and the
+// Volume (the game's Windows audio session), Music (the game's own volume, heard at once; no Sounds slider, see
+// gs::soundsSliderSupported) and the
 // window mode (switched at once with the game's own StartFullscreen / StopFullscreen, between two frames) from
 // the menu. How and why: gs_game.h.
 //
@@ -24,7 +25,7 @@
 
 namespace {
 
-constexpr char kVersion[] = "1.1.0";
+constexpr char kVersion[] = "1.1.1";
 constexpr char kId[] = "game-settings";
 constexpr char kName[] = "Game settings";
 constexpr char kEswcSha[] = "983bd12724739dcb0f876aeb3a4259154b068940f5167f57ede750ca452d8068";
@@ -122,7 +123,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_CAP_MENU,
     HORIZON_FLAG_ONLINE_OK,
     "cheatoskar",
-    "Volume, music, sounds and window mode from the menu.",
+    "Volume, music and window mode from the menu.",
     HORIZON_ABI_MINOR,
 };
 
@@ -145,7 +146,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     host->log(host->plugin, HORIZON_LOG_INFO, "---- game-settings %s start, %s ----", kVersion, table->name);
     g_game = new gs::Game(table, gi->exe_base ? gi->exe_base : 0x400000, &logCb, nullptr);
     g_prefs.music = clampPct(host->get_int(host->plugin, "Music", -1));
-    g_prefs.sounds = clampPct(host->get_int(host->plugin, "Sounds", -1));
+    // no Sounds slider on these games (gs::soundsSliderSupported): a value saved by 1.1.0 stays unused
+    g_prefs.sounds = gs::soundsSliderSupported(table) ? clampPct(host->get_int(host->plugin, "Sounds", -1)) : -1;
     const int w = host->get_int(host->plugin, "WindowMode", -1);
     g_prefs.window = w == 0 || w == 1 ? w : -1;
     g_game->applyStart(g_prefs);
@@ -180,7 +182,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_DrawMenu(void) {
             g_host->log(g_host->plugin, HORIZON_LOG_INFO, "volume %d%%", pct);
     }
     volumeRow("Music", "##music", true);
-    volumeRow("Sounds", "##sounds", false);
+    if (gs::soundsSliderSupported(g_game->table())) volumeRow("Sounds", "##sounds", false);
 
     // Window mode: the game's own switch, between two frames
     ImGui::Separator();

@@ -102,6 +102,9 @@ static void tableTests() {
     check(gs::tableForTimestamp(0x5cc8f0cf) == &gs::sunriseTable(), "table: Sunrise by timestamp");
     check(gs::tableForTimestamp(0x5d337477) == &gs::originalTable(), "table: Original by timestamp");
     check(gs::tableForTimestamp(0x12345678) == nullptr, "table: unknown exe -> none");
+    check(!gs::soundsSliderSupported(&gs::eswcTable()) && !gs::soundsSliderSupported(&gs::sunriseTable()) &&
+          !gs::soundsSliderSupported(&gs::originalTable()),
+          "no Sounds slider: the games' options have Volume and Music only");
     check(gs::toPercent(0.0f) == 0 && gs::toPercent(1.0f) == 100 && gs::toPercent(0.555f) == 56 && gs::toPercent(-3.0f) == 0 &&
               gs::toPercent(7.0f) == 100,
           "percent: rounding and clamping");
