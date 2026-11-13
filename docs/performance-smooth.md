@@ -4,8 +4,8 @@ Goal: TrackMania Original, Sunrise, Nations ESWC (2006 engine) and Nations/Unite
 noticeably smoother, with OS-level and Present-side changes only (no game logic, no simulation timing, no input
 changes; Competition Patch on TMNF/TMUF must stay happy). TM2020 is out of scope.
 
-Status 2026-11-13: static analysis done, switches built and tested without the game. **No number in this file
-comes from the game yet**; the measurement plan is at the end.
+Status 2026-11-13: static analysis done, switches and the shader cache (2006 engine) built and tested without
+the game. **No number in this file comes from the game yet**; the measurement plan is at the end.
 
 ## 1. What the games do (static analysis)
 
@@ -61,7 +61,10 @@ to it (Horizon's `Present` callback runs on it).
 |---|---|
 | TMNF compiles HLSL at run time with `d3dx9_30!D3DXCompileShader` (one call site, `CompileInternal` 0x008deaf0). `CPlugGpuCompileCache::CacheOrCompileHR` (0x008deff0) is no cache in this build: it always compiles. | verified |
 | The compile runs when a shader is **bound the first time**: `CDx9ShaderKeeper::Undirty` (virtual, 0x00970a60) and `CDx9PixelShader::UndirtyAndSetPixelShader` call `CDx9PixelShader::Compile`. Nothing walks all materials at map load to compile them. | verified (call chain); hitch size inferred |
-| 2006 engine: D3DX is linked into the exe (D3DX error strings, HLSL compiler messages, shader profile table at ESWC 0x0073cac8); the compile function (ESWC 0x00580a40, log "Compilation of EntryPoint ...") is reached from a large virtual function next to the Dx9 viewport code (0x007e8ce0), the same shape as TMNF's `Undirty`. | verified (strings, call), inferred (that it is the bind-time path) |
+| 2006 engine: D3DX is linked into the exe (no `d3dx9_*.dll` import; D3DX error strings, HLSL compiler messages). The shader's compile method (ESWC 0x00581220, Sunrise 0x00703620, Original 0x007028a0; called only through two shader vtables, via the thunk ESWC 0x0051aa50; logs "Compilation of EntryPoint ... failed") builds the defines (the shader's own plus `DGbxVersion`) and an include handler, then tries the profiles from the highest the device supports down (vs_1_1..vs_3_0 / ps_1_1..ps_3_0), one `D3DXCompileShader` call per profile until one compiles. On success it copies the bytecode into the shader (ESWC +0xb4 dword count, +0xb8 data), keeps the constant table and releases the error buffer unread. ESWC 0x00580a40 (named the compile function in an earlier version of this file) runs after it: samplers, semantics and constants read from the bytecode; it calls `D3DXGetShaderConstantTable` itself when the shader has no table. | verified (ESWC decompiled; Sunrise and Original compared instruction by instruction: same code, other field offsets) |
+| `D3DXCompileShader` (static D3DX, one call site in each exe): ESWC 0x0087aa6b, Sunrise 0x008e3292, Original 0x008dfd8f. `D3DXCreateBuffer`: 0x008a110e / 0x00915f23 / 0x00912a24. `D3DXGetShaderConstantTable`: 0x0087b669 / 0x008e3e90 / 0x008e098d. The three functions are byte-identical across the exes apart from call distances and start with the 5-byte hot-patch prologue `8b ff 55 8b ec`. The compiler makes its constant table with `D3DXGetShaderConstantTable` on its own output buffer. | verified |
+| Include handler (ESWC vtable 0x00ae3ea8: Open 0x005803f0, Close 0x00580740; same code in Sunrise 0x00702780 and Original 0x00701a00): system includes (`<Common.VHlsl.txt>`, `<Common.PHlsl.txt>`) return a copy of text the engine holds in memory; local includes (`"..."`) load a file through the engine's file system and add it to the shader's dependency list. | verified |
+| The Dx9 viewport installs three callbacks the compile method calls (ESWC writes at 0x007d2f40): before the compile 0x007e9050 (compile flags; returning 0 skips the compile), the profile check 0x007e92d0, after the compile 0x007e93a0 (creates the D3D shader). | verified (writes, call sites), inferred (roles) |
 | Textures: `CDx9TextureKeeper::Undirty` -> `UpLoadTexture` uploads on first use; `TextureMemoryMipFree` drops big mip levels when the video-memory budget is exceeded and they come back later. | verified (names), inferred (that this hitches in a race) |
 | Map load: `CSystemArchiveNod::LoadResource`, lightmap precalc and resource loading run synchronously on the game thread; scene resources are loaded when a corpus enters the scene (`OnEnterScene` -> `LoadResourceCorpus`) and zones every `RenderFrameBegin` (`LoadResourceZone`). | verified (call sites), inferred (order) |
 
@@ -72,9 +75,10 @@ to it (Horizon's `Present` callback runs on it).
 2. **Scheduling**: everything that matters runs on one thread. Pinning that thread to performance cores and
    giving it MMCSS "Games" scheduling targets exactly the code that makes the frame.
 3. **GPU wait**: the engine already limits render-ahead (GpuSync); Horizon does not add one.
-4. **First-use hitches**: shaders compile when first bound. A safe warm-up from outside the engine is not
-   possible: the compile is engine code (and on TMNF an import Horizon may not hook while the Competition Patch
-   rules apply). Only a plan, see section 2, "Shader and texture warm-up".
+4. **First-use hitches**: shaders compile when first bound. On ESWC, Sunrise and Original the compile result
+   can be kept on disk (section 2, "Shader cache"), so a map compiles nothing the second time. A warm-up at map
+   load is not built (it needs engine calls with a valid render state). TMNF/TMUF: nothing (the compile is an
+   import Horizon may not hook while the Competition Patch rules apply).
 5. Sunrise's measured stutters with Horizon idle (about 700 per 30 s at 75-100 fps) do not come from a sleep in
    the loop (Sunrise has none while the window is in front). Candidates: the GPU wait after `Present`, the
    repack's own `d3d9.dll` (dgVoodoo) present path, and scheduling (the game thread moved between cores or
@@ -85,15 +89,17 @@ to it (Horizon's `Present` callback runs on it).
 
 A section "Smoothing" on the module page, under the Smooth / Low latency / Custom choice. Each switch is
 independent of that choice (no preset turns one on), **off by default**, saved in `performance.json`, and
-writes one line to the Horizon log when it is applied or removed (`smoothing: ...`). Nothing of it touches game
-code, game memory, Direct3D or input: only Windows scheduling and timer calls, so the Competition Patch rules
-(TMNF/TMUF) and online play are not affected.
+writes one line to the Horizon log when it is applied or removed (`smoothing: ...`). The three scheduling switches
+touch no game code, game memory, Direct3D or input: only Windows scheduling and timer calls, so the Competition
+Patch rules (TMNF/TMUF) and online play are not affected. The shader cache (2006 engine only) hooks one D3DX
+function in the exe; see "Shader cache" below.
 
 | Switch (key) | What it does | Games | Log line |
 |---|---|---|---|
 | **Pin thread** (`thread_cores`) | `SetThreadSelectedCpuSets` for the game thread (the one calling `Present`) with the CPU sets of the highest `EfficiencyClass` (`GetSystemCpuSetInformation`). A soft pin: Windows prefers these cores but may still use others under load. CPUs with one efficiency class: nothing changes. Off clears the thread's CPU sets. | all | `game thread <id> on performance cores: 8 of 20 CPU sets` / `no hybrid CPU: unchanged` |
 | **Timer 1 ms** (`timer_1ms`) | `timeBeginPeriod(1)` while on, `timeEndPeriod(1)` when off or at exit; also switches power throttling off for the process (EcoQoS and Windows 11's "ignore the timer request of a hidden window", the same call as "No power throttling"). | ESWC and Original (they never ask, section 1); on TMNF/TMUF/Sunrise it repeats what the game did | `timer 1 ms on, power throttling off (timer now 1.00 ms)` |
 | **MMCSS** (`mmcss`) | `AvSetMmThreadCharacteristicsW(L"Games")` on the game thread (applied from Horizon's `Present` callback, because only the thread itself can join and leave), `AvRevertMmThreadCharacteristics` when off. | all | `MMCSS on for the game thread, task Games` |
+| **Shader cache** (`shader_cache`) | Compiled shaders on disk, so a map compiles nothing the second time (below). Not a benchmark-series option: a filled cache cannot be switched off for one window. | ESWC, Sunrise, Original (not shown on TMNF/TMUF) | `shader cache: on for ...`, then per map `shader cache: <map>: N hits, M misses ...` |
 
 Notes:
 - **Pin thread vs. "CPU cores: P-cores"** (Custom): the older option sets the affinity of the whole process (hard,
@@ -111,25 +117,61 @@ Notes:
   plugin and all three switches on (`tests\run_perf_tests.cmd`, "smoothing switches": the three log lines). My
   test PC has no hybrid CPU, so the pin itself has not run on one yet.
 
-### Shader and texture warm-up (plan only, not built)
+### Shader cache (2006 engine)
 
-Why not now: the stall is in the engine's own compile (`D3DXCompileShader` on TMNF, the D3DX compiler linked into
-the 2006 exes), which runs when a material is bound the first time. Nothing at the Direct3D level can do that
-work earlier: `CreatePixelShader` only receives the finished bytecode. Warming up therefore needs engine calls or
-a hook in the compile path:
+Switch **Shader cache** (`shader_cache`, off by default) in the Smoothing section, only on ESWC, Sunrise and
+Original. Files: `horizon\data\performance\shadercache\<eswc|sunrise|original>\<sha256>.bin`, one per compile
+result (a few KB each). Deleting the folder clears the cache.
 
-1. **2006 engine (ESWC/Sunrise/Original, no Competition Patch)**: hook the exe's compile function (ESWC
-   0x00580a40) and keep a disk cache `horizon\data\performance\shaders\<sha1 of source+defines+target>.bin` of
-   the compiled bytecode and constant table. Second start onward: no compile at all. Risk: medium (inline hook
-   per exe build, constant-table object must be rebuilt from the cache). Gain: only the first-bind hitches, which
-   have not been measured yet.
-2. **Warm-up at map load**: during the loading screen, walk the scene's materials (`CHmsViewport` corpus list,
-   `CDx9ShaderKeeper`) and call the keeper's `Undirty` once each. Needs engine calls with the right render state;
-   a wrong state can crash the device. Not before (1) and a measurement that shows the hitches.
-3. **TMNF/TMUF**: none of this while the Competition Patch rules apply (no hooks in the exe or its imports).
+How it works (`plugins/performance/shadercache.cpp`):
 
-First step instead: measure. The hang log and the frame-time CSV show first-lap spikes; the plan in section 4
-compares lap 1 with lap 2 of the same route. If lap 2 is clean and lap 1 is not, (1) is worth building.
+1. When the switch is first on, the plugin picks the exe's address table by PE timestamp and compares the start of
+   `D3DXCompileShader`, `D3DXCreateBuffer` and `D3DXGetShaderConstantTable` (each up to its first relative call,
+   23 to 32 bytes) with the expected bytes. Any difference (another build, or another mod hooked the function):
+   one log line `shader cache: off, D3DXCompileShader at 0x0087aa6b has other bytes ...` and nothing is written.
+   Then the 5-byte hot-patch prologue of `D3DXCompileShader` becomes a jump; the trampoline runs the same 5 bytes
+   and jumps back. The plugin DLL is pinned while the hook exists; switching off makes the hook a pass-through,
+   quitting the game puts the 5 bytes back.
+2. Every call: key = SHA-256 over the format version, the exe build (game and PE timestamp), the source text, the
+   defines (name and value, in order), entry point, profile and flags.
+3. **Hit** (file there and valid): the bytecode goes into a buffer from the exe's own `D3DXCreateBuffer`, the
+   constant table comes from the exe's own `D3DXGetShaderConstantTable` on that buffer (what the compiler does with
+   its output), no error buffer, the stored result code. The engine gets the bytes its compiler made.
+4. **Miss**: the normal compile, with the include handler wrapped to see what it opens. Stored when the result is
+   valid bytecode (version token matching vs/ps, end token), or a compile error (`E_FAIL`: the profile does not
+   fit the shader and the engine tries the next one; the error text is stored and handed back the same way).
+
+Safety checks; on any failure the normal compile runs and the file is written again:
+
+- File: magic, format version (another version is a miss), the key inside equals the key asked for, sizes, a
+  SHA-256 of the payload, bytecode tokens and the shader type matching the profile.
+- System includes (`<Common.PHlsl.txt>` ...) are opened again through the engine's handler at every hit and
+  compared by SHA-256: a mod that changes them makes the entry unusable.
+- A compile that opened a local include (`"..."`) is never stored: the engine records that file as a dependency
+  of the shader, and a hit would skip it.
+- A D3DX call on the hit path fails: nothing is handed out, the normal compile runs.
+- Files are written under a temporary name and renamed: no half-written file after a crash.
+
+Log: one line per map, written when the next map loads or the game is back in the menu, e.g.
+`shader cache: A01-Race: 0 hits, N misses (N stored), compile T ms, cache 0 ms`; the second run of the same map
+should read `N hits, 0 misses (0 stored)` and a cache time far below T. Shaders compiled in the menu and while loading are counted
+under `menu and loading`. At most 8 lines per start about single files (`shader cache: 1a2b3c4d5e6f not used (an
+include changed), compiled again`). The page shows the current count ("Now: N from cache, 0 compiled").
+
+Tests without the game (`tests\run_perf_tests.cmd`, unit part): keys (every input changes the key), files (round
+trip, truncated, damaged byte, wrong magic, other format version, wrong key, not bytecode), and the hook itself on
+stand-ins with the same prologue: miss, hit with identical bytes and a new constant table, compile errors, a changed
+system include, a local include, damaged and old files, pass-through, the bytes restored, no buffer leaked. Refused
+on wrong bytes and on an unmapped address. **Not run in the game yet.**
+
+Not covered: texture uploads on first use, and the driver's own work in `CreateVertexShader`/`CreatePixelShader`
+(the bytecode still goes to the driver; usually small).
+
+**Warm-up at map load: not built.** The compile runs when the engine binds a material the first time (the shader
+keeper's `Undirty`). Compiling earlier means walking the scene's materials during the loading screen and calling the
+engine's bind path with a valid render state; a wrong state can crash the device. With the disk cache the second run
+has nothing left to warm up, so the risk buys only the first run of a new map. TMNF/TMUF: nothing of this while the
+Competition Patch rules apply (no hooks in the exe or its imports).
 
 ## 3. DXVK (feasibility, doc only)
 
@@ -213,9 +255,12 @@ label `native` / `dxvk`), three starts each, alternating (native, dxvk, native, 
 installed here; official console build from GameTechDev/PresentMon) for the present-to-display view the module
 cannot see: `PresentMon --process_name <exe> --timed 60 --output_file <label>.csv`.
 
-**First-lap hitches** (decides whether the shader cache plan is worth building): baseline, fresh game start, play
-the replay and "Save last 60 s" after the first 60 s and again after the second pass of the same 60 s. Spikes only
-in the first file = first-use compiles/uploads.
+**First-lap hitches and the shader cache** (ESWC, Sunrise, Original): switch "Shader cache" on, delete
+`horizon\data\performance\shadercache\<game>\`, start the game, play the replay and "Save last 60 s" after the first
+60 s; back to the menu (the log gets `shader cache: <map>: 0 hits, N misses`), play the same replay again and save
+again (the log should get `N hits, 0 misses`). Then a fresh game start with the cache filled: first pass already
+`N hits`. Spikes in the first file that are gone in the later ones = shader compiles; spikes left in every file =
+texture uploads or something else.
 
 **Before each series:** game window in front, same resolution and game settings, nothing else running (a browser
 asks for a 1 ms timer itself and hides the timer effect), laptop on mains power. Note CPU (hybrid or not), GPU,

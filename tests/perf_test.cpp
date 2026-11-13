@@ -1,6 +1,7 @@
 // Tests of the Horizon Performance plugin without a game.
 //
-//   perf_test unit                         statistics, limiter maths, state cache, benchmark request, files
+//   perf_test unit                         statistics, limiter maths, state cache, benchmark request, files,
+//                                          shader cache (keys, files, the hook on stand-ins for the exe's D3DX)
 //   perf_test host <dir> <out.txt> [shot.png] [stall]
 //       The real host (test mode) with the performance plugin installed in <dir>, a D3D9 device made like the
 //       game's (HAL, mixed vertex processing), 150 frames of a test scene with repeated states, locks and an
@@ -16,12 +17,15 @@
 #include <wincodec.h>
 
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "../plugins/performance/perf_core.h"
 #include "../plugins/performance/series.h"
+#include "../plugins/performance/shadercache.h"
 #include "common/json.h"
 
 static int g_failed = 0, g_passed = 0;
@@ -488,6 +492,399 @@ static void testSkipAndStart() {
     CHECK(ticks == 20 + 200 + 100); // settle 0.2 s + 2 s skipped + 1 s window
 }
 
+static std::string readAll(const std::wstring& path);
+
+// ------------------------------------------------------------------ shader cache
+// Keys and files, then the real hook on stand-ins for the exe's D3DX functions: D3DXCompileShader with the
+// same hot-patch prologue (8b ff 55 8b ec), D3DXCreateBuffer, D3DXGetShaderConstantTable, an include handler.
+namespace sc = perf::shadercache;
+
+static std::string scFile(const sc::Key& k, uint32_t kind, int32_t hr, const std::string& payload) {
+    sc::Entry e;
+    e.kind = kind;
+    e.hr = hr;
+    e.payload = payload;
+    return sc::serialize(k, e);
+}
+static std::string scBytecode(uint32_t version, uint32_t salt) {
+    const uint32_t words[] = {version, 0x0000fffeu, salt, 0x01000002u, 0x0000ffffu};
+    return std::string(reinterpret_cast<const char*>(words), sizeof(words));
+}
+
+static void testShaderCacheFiles() {
+    const char* src = "float4 main() : COLOR { return 1; }";
+    const sc::Macro defs[] = {{"A", "1"}, {"DGbxVersion", "2"}, {nullptr, nullptr}};
+    sc::Key k1, k2;
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs, "main", "ps_2_0", 0, &k1));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs, "main", "ps_2_0", 0, &k2) && k1 == k2);
+    CHECK(sc::keyHex(k1).size() == 64 && sc::keyHex(k1) == sc::keyHex(k2));
+    // every input changes the key
+    std::string other = src;
+    other[20] = 'X';
+    CHECK(sc::makeKey("eswc-5ce7272f", other.c_str(), 36, defs, "main", "ps_2_0", 0, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 35, defs, "main", "ps_2_0", 0, &k2) && !(k1 == k2));
+    const sc::Macro defs2[] = {{"A", "2"}, {"DGbxVersion", "2"}, {nullptr, nullptr}};
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs2, "main", "ps_2_0", 0, &k2) && !(k1 == k2));
+    const sc::Macro defs3[] = {{"A", nullptr}, {"DGbxVersion", "2"}, {nullptr, nullptr}};
+    const sc::Macro defs4[] = {{"A", ""}, {"DGbxVersion", "2"}, {nullptr, nullptr}};
+    sc::Key k3, k4;
+    CHECK(sc::makeKey("x", src, 36, defs3, "main", "ps_2_0", 0, &k3) && sc::makeKey("x", src, 36, defs4, "main", "ps_2_0", 0, &k4) && !(k3 == k4));
+    const sc::Macro swapped[] = {{"DGbxVersion", "2"}, {"A", "1"}, {nullptr, nullptr}};
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, swapped, "main", "ps_2_0", 0, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs, "psMain", "ps_2_0", 0, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs, "main", "ps_2_a", 0, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, defs, "main", "ps_2_0", 0x800, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("sunrise-5cc8f0cf", src, 36, defs, "main", "ps_2_0", 0, &k2) && !(k1 == k2));
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, nullptr, "main", "ps_2_0", 0, &k3));
+    const sc::Macro none[] = {{nullptr, nullptr}};
+    CHECK(sc::makeKey("eswc-5ce7272f", src, 36, none, "main", "ps_2_0", 0, &k4) && k3 == k4); // no defines either way
+    CHECK(!sc::makeKey("eswc", nullptr, 0, nullptr, "main", "ps_2_0", 0, &k2));
+
+    // bytecode sanity
+    const std::string ps = scBytecode(0xffff0200u, 7), vs = scBytecode(0xfffe0101u, 7);
+    CHECK(sc::bytecodeLooksValid(ps.data(), ps.size(), "ps_2_0") && !sc::bytecodeLooksValid(ps.data(), ps.size(), "vs_1_1"));
+    CHECK(sc::bytecodeLooksValid(vs.data(), vs.size(), "vs_1_1") && sc::bytecodeLooksValid(vs.data(), vs.size(), nullptr));
+    CHECK(!sc::bytecodeLooksValid(ps.data(), ps.size() - 4, nullptr)); // no end token
+    CHECK(!sc::bytecodeLooksValid(ps.data(), ps.size() - 1, nullptr)); // not whole tokens
+    CHECK(!sc::bytecodeLooksValid("abcdefgh", 8, nullptr));
+
+    // files: round trip, then every kind of damage is refused
+    sc::Entry e;
+    e.kind = sc::KindBytecode;
+    e.payload = ps;
+    sc::Include inc;
+    inc.type = 1;
+    inc.name = "Common.PHlsl.txt";
+    sc::sha256("abc", 3, inc.sha);
+    e.includes.push_back(inc);
+    const std::string f = sc::serialize(k1, e);
+    sc::Entry back;
+    CHECK(sc::parse(f, k1, &back) == sc::Read::Ok && back.payload == ps && back.kind == sc::KindBytecode && back.hr == 0);
+    CHECK(back.includes.size() == 1 && back.includes[0].name == "Common.PHlsl.txt" && !memcmp(back.includes[0].sha, inc.sha, 32));
+    CHECK(sc::parse(f, k2, nullptr) == sc::Read::WrongKey);                       // renamed / other key
+    CHECK(sc::parse(f.substr(0, f.size() - 1), k1, nullptr) == sc::Read::Truncated);
+    CHECK(sc::parse(f.substr(0, 30), k1, nullptr) == sc::Read::Truncated);
+    CHECK(sc::parse(f + "x", k1, nullptr) == sc::Read::BadHash);
+    std::string bad = f;
+    bad[bad.size() - 9] ^= 0x40; // a byte inside the bytecode
+    CHECK(sc::parse(bad, k1, nullptr) == sc::Read::BadHash);
+    bad = f;
+    bad[0] = 'X';
+    CHECK(sc::parse(bad, k1, nullptr) == sc::Read::BadMagic);
+    CHECK(sc::parse("", k1, nullptr) == sc::Read::BadMagic);
+    bad = f;
+    bad[4] = static_cast<char>(sc::kFormat + 1); // version change: an older or newer plugin wrote it
+    CHECK(sc::parse(bad, k1, nullptr) == sc::Read::OtherFormat);
+    CHECK(sc::parse(scFile(k1, sc::KindBytecode, 0, "not bytecode"), k1, nullptr) == sc::Read::BadBytecode);
+    CHECK(sc::parse(scFile(k1, sc::KindFailed, 0, "err"), k1, nullptr) == sc::Read::BadBytecode); // failure with S_OK
+    CHECK(sc::parse(scFile(k1, sc::KindFailed, E_FAIL, std::string("error X3000\0", 12)), k1, &back) == sc::Read::Ok &&
+          back.hr == E_FAIL && back.payload.size() == 12);
+
+    // the three exes, nothing else (TMNF/TMUF timestamps included)
+    const sc::Spec* s = sc::specFor(0x5ce7272f);
+    CHECK(s && !strcmp(s->game, "eswc") && s->compile == 0x0087aa6b && s->createBuffer == 0x008a110e && s->constantTable == 0x0087b669);
+    s = sc::specFor(0x5cc8f0cf);
+    CHECK(s && !strcmp(s->game, "sunrise") && s->compile == 0x008e3292);
+    s = sc::specFor(0x5d337477);
+    CHECK(s && !strcmp(s->game, "original") && s->compile == 0x008dfd8f);
+    CHECK(!sc::specFor(0x4d431494) && !sc::specFor(0x4b9e8add) && !sc::specFor(0));
+}
+
+// ---- stand-ins for the exe's D3DX
+struct FakeObj {
+    void** vtbl;
+    LONG refs;
+    std::vector<uint8_t> data;
+};
+static LONG g_fakeAlive = 0;
+static int g_fakeCompiles = 0, g_fakeTables = 0;
+static HRESULT WINAPI foQI(void*, const IID&, void** pp) {
+    *pp = nullptr;
+    return E_NOINTERFACE;
+}
+static ULONG WINAPI foAddRef(void* s) { return static_cast<ULONG>(++static_cast<FakeObj*>(s)->refs); }
+static ULONG WINAPI foRelease(void* s) {
+    FakeObj* o = static_cast<FakeObj*>(s);
+    const LONG r = --o->refs;
+    if (r == 0) {
+        delete o;
+        g_fakeAlive--;
+    }
+    return static_cast<ULONG>(r);
+}
+static void* WINAPI foPtr(void* s) { return static_cast<FakeObj*>(s)->data.data(); }
+static DWORD WINAPI foSize(void* s) { return static_cast<DWORD>(static_cast<FakeObj*>(s)->data.size()); }
+static void* g_foVtbl[5] = {reinterpret_cast<void*>(&foQI), reinterpret_cast<void*>(&foAddRef), reinterpret_cast<void*>(&foRelease),
+                            reinterpret_cast<void*>(&foPtr), reinterpret_cast<void*>(&foSize)};
+static FakeObj* newObj(size_t n) {
+    g_fakeAlive++;
+    return new FakeObj{g_foVtbl, 1, std::vector<uint8_t>(n)};
+}
+static HRESULT WINAPI fakeCreateBuffer(DWORD n, void** pp) {
+    if (!pp) return D3DERR_INVALIDCALL;
+    *pp = newObj(n);
+    return S_OK;
+}
+static HRESULT WINAPI fakeGetTable(const DWORD* code, void** pp) {
+    if (!code || !pp) return D3DERR_INVALIDCALL;
+    FakeObj* t = newObj(8);
+    memcpy(t->data.data(), code, 8);
+    g_fakeTables++;
+    *pp = t;
+    return S_OK;
+}
+struct FakeInc {
+    void** vtbl;
+    std::string sys, local;
+    int opens;
+};
+static HRESULT WINAPI fiOpen(void* self, UINT type, const char*, const void*, const void** ppData, UINT* pBytes) {
+    FakeInc* i = static_cast<FakeInc*>(self);
+    i->opens++;
+    const std::string& t = type == 1 ? i->sys : i->local;
+    *ppData = t.data();
+    *pBytes = static_cast<UINT>(t.size());
+    return S_OK;
+}
+static HRESULT WINAPI fiClose(void*, const void*) { return S_OK; }
+static void* g_fiVtbl[2] = {reinterpret_cast<void*>(&fiOpen), reinterpret_cast<void*>(&fiClose)};
+
+using FakeCompileFn = HRESULT(WINAPI*)(const char*, UINT, const sc::Macro*, void*, const char*, const char*, DWORD, void**, void**, void**);
+using IncOpen = HRESULT(WINAPI*)(void*, UINT, const char*, const void*, const void**, UINT*);
+
+// "Compiles": the bytecode depends on the source, the defines and the system include's text; "ERROR" in the source fails.
+static HRESULT WINAPI fakeCompileImpl(const char* src, UINT len, const sc::Macro* defs, void* include, const char*, const char* profile, DWORD,
+                                      void** ppShader, void** ppErr, void** ppTable) {
+    g_fakeCompiles++;
+    if (ppShader) *ppShader = nullptr;
+    if (ppTable) *ppTable = nullptr;
+    if (ppErr) *ppErr = nullptr;
+    uint32_t salt = 2166136261u;
+    for (UINT i = 0; i < len; i++) salt = (salt ^ static_cast<uint8_t>(src[i])) * 16777619u;
+    for (int i = 0; defs && defs[i].name; i++)
+        for (const char* c = defs[i].definition; c && *c; c++) salt = (salt ^ static_cast<uint8_t>(*c)) * 16777619u;
+    const std::string s(src, len);
+    if (include && s.find("#include <") != std::string::npos) {
+        const void* d = nullptr;
+        UINT n = 0;
+        reinterpret_cast<IncOpen>((*static_cast<void***>(include))[0])(include, 1, "Common.PHlsl.txt", nullptr, &d, &n);
+        for (UINT i = 0; i < n; i++) salt = (salt ^ static_cast<const uint8_t*>(d)[i]) * 16777619u;
+    }
+    if (include && s.find("#include \"") != std::string::npos) {
+        const void* d = nullptr;
+        UINT n = 0;
+        reinterpret_cast<IncOpen>((*static_cast<void***>(include))[0])(include, 0, "local.txt", nullptr, &d, &n);
+    }
+    if (s.find("ERROR") != std::string::npos) {
+        static const char msg[] = "error X3000: syntax error";
+        FakeObj* e = newObj(sizeof(msg));
+        memcpy(e->data.data(), msg, sizeof(msg));
+        if (ppErr) *ppErr = e;
+        else foRelease(e);
+        return E_FAIL;
+    }
+    const std::string code = scBytecode(profile && profile[0] == 'v' ? 0xfffe0101u : 0xffff0200u, salt);
+    FakeObj* b = newObj(code.size());
+    memcpy(b->data.data(), code.data(), code.size());
+    if (ppTable) fakeGetTable(reinterpret_cast<const DWORD*>(b->data.data()), ppTable);
+    if (ppShader) *ppShader = b;
+    else foRelease(b);
+    return S_OK;
+}
+// the D3DX hot-patch prologue, then on into the C++ body (the stack is as at the entry again)
+__declspec(naked) static void fakeCompileEntry() {
+    __asm {
+        _emit 0x8b
+        _emit 0xff
+        _emit 0x55
+        _emit 0x8b
+        _emit 0xec
+        pop ebp
+        jmp fakeCompileImpl
+    }
+}
+static uint8_t* followJump(void* f) { // incremental linking puts a jmp stub in front of functions
+    uint8_t* p = static_cast<uint8_t*>(f);
+    while (p[0] == 0xe9) p = p + 5 + *reinterpret_cast<int32_t*>(p + 1);
+    return p;
+}
+static std::string hexOf(const uint8_t* p, size_t n) {
+    std::string s;
+    char b[3];
+    for (size_t i = 0; i < n; i++) {
+        snprintf(b, sizeof(b), "%02x", p[i]);
+        s += b;
+    }
+    return s;
+}
+static std::vector<std::string> g_scLog;
+static void scTestLog(int, const char* fmt, ...) {
+    char b[600];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    g_scLog.push_back(b);
+}
+static bool scLogHas(const char* what) {
+    for (const std::string& l : g_scLog)
+        if (l.find(what) != std::string::npos) return true;
+    return false;
+}
+struct ScOut {
+    HRESULT hr = 0;
+    void *shader = nullptr, *err = nullptr, *table = nullptr;
+    std::string bytes() const { return shader ? std::string(static_cast<const char*>(foPtr(shader)), foSize(shader)) : std::string(); }
+    std::string errText() const { return err ? std::string(static_cast<const char*>(foPtr(err))) : std::string(); }
+    void release() {
+        if (shader) foRelease(shader);
+        if (err) foRelease(err);
+        if (table) foRelease(table);
+        shader = err = table = nullptr;
+    }
+};
+static ScOut scCall(FakeCompileFn f, const char* src, const sc::Macro* defs, void* inc, const char* profile = "ps_2_0") {
+    ScOut o;
+    o.hr = f(src, static_cast<UINT>(strlen(src)), defs, inc, "psMain", profile, 0, &o.shader, &o.err, &o.table);
+    return o;
+}
+
+static void testShaderCacheHook() {
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    wchar_t dirName[64];
+    swprintf_s(dirName, L"hzsc_test_%lu\\", GetCurrentProcessId());
+    const std::wstring dir = std::wstring(tmp) + dirName + L"eswc\\";
+
+    uint8_t* entry = followJump(reinterpret_cast<void*>(&fakeCompileEntry));
+    uint8_t* createBuffer = followJump(reinterpret_cast<void*>(&fakeCreateBuffer));
+    uint8_t* getTable = followJump(reinterpret_cast<void*>(&fakeGetTable));
+    CHECK(!memcmp(entry, "\x8b\xff\x55\x8b\xec", 5));
+    const std::string cbHex = hexOf(createBuffer, 8), tHex = hexOf(getTable, 8);
+    sc::Spec spec = {"eswc", "test exe", 1, reinterpret_cast<uintptr_t>(entry), "8bff558bec5d",
+                     reinterpret_cast<uintptr_t>(createBuffer), cbHex.c_str(), reinterpret_cast<uintptr_t>(getTable), tHex.c_str()};
+    sc::Config cfg;
+    cfg.folder = dir;
+    cfg.exeId = "test";
+    cfg.log = &scTestLog;
+
+    // refused: other bytes at an address, an unmapped address; nothing is changed then
+    sc::Spec wrong = spec;
+    wrong.compile = reinterpret_cast<uintptr_t>(createBuffer);
+    CHECK(!sc::install(wrong, cfg) && !sc::installed() && sc::refusedWhy()[0] && scLogHas("has other bytes"));
+    wrong = spec;
+    wrong.constantTable = 0x10;
+    CHECK(!sc::install(wrong, cfg) && !sc::installed());
+    CHECK(!memcmp(entry, "\x8b\xff\x55\x8b\xec", 5));
+
+    CHECK(sc::install(spec, cfg) && sc::installed() && !sc::refusedWhy()[0] && entry[0] == 0xe9);
+    sc::setActive(true);
+    volatile FakeCompileFn vf = reinterpret_cast<FakeCompileFn>(reinterpret_cast<void*>(&fakeCompileEntry));
+    const FakeCompileFn f = vf;
+    const sc::Macro defs[] = {{"DGbxVersion", "2"}, {nullptr, nullptr}};
+    const sc::Macro defs2[] = {{"DGbxVersion", "3"}, {nullptr, nullptr}};
+    FakeInc inc = {g_fiVtbl, "common v1", "local", 0};
+    sc::take();
+
+    // miss, then a hit with the same bytes, a fresh constant table and no error buffer
+    ScOut a = scCall(f, "shader A", defs, &inc);
+    CHECK(a.hr == S_OK && g_fakeCompiles == 1 && a.table);
+    sc::Stats st = sc::peek();
+    CHECK(st.misses == 1 && st.stored == 1 && st.hits == 0);
+    ScOut a2 = scCall(f, "shader A", defs, &inc);
+    CHECK(a2.hr == S_OK && g_fakeCompiles == 1 && a2.bytes() == a.bytes() && a2.table && !a2.err);
+    CHECK(sc::peek().hits == 1 && g_fakeTables == 2);
+    // other define or other profile: compiled
+    ScOut b = scCall(f, "shader A", defs2, &inc);
+    CHECK(g_fakeCompiles == 2 && b.bytes() != a.bytes());
+    ScOut v = scCall(f, "shader A", defs, &inc, "vs_1_1");
+    CHECK(g_fakeCompiles == 3 && v.hr == S_OK);
+
+    // a compile error is kept too (the engine then tries the next profile): same result, same error text
+    ScOut e1 = scCall(f, "ERROR here", defs, &inc);
+    ScOut e2 = scCall(f, "ERROR here", defs, &inc);
+    CHECK(e1.hr == E_FAIL && e2.hr == E_FAIL && g_fakeCompiles == 4 && !e2.shader && !e2.table && e2.errText() == e1.errText() &&
+          e2.errText() == "error X3000: syntax error");
+
+    // a system include: checked again on every hit; when its text changes the shader is compiled again
+    ScOut i1 = scCall(f, "#include <Common.PHlsl.txt>\nshader I", defs, &inc);
+    const int opensAfterMiss = inc.opens;
+    ScOut i2 = scCall(f, "#include <Common.PHlsl.txt>\nshader I", defs, &inc);
+    CHECK(g_fakeCompiles == 5 && i2.bytes() == i1.bytes() && inc.opens == opensAfterMiss + 1);
+    inc.sys = "common v2";
+    ScOut i3 = scCall(f, "#include <Common.PHlsl.txt>\nshader I", defs, &inc);
+    CHECK(g_fakeCompiles == 6 && i3.bytes() != i1.bytes() && sc::peek().fallbacks == 1 && scLogHas("an include changed"));
+    ScOut i4 = scCall(f, "#include <Common.PHlsl.txt>\nshader I", defs, &inc);
+    CHECK(g_fakeCompiles == 6 && i4.bytes() == i3.bytes());
+    // without the include handler at a hit: not used
+    ScOut i5 = scCall(f, "#include <Common.PHlsl.txt>\nshader I", defs, nullptr);
+    CHECK(g_fakeCompiles == 7);
+
+    // a local include (the engine notes the file as a dependency): never cached
+    ScOut l1 = scCall(f, "#include \"local.txt\"\nshader L", defs, &inc);
+    ScOut l2 = scCall(f, "#include \"local.txt\"\nshader L", defs, &inc);
+    CHECK(g_fakeCompiles == 9 && l2.bytes() == l1.bytes() && sc::peek().notCached >= 2);
+
+    // damaged file and a file of another format version: compiled again and rewritten, then a hit again
+    sc::Key key;
+    CHECK(sc::makeKey("test", "shader A", 8, defs, "psMain", "ps_2_0", 0, &key));
+    const std::string hex = sc::keyHex(key);
+    const std::wstring path = dir + std::wstring(hex.begin(), hex.end()) + L".bin";
+    std::string file = readAll(path);
+    CHECK(!file.empty());
+    {
+        FILE* w = _wfopen(path.c_str(), L"wb");
+        if (w) {
+            fwrite("garbage", 1, 7, w);
+            fclose(w);
+        }
+    }
+    ScOut c1 = scCall(f, "shader A", defs, &inc);
+    CHECK(g_fakeCompiles == 10 && c1.bytes() == a.bytes() && scLogHas("not a cache file"));
+    ScOut c2 = scCall(f, "shader A", defs, &inc);
+    CHECK(g_fakeCompiles == 10 && c2.bytes() == a.bytes());
+    file = readAll(path);
+    file[4] = static_cast<char>(sc::kFormat + 1);
+    {
+        FILE* w = _wfopen(path.c_str(), L"wb");
+        if (w) {
+            fwrite(file.data(), 1, file.size(), w);
+            fclose(w);
+        }
+    }
+    ScOut c3 = scCall(f, "shader A", defs, &inc);
+    CHECK(g_fakeCompiles == 11 && c3.bytes() == a.bytes() && scLogHas("other format version"));
+
+    st = sc::take();
+    CHECK(st.hits == 5 && st.misses == 11 && sc::peek().hits == 0);
+    CHECK(sc::statsLine(st).find("5 hits, 11 misses") == 0);
+
+    // switched off: a plain pass-through, nothing counted
+    sc::setActive(false);
+    ScOut p1 = scCall(f, "shader A", defs, &inc);
+    CHECK(g_fakeCompiles == 12 && sc::peek().misses == 0 && sc::peek().hits == 0);
+    // shutdown: the original bytes are back and the function still works
+    sc::uninstall();
+    CHECK(!sc::installed() && !memcmp(entry, "\x8b\xff\x55\x8b\xec", 5));
+    ScOut p2 = scCall(f, "shader A", defs, &inc);
+    CHECK(g_fakeCompiles == 13 && p2.bytes() == a.bytes());
+
+    for (ScOut* o : {&a, &a2, &b, &v, &e1, &e2, &i1, &i2, &i3, &i4, &i5, &l1, &l2, &c1, &c2, &c3, &p1, &p2}) o->release();
+    CHECK(g_fakeAlive == 0); // every buffer and table the hook made was handed out exactly once
+
+    // clean up the test folder
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do
+            DeleteFileW((dir + fd.cFileName).c_str());
+        while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir.c_str());
+    RemoveDirectoryW((std::wstring(tmp) + dirName).c_str());
+}
+
 // Smooth / Low latency / Custom (the choice at the top of the page)
 static void testPresets() {
     perf::SeriesOptions mine;
@@ -525,6 +922,8 @@ static int unit() {
     testFiles();
     testSeries();
     testPresets();
+    testShaderCacheFiles();
+    testShaderCacheHook();
     printf("perf unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

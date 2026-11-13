@@ -25,6 +25,7 @@
 #include "d3d_hooks.h"
 #include "perf_core.h"
 #include "series.h"
+#include "shadercache.h"
 #include "stall.h"
 #include "sysopts.h"
 
@@ -51,6 +52,7 @@ struct Settings {
     int vsync = 0;          // 0 = as the game sets it, 1 = off, 2 = on
     int priority = 0, affinity = 0, powerThrottlingOff = 0, fineTimer = 0;
     int threadCores = 0, timer1ms = 0, mmcss = 0; // smoothing switches, independent of the preset (docs/performance-smooth.md)
+    int shaderCache = 0;    // shader disk cache, ESWC/Sunrise/Original only (shadercache.h)
     int preset = 0;         // perf::Preset: 0 Smooth (default), 1 Low latency, 2 Custom
     int hangLog = 1;
     int hangMs = 1500;
@@ -83,6 +85,7 @@ void loadSettings() {
     S.threadCores = gi("thread_cores", S.threadCores);
     S.timer1ms = gi("timer_1ms", S.timer1ms);
     S.mmcss = gi("mmcss", S.mmcss);
+    S.shaderCache = gi("shader_cache", S.shaderCache);
     // the choice: saved, or Custom for a player who set options before presets existed, else Smooth
     S.preset = gi("preset", -1);
     if (S.preset < perf::PresetSmooth || S.preset > perf::PresetCustom) {
@@ -745,6 +748,64 @@ void applyProcessOptions() {
     perf::stall::setThresholdMs(S.hangMs);
 }
 
+// ---- shader disk cache (2006 engine only; TMNF/TMUF never: Competition Patch, no hooks in the exe there)
+bool legacyGame() { return (g_game & HORIZON_GAME_LEGACY) != 0; }
+std::string g_scBucket = "menu and loading"; // what the current hit/miss count belongs to
+
+void scLog(int level, const char* fmt, ...) {
+    char buf[600];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    logf(level, "%s", buf);
+}
+
+// Writes the count of the bucket that ends (one line, only if a shader was asked for) and starts `next`.
+void shaderCacheFlush(const char* next) {
+    if (perf::shadercache::installed()) {
+        const perf::shadercache::Stats s = perf::shadercache::take();
+        if (s.hits || s.misses || s.fallbacks)
+            logf(HORIZON_LOG_INFO, "shader cache: %s: %s", g_scBucket.c_str(), perf::shadercache::statsLine(s).c_str());
+    }
+    if (next) g_scBucket = next;
+}
+
+// Installs the hook the first time it is wanted (bytes checked, refused with a log line otherwise) and switches
+// it between caching and pass-through.
+void shaderCacheApply() {
+    if (!legacyGame()) return;
+    const bool want = g_enabled && S.shaderCache;
+    static bool tried = false;
+    if (want && !perf::shadercache::installed() && !tried) {
+        tried = true;
+        const HorizonGameInfo* gi = g_host->game_info();
+        const perf::shadercache::Spec* spec = gi ? perf::shadercache::specFor(gi->exe_timestamp) : nullptr;
+        if (!spec || g_gameKey != spec->game) {
+            logf(HORIZON_LOG_WARN, "shader cache: off, unknown exe build (PE timestamp %08lx)", static_cast<unsigned long>(gi ? gi->exe_timestamp : 0));
+        } else {
+            perf::shadercache::Config cfg;
+            cfg.folder = g_data + L"shadercache\\" + widen(spec->game) + L"\\";
+            char id[64];
+            snprintf(id, sizeof(id), "%s-%08lx-d3dx-static", spec->game, static_cast<unsigned long>(spec->timestamp));
+            cfg.exeId = id;
+            cfg.log = &scLog;
+            cfg.delta = gi ? static_cast<intptr_t>(gi->exe_base) - 0x00400000 : 0;
+            perf::shadercache::install(*spec, cfg);
+        }
+    }
+    if (perf::shadercache::installed() && perf::shadercache::active() != want) {
+        if (!want) shaderCacheFlush(nullptr);
+        perf::shadercache::setActive(want);
+        logf(HORIZON_LOG_INFO, "shader cache: %s", want ? "caching" : "pass-through (switched off)");
+    }
+}
+const char* shaderCacheNote() {
+    if (perf::shadercache::refusedWhy()[0]) return perf::shadercache::refusedWhy();
+    if (S.shaderCache && legacyGame() && !perf::shadercache::installed()) return "unknown exe build";
+    return "";
+}
+
 void d3dLog(int level, const char* fmt, ...) {
     char buf[600];
     va_list ap;
@@ -1252,6 +1313,16 @@ void drawMenu() {
         ImGui::SameLine();
         ImGui::TextDisabled("%s", perf::sys::mmcssNote());
     }
+    if (legacyGame()) {
+        if (checkbox("Shader cache", &S.shaderCache, "shader_cache")) shaderCacheApply();
+        hint("Keeps compiled shaders on disk. No compile stutter when a map runs again.");
+        if (shaderCacheNote()[0]) {
+            dimWrapped("Off: %s", shaderCacheNote());
+        } else if (S.shaderCache && perf::shadercache::active()) {
+            const perf::shadercache::Stats cs = perf::shadercache::peek();
+            dimWrapped("Now: %u from cache, %u compiled", cs.hits, cs.misses);
+        }
+    }
 
     ImGui::SeparatorText("Measure");
     ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
@@ -1382,6 +1453,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     perf::stall::note("Horizon Performance started on %s (host %s, %s)", g_gameKey.c_str(), gi && gi->host_version ? gi->host_version : "?",
                       g_competitionPatch ? "Competition Patch loaded" : "no Competition Patch");
     applyProcessOptions();
+    shaderCacheApply();
 
     HorizonDeviceCallbacks cb = {};
     cb.size = sizeof(cb);
@@ -1404,6 +1476,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
     perf::stall::note("shutdown");
+    shaderCacheFlush(nullptr);
+    perf::shadercache::uninstall();
     if (g_series.active()) g_series.abort("the game was closed", g_seriesIO);
     perf::stall::stop();
     perf::d3d::detach();
@@ -1437,6 +1511,10 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
     case HORIZON_EVENT_MAP_LOADED:
         perf::stall::note("map loaded: %s", e->map && e->map->name ? e->map->name : "?");
         settleFor(1000);
+        shaderCacheFlush(e->map && e->map->name && e->map->name[0] ? e->map->name : "map");
+        break;
+    case HORIZON_EVENT_MENU_ENTERED:
+        shaderCacheFlush("menu and loading");
         break;
     case HORIZON_EVENT_ONLINE_CHANGED:
         perf::stall::note("online: %s", e->is_online ? "yes" : "no");
@@ -1471,6 +1549,7 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
         applyPreset();
         applyProcessOptions();
     }
+    shaderCacheApply();
 }
 
 } // extern "C"

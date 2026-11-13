@@ -94,7 +94,7 @@ From the exes of my test copies of the games (imports, call sites with capstone,
 | Finding | Meaning |
 |---|---|
 | TMNF/TMUF create a **mixed vertex processing** device (flags 0x80), not pure, not multithreaded (TMVS GOTCHA; my test device uses the same flags). ESWC/Sunrise: the plugin logs the flags at the first start. | The D3D9 runtime keeps the device state for non-pure devices, so a state filter in front of it saves little; the counter shows how many calls repeat. No `MULTITHREADED` lock cost. |
-| The engine compiles its shaders at run time (`d3dx9_30!D3DXCompileShader`, TMNF/TMUF). | A source of hitches when a material is seen first. A shader cache would need an IAT hook of the exe: not built (Competition Patch rule for Forever; unmeasured on ESWC/Sunrise). |
+| The engine compiles its shaders at run time when a material is bound the first time (`d3dx9_30!D3DXCompileShader` on TMNF/TMUF, the D3DX compiler linked into the exe on ESWC/Sunrise/Original). | A source of hitches when a material is seen first. ESWC/Sunrise/Original: the switch "Shader cache" keeps the results on disk (`docs/performance-smooth.md`). TMNF/TMUF: not built (it would need a hook in the exe's imports; Competition Patch rule). |
 | **GPU sync:** `CVisionViewportDx9::SyncGpuWaitQuery` (TMNF 0x98b890) polls an event query with `D3DGETDATA_FLUSH` and `Sleep(0)` until the GPU is done; the game's own setting `GpuSync` / `GpuSyncTimeOut` (CSystemConfigDisplay) controls it. | The CPU waits for the GPU every frame while it is on: lower input delay, fewer FPS. The counter's "GPU wait" shows exactly this time. A second render-ahead limiter of my own would duplicate it: not built. |
 | `MwSystemTimerInit` calls `timeBeginPeriod(<minimum>)` (1 ms) at start on TMNF and Sunrise. **ESWC (`983bd127`) and Original (Online Patch v2) do not**: the call is patched out in both community builds (2026-11-13, `docs/performance-smooth.md`). | TMNF/TMUF/Sunrise: the usual "timer resolution fix" is already done by the game. ESWC/Original: the switch "Timer 1 ms" restores it. |
 | `CSystemEngine::CaptureInfoOsCpu` sets REALTIME priority, thread priority 15 and affinity 1 **only around its CPU speed measurement at start**, then restores the old values. | The game does not pin itself to one core and keeps normal priority while playing. |
@@ -117,11 +117,12 @@ All off by default. Each one is a switch with a one-line explanation on the page
 | Pin thread (Smoothing) | Game thread on the performance cores' CPU sets (soft pin); nothing on CPUs with one efficiency class. | all | yes | yes | Hybrid CPUs: steadier frames if the game thread was moved to E-cores. | not measured (test PC not hybrid) |
 | Timer 1 ms (Smoothing) | `timeBeginPeriod(1)` + no power throttling. | all; matters on ESWC/Original | yes | yes | ESWC/Original: what the game meant to do (`docs/performance-smooth.md`). Elsewhere: nothing. | timer reads back 1.00 ms |
 | MMCSS (Smoothing) | MMCSS task "Games" for the game thread. | all | yes | yes | Fewer stutters from background load. | not measured |
+| Shader cache (Smoothing) | Inline hook on the exe's own `D3DXCompileShader` (bytes checked per exe), compiled bytecode on disk keyed by SHA-256 of source, defines, profile and flags; any mismatch falls back to the normal compile. | ESWC, Sunrise, Original | n/a (not offered on Forever) | yes | No compile stutter when a map runs the second time. | unit tests only, not run in the game yet |
 | Count Direct3D calls | Measurement only (see above). | all | **off** | yes | costs a little | see above |
 | Hang log | See below. | all | yes (reads only, never during a race) | yes | none | caught a 2.5 s stall with the right stack |
 
 Not built, and why:
-- **Shader cache / texture preload:** needs hooks in the exe (D3DX import) or engine calls; not allowed on Forever with Competition Patch, and without a measured hitch on ESWC/Sunrise it would be a guess.
+- **Shader cache on TMNF/TMUF, texture preload, shader warm-up at map load:** a hook in the exe's D3DX import is not allowed on Forever with the Competition Patch; preloading and warm-up need engine calls with a valid render state (`docs/performance-smooth.md`).
 - **Large Address Aware patch:** changes the exe; I only show the address space.
 - **Writing engine values (view distance, shadows) at run time:** the game's own settings do it; the launcher shows them. Forever never gets game-memory writes.
 - **Render-ahead limiter:** the engine has its own (`GpuSync`).
