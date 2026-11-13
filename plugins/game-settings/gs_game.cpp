@@ -190,6 +190,8 @@ const GameTable& eswcTable() { return kEswc; }
 const GameTable& sunriseTable() { return kTms; }
 const GameTable& originalTable() { return kTmo; }
 
+bool soundsSliderSupported(const GameTable*) { return false; }
+
 const GameTable* tableForTimestamp(uint32_t ts) {
     if (ts == kEswc.timestamp) return &kEswc;
     if (ts == kTms.timestamp) return &kTms;

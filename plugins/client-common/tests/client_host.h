@@ -44,6 +44,7 @@ extern std::vector<Panel> panels;
 extern std::vector<Toast> toasts;
 extern std::vector<BridgeCall> bridgeCalls;
 extern std::vector<std::string> playedMaps;
+extern int menuReturns; // return_to_menu calls that were not refused
 extern std::string logs;
 extern bool online;
 extern int gameState;

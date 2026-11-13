@@ -86,6 +86,11 @@ const GameTable& sunriseTable();
 const GameTable& originalTable();
 const GameTable* tableForTimestamp(uint32_t timestamp);
 
+// The menu shows only what the game's own settings have: the games' options have Volume and Music, no separate
+// sound volume, and a Sounds slider (AudioSoundVolume + the port's SoundVolume) was not heard on ESWC (my test
+// 2026-11-13). false for all three games: no Sounds slider, and a saved Sounds value is not put into the game.
+bool soundsSliderSupported(const GameTable* table);
+
 // Chosen values; -1 = the game's own (nothing is applied).
 struct Prefs {
     int music = -1;  // percent 0..100

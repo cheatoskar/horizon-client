@@ -59,8 +59,13 @@ void* appObject();
 // game is loaded. The race starts within the next frames; watch state() / the host's MapLoaded event.
 Result playMapFile(const wchar_t* path);
 
-// Presses the solo race's own quit button (CTrackManiaRace::ButtonQuitOnClick). SoloRace only.
+// Leaves the solo race to the main menu. SoloRace only; the race ends within the next frames.
+// ESWC/Sunrise/Original: what Esc > Quit does (race result Esc, then the quit dialog's own Quit handler, pressed by
+// tick()); ButtonQuitOnClick would go back to the puzzle editor every solo race runs under. TMNF/TMUF: the race's
+// quit button (CTrackManiaRace::ButtonQuitOnClick). A second call while leaving is a no-op.
 Result returnToMenu();
+// Once a frame on the game's main thread: finishes a returnToMenu() in progress.
+void tick();
 
 // Map of the current solo race (or the last one). False if none.
 bool currentMap(MapInfo* out);

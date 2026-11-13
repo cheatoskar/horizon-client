@@ -189,14 +189,32 @@ static void runGame(uint32_t game, const char* code, const std::string& root) {
     // ---- in a race
     chost::gameState = HORIZON_STATE_SOLO_RACE;
     const size_t played2 = chost::playedMaps.size();
-    hook("play");
-    hook("pump");
-    check(chost::playedMaps.size() == played2 && strField(hook("state"), "playblock") == "Leave the race first", "in a race: Leave the race first");
+    if (!forever) {
+        // legacy: Play leaves the race (return_to_menu once the file is saved) and starts the map in the menu
+        const int returns = chost::menuReturns;
+        hook("play");
+        hook("pump");
+        hook("pump");
+        st = hook("state");
+        check(chost::menuReturns == returns + 1 && chost::playedMaps.size() == played2 && field(st, "later") == 1,
+              "in a race: Play leaves the race once (" + std::to_string(chost::menuReturns - returns) + " return_to_menu)");
+        check(strField(st, "msg") == "Leaving the race...", "status: Leaving the race...");
+        chost::gameState = HORIZON_STATE_MAIN_MENU;
+        for (int i = 0; i < 4; i++) hook("pump");
+        check(chost::playedMaps.size() == played2 + 1 && chost::menuReturns == returns + 1 && field(hook("state"), "later") == 0,
+              "in a race: the map starts back in the menu");
+        chost::gameState = HORIZON_STATE_SOLO_RACE;
+    } else {
+        hook("play");
+        hook("pump");
+        check(chost::playedMaps.size() == played2 && strField(hook("state"), "playblock") == "Leave the race first", "in a race: Leave the race first");
+    }
+    const size_t played3 = chost::playedMaps.size();
     hook("later");
     hook("cancel");
     chost::gameState = HORIZON_STATE_MAIN_MENU;
     for (int i = 0; i < 3; i++) hook("pump");
-    check(chost::playedMaps.size() == played2 && field(hook("state"), "later") == 0, "Cancel: nothing starts later");
+    check(chost::playedMaps.size() == played3 && field(hook("state"), "later") == 0, "Cancel: nothing starts later");
     hook("save");
     st = hook("state");
     check(strField(st, "msg") == "Saved" && fileExists(expect), "Save writes the map");
