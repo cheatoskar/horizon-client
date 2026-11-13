@@ -4,7 +4,7 @@
 
 One menu for all modules, a slim bar at the top screen edge, widgets you can move, hotkeys with conflict display, one log per start, and a small C plugin ABI so mods stop fighting over Direct3D and game hooks. It is the in-game part of the [TM Horizon](https://github.com/cheatoskar/tm-horizon) launcher, but it works on its own.
 
-Version 0.3.1. MIT licence. Built with [Claude Code](https://claude.com/claude-code).
+Version 0.3.2. MIT licence. Built with [Claude Code](https://claude.com/claude-code).
 
 **[Download the latest release](https://github.com/cheatoskar/horizon-client/releases/latest)** · [Install](#install) · [Modules](#modules) · [Games](#features-per-game) · [Controls](#controls) · [Safety rules](#safety-rules) · [Compatibility](#compatibility) · [Known issues](#known-issues) · [Build](#how-it-is-built) · [TM Horizon family](#tm-horizon-family)
 

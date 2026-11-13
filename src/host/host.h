@@ -11,8 +11,8 @@
 
 namespace horizon {
 
-constexpr const char* kHostVersion = "0.3.1";
-constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 1u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
+constexpr const char* kHostVersion = "0.3.2";
+constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 2u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
 
 enum class LoaderKind : uint32_t { Legacy = 1, TMLoader = 2, Test = 3 };
 
