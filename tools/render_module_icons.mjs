@@ -1,10 +1,16 @@
 // Module icons in the project-logos style: rounded tile with a darker base, a stroked glyph with a soft shadow.
 // Writes <out>/<id>/icon.png (128 px), <out>/<id>.svg and a contact sheet at 128/64/32/24 px.
+//   node tools/render_module_icons.mjs <out> [legacy.svg]
+// Playwright comes from PLAYWRIGHT_DIR (a folder with playwright in its node_modules) or the normal module lookup.
+// legacy.svg (optional, also LEGACY_SVG) puts the Legacy Essentials logo first on the contact sheet.
 import { createRequire } from 'module';
 import fs from 'fs';
-const require = createRequire('C:/Users/osaro/tools/playwright/package.json');
+import path from 'path';
+const require = createRequire(path.join(process.env.PLAYWRIGHT_DIR || process.cwd(), 'package.json'));
 const { chromium } = require('playwright');
 const OUT = process.argv[2];
+if (!OUT) { console.error('usage: node tools/render_module_icons.mjs <out> [legacy.svg]'); process.exit(2); }
+const LEGACY_SVG = process.argv[3] || process.env.LEGACY_SVG || '';
 
 const amber = { main: '#f59e0b', base: '#a35f00', ink: '#1f1300' };
 const G = {
@@ -61,9 +67,10 @@ for (const i of ICONS) {
   const u = 'data:image/svg+xml;base64,' + Buffer.from(s).toString('base64');
   cells += `<div class="c"><img src="${u}" width="128"><img src="${u}" width="64"><img src="${u}" width="32"><img src="${u}" width="26"><img src="${u}" width="24"><div>${i.id}</div></div>`;
 }
-const legacy = 'C:/Users/osaro/Downloads/TM-Horizon-Test/project-logos/legacy/legacy.svg';
-const lu = 'data:image/svg+xml;base64,' + fs.readFileSync(legacy).toString('base64');
-cells = `<div class="c"><img src="${lu}" width="128"><img src="${lu}" width="64"><img src="${lu}" width="32"><img src="${lu}" width="26"><img src="${lu}" width="24"><div>Legacy Essentials</div></div>` + cells;
+if (LEGACY_SVG) {
+  const lu = 'data:image/svg+xml;base64,' + fs.readFileSync(LEGACY_SVG).toString('base64');
+  cells = `<div class="c"><img src="${lu}" width="128"><img src="${lu}" width="64"><img src="${lu}" width="32"><img src="${lu}" width="26"><img src="${lu}" width="24"><div>Legacy Essentials</div></div>` + cells;
+}
 await pg.setViewportSize({ width: 1100, height: 600 });
 await pg.setContent(`<html><body style="margin:0;background:#141821;font-family:Segoe UI;color:#cfd3dc;font-size:12px"><style>
 .w{display:flex;flex-wrap:wrap;gap:18px;padding:20px}.c{display:flex;flex-direction:column;align-items:center;gap:6px;width:140px}</style><div class="w">${cells}</div></body></html>`);

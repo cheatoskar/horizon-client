@@ -10,13 +10,19 @@
 #   tmloader-products\_before-031rc\<time>\  (Horizon Host\0.3.1 and description.yaml)
 # A copy whose game runs is skipped (TMLoader: any TmForever.exe). Never touched: settings, data, logs, the
 # legacy-randomizer module, the TM Vibrant Shaders product folder, %LOCALAPPDATA%\TMLoader, any real game folder.
-#   powershell -ExecutionPolicy Bypass -File tools\deploy-test.ps1 [-DryRun]
+#   powershell -ExecutionPolicy Bypass -File tools\deploy-test.ps1 [-DryRun] -Package <dir> -Tmvs <dir> -Copies <dir>,<dir> [-Products <dir>]
+# Paths come from the parameters or, when a parameter is left out, from these environment variables:
+#   HORIZON_TEST_PACKAGE   client package folder (release\Horizon-Client-<version>-*.zip, tmloader\Horizon Host\...)
+#   HORIZON_TEST_TMVS      TMVS release folder (horizon\<module>\<module>.dll)
+#   HORIZON_TEST_COPIES    test copies, separated by ';' (the game is told by its exe: ESWC, Sunrise or Original)
+#   HORIZON_TEST_PRODUCTS  TMLoader products folder with "Horizon Host" (optional; left out = skipped)
 param(
     [switch]$DryRun,
     [switch]$Loader,
-    [string]$Package = 'C:\Users\osaro\Downloads\TM-Horizon-Test\release-client-0.3.1-rc',
-    [string]$Tmvs = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmvs-1.6-2.0-rc',
-    [string]$Products = 'C:\Users\osaro\Downloads\TM-Horizon-Test\tmloader-products'
+    [string]$Package = $env:HORIZON_TEST_PACKAGE,
+    [string]$Tmvs = $env:HORIZON_TEST_TMVS,
+    [string]$Products = $env:HORIZON_TEST_PRODUCTS,
+    [string[]]$Copies = @("$env:HORIZON_TEST_COPIES" -split ';' | Where-Object { $_.Trim() })
 )
 $ErrorActionPreference = 'Stop'
 $version = '0.3.1'
@@ -44,7 +50,17 @@ function Running-In($dir) {
 }
 function Hash($p) { if (Test-Path -LiteralPath $p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash } else { '' } }
 
+function Game-Of($dir) {
+    if (Test-Path -LiteralPath "$dir\TmNationsESWC.exe") { return 'ESWC' }
+    if (Test-Path -LiteralPath "$dir\TmSunrise.exe") { return 'Sunrise' }
+    if (Test-Path -LiteralPath "$dir\TMORIGINAL.EXE") { return 'Original' }
+    return ''
+}
+
 # --- the sources must be complete
+if (-not $Package) { throw 'no package folder: pass -Package or set HORIZON_TEST_PACKAGE' }
+if (-not $Tmvs) { throw 'no TMVS folder: pass -Tmvs or set HORIZON_TEST_TMVS' }
+if (-not $Copies.Count) { throw 'no test copies: pass -Copies or set HORIZON_TEST_COPIES (folders separated by ;)' }
 $zips = Join-Path $Package 'release'
 foreach ($z in 'ESWC', 'Sunrise', 'Original') {
     if (-not (Test-Path "$zips\Horizon-Client-$version-$z.zip")) { throw "missing $zips\Horizon-Client-$version-$z.zip" }
@@ -54,14 +70,14 @@ if (-not (Test-Path "$prodSrc\HorizonHost.dll")) { throw "missing $prodSrc\Horiz
 if (-not (Test-Path "$prodSrc\modules.json")) { throw "missing $prodSrc\modules.json (an older package?)" }
 foreach ($m in $tmvsAll) { if (-not (Test-Path "$Tmvs\horizon\$m\$m.dll")) { throw "missing $Tmvs\horizon\$m\$m.dll" } }
 
-# --- the three legacy test copies
-$copies = @(
-    @{ dir = 'C:\Users\osaro\Games\TMN-ESWC-horizon-next'; zip = 'ESWC' },
-    @{ dir = 'C:\Users\osaro\Games\TMSunrise-horizon-next'; zip = 'Sunrise' },
-    @{ dir = 'C:\Users\osaro\Games\TMO-horizon-test'; zip = 'Original' }
-)
+# --- the legacy test copies (ESWC, Sunrise, Original)
+$targets = foreach ($d in $Copies) {
+    $d = $d.Trim().TrimEnd('\')
+    $g = Game-Of $d
+    if ($g) { @{ dir = $d; zip = $g } } else { $out.Add("$d : no TmNationsESWC.exe, TmSunrise.exe or TMORIGINAL.EXE, skipped") }
+}
 $tmp = Join-Path $env:TEMP "horizon-deploy-031rc-$stamp"
-foreach ($c in $copies) {
+foreach ($c in $targets) {
     $dir = $c.dir
     $hz = Join-Path $dir 'horizon'
     Write-Host "== $dir"
@@ -125,9 +141,11 @@ if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
 
 # --- the TMLoader test product
 Write-Host "== $Products"
-$prod = Join-Path $Products 'Horizon Host'
+$prod = if ($Products) { Join-Path $Products 'Horizon Host' } else { '' }
 $tmf = @(Get-Process -Name TmForever -ErrorAction SilentlyContinue)
-if (-not (Test-Path $prod)) {
+if (-not $Products) {
+    $out.Add('tmloader-products: no folder given (-Products or HORIZON_TEST_PRODUCTS), skipped')
+} elseif (-not (Test-Path $prod)) {
     $out.Add("tmloader-products: $prod not found, skipped")
 } elseif ($tmf.Count) {
     $out.Add("tmloader-products: SKIPPED, TmForever.exe runs (pid $($tmf.Id -join ', '))")

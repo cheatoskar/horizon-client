@@ -4,8 +4,13 @@
 # An existing game-settings folder is kept once as plugins.bak-vor-gs\game-settings. A copy whose game is running
 # is skipped. Needs a host that loads modules from horizon\plugins\ (0.3.1 and later). An older version of the
 # module in a copy is replaced (1.0.0 -> 1.0.1: no stutter while dragging a slider); its settings stay.
-#   powershell -ExecutionPolicy Bypass -File tools/deploy-game-settings.ps1 [-DryRun] [-Source <module folder>]
-param([switch]$DryRun, [string]$Source = "")
+#   powershell -ExecutionPolicy Bypass -File tools/deploy-game-settings.ps1 [-DryRun] [-Source <module folder>] [-Copies <dir>,<dir>]
+# Without -Copies the test copies come from HORIZON_TEST_COPIES (folders separated by ';').
+param(
+    [switch]$DryRun,
+    [string]$Source = "",
+    [string[]]$Copies = @("$env:HORIZON_TEST_COPIES" -split ';' | Where-Object { $_.Trim() })
+)
 $ErrorActionPreference = 'Stop'
 $W = Split-Path -Parent $PSScriptRoot
 $tag = 'bak-vor-gs'
@@ -26,12 +31,9 @@ function Running-In($dir) {
     Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) }
 }
 
-$copies = @(
-    'C:\Users\osaro\Games\TMN-ESWC-horizon-next',
-    'C:\Users\osaro\Games\TMSunrise-horizon-next',
-    'C:\Users\osaro\Games\TMO-horizon-test'
-)
-foreach ($dir in $copies) {
+if (-not $Copies.Count) { throw 'no test copies: pass -Copies or set HORIZON_TEST_COPIES (folders separated by ;)' }
+foreach ($dir in $Copies) {
+    $dir = $dir.Trim().TrimEnd('\')
     $hz = Join-Path $dir 'horizon'
     if (-not (Test-Path "$hz\host.dll")) { $out += "${dir}: no horizon\host.dll, skipped"; continue }
     $running = Running-In $dir
