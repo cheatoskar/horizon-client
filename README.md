@@ -24,7 +24,7 @@ Version 0.3.1. MIT licence. Built with [Claude Code](https://claude.com/claude-c
 
 ## TM Horizon family
 
-Six projects by the same author, made to work together. TM Horizon installs and updates the others where it can; each one also works without it.
+Six projects, built to work together. TM Horizon installs and updates the others where it can; each one also works without it.
 
 | Project | What it is | Games | How to get it | Repo |
 |---|---|---|---|---|
