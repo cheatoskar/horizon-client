@@ -2,7 +2,7 @@
 
 An in-game menu and mod loader for the old TrackMania games: TrackMania Nations ESWC, TrackMania Sunrise, TrackMania Original and, through TMLoader, TrackMania Nations/United Forever. One menu for all modules, a slim bar at the top screen edge, hotkeys with conflict display, one log per start, and a small C plugin ABI so mods stop fighting over Direct3D and game hooks. It is the in-game part of the TM Horizon launcher, but it works on its own.
 
-Version 0.3.0. MIT licence. Built with [Claude Code](https://claude.com/claude-code).
+Version 0.3.1. MIT licence. Built with [Claude Code](https://claude.com/claude-code).
 
 ![The menu at 1280x720](docs/images/menu-1280x720.png)
 
