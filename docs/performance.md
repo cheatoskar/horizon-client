@@ -114,6 +114,9 @@ All off by default. Each one is a switch with a one-line explanation on the page
 | No power throttling | `SetProcessInformation(ProcessPowerThrottling)`: no EcoQoS, and Windows 11 keeps honouring the timer when the window is hidden. | all | yes | yes | Helps laptops/hybrid CPUs that park the game on efficiency cores. | not measured |
 | Priority | Above normal / high (process priority class). | all | yes | yes | Fewer stutters from background load; nothing on an idle PC. | not measured |
 | CPU cores | All but CPU 0, or performance cores only (hybrid CPUs, by EfficiencyClass). | all | yes | yes | Hybrid Intel CPUs: may help 1 % lows. Elsewhere: nothing or worse. | not measured |
+| Pin thread (Smoothing) | Game thread on the performance cores' CPU sets (soft pin); nothing on CPUs with one efficiency class. | all | yes | yes | Hybrid CPUs: steadier frames if the game thread was moved to E-cores. | not measured (test PC not hybrid) |
+| Timer 1 ms (Smoothing) | `timeBeginPeriod(1)` + no power throttling. | all; matters on ESWC/Original | yes | yes | ESWC/Original: what the game meant to do (`docs/performance-smooth.md`). Elsewhere: nothing. | timer reads back 1.00 ms |
+| MMCSS (Smoothing) | MMCSS task "Games" for the game thread. | all | yes | yes | Fewer stutters from background load. | not measured |
 | Count Direct3D calls | Measurement only (see above). | all | **off** | yes | costs a little | see above |
 | Hang log | See below. | all | yes (reads only, never during a race) | yes | none | caught a 2.5 s stall with the right stack |
 

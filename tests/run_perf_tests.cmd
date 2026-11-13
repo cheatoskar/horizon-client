@@ -36,6 +36,11 @@ echo === frame limiter 60 fps
 build\test\perf_test.exe host "%CD%\%P%\limit" "%CD%\%P%\limit.txt" || set FAIL=1
 build\test\perf_test.exe limit "%CD%\%P%\limit.txt" 60 || set FAIL=1
 
+call :setup smooth
+> %P%\smooth\horizon\settings\performance.json echo {"thread_cores": 1, "timer_1ms": 1, "mmcss": 1, "overlay": 0, "hang_log": 0}
+echo === smoothing switches: pin thread, timer 1 ms, MMCSS
+build\test\perf_test.exe host "%CD%\%P%\smooth" "%CD%\%P%\smooth.txt" || set FAIL=1
+
 call :setup stall
 > %P%\stall\horizon\settings\performance.json echo {"hang_log": 1, "hang_ms": 1000, "overlay": 0}
 echo === hang log: the main thread sleeps 2.5 s

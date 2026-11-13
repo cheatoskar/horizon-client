@@ -20,6 +20,20 @@ bool setPowerThrottlingOff(bool off);
 bool setFineTimer(bool on);
 double currentTimerMs(); // the system's current timer resolution in ms (0 unknown)
 
+// ---- smoothing switches (docs/performance-smooth.md). Thread-level ones act on the game thread: the thread that
+// calls Present runs messages, game logic, physics and rendering in all five games.
+// CPU sets of the performance cores (hybrid CPUs, highest EfficiencyClass) for that thread: a soft pin, Windows
+// still may use other cores when these are busy. off: the thread's CPU sets are cleared. No change (and true) on
+// a CPU with one efficiency class. threadId 0 = not known yet (nothing done, false).
+bool setThreadPerfCores(unsigned long threadId, bool on);
+const char* threadCoresNote(); // "6 of 20 CPU sets" / "no hybrid CPU: unchanged" / why it failed
+// timeBeginPeriod(1) while on (ESWC and Original never ask for it: patched out in their community builds).
+bool setTimer1ms(bool on);
+// MMCSS task "Games" for the CALLING thread (call it on the game thread); off reverts. Only the thread that set it
+// can revert it: false when called on another thread.
+bool setMmcssGames(bool on);
+const char* mmcssNote();
+
 struct Memory {
     bool largeAddressAware = false;
     double privateMB = 0, addressSpaceUsedMB = 0, addressSpaceTotalMB = 0;

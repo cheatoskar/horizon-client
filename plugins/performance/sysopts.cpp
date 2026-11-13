@@ -4,6 +4,7 @@
 #include <psapi.h>
 
 #include <cstdio>
+#include <vector>
 
 namespace perf {
 namespace sys {
@@ -97,6 +98,134 @@ bool setAffinity(int mode) {
 }
 
 const char* affinityNote() { return g_affNote; }
+
+// ---- smoothing switches
+namespace {
+char g_threadNote[96] = "";
+char g_mmcssNote[96] = "";
+bool g_timer1ms = false;
+HANDLE g_mmcss = nullptr;
+DWORD g_mmcssThread = 0;
+
+// CPU set ids of the performance cores (group 0: a 32-bit game sees only that one). Empty when every core has the
+// same efficiency class.
+std::vector<ULONG> perfCpuSets(int* total) {
+    std::vector<ULONG> ids;
+    *total = 0;
+    using Fn = BOOL(WINAPI*)(PSYSTEM_CPU_SET_INFORMATION, ULONG, PULONG, HANDLE, ULONG);
+    auto fn = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetSystemCpuSetInformation"));
+    if (!fn) return ids;
+    ULONG len = 0;
+    fn(nullptr, 0, &len, GetCurrentProcess(), 0);
+    if (!len || len > 1 << 20) return ids;
+    std::vector<unsigned char> buf(len);
+    if (!fn(reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buf.data()), len, &len, GetCurrentProcess(), 0)) return ids;
+    BYTE minClass = 255, maxClass = 0;
+    for (ULONG off = 0; off + sizeof(DWORD) * 2 <= len;) {
+        auto* e = reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buf.data() + off);
+        if (!e->Size) break;
+        if (e->Type == CpuSetInformation && e->CpuSet.Group == 0) {
+            (*total)++;
+            if (e->CpuSet.EfficiencyClass > maxClass) maxClass = e->CpuSet.EfficiencyClass;
+            if (e->CpuSet.EfficiencyClass < minClass) minClass = e->CpuSet.EfficiencyClass;
+        }
+        off += e->Size;
+    }
+    if (*total == 0 || minClass == maxClass) return ids; // not a hybrid CPU
+    for (ULONG off = 0; off + sizeof(DWORD) * 2 <= len;) {
+        auto* e = reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buf.data() + off);
+        if (!e->Size) break;
+        if (e->Type == CpuSetInformation && e->CpuSet.Group == 0 && e->CpuSet.EfficiencyClass == maxClass) ids.push_back(e->CpuSet.Id);
+        off += e->Size;
+    }
+    return ids;
+}
+} // namespace
+
+bool setThreadPerfCores(unsigned long threadId, bool on) {
+    if (!threadId) return false;
+    using Fn = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
+    auto fn = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadSelectedCpuSets"));
+    if (!fn) {
+        snprintf(g_threadNote, sizeof(g_threadNote), "needs Windows 10");
+        return false;
+    }
+    HANDLE t = OpenThread(THREAD_SET_LIMITED_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, FALSE, threadId);
+    if (!t) {
+        snprintf(g_threadNote, sizeof(g_threadNote), "thread not opened (%lu)", GetLastError());
+        return false;
+    }
+    bool ok = true;
+    if (!on) {
+        ok = fn(t, nullptr, 0) != FALSE; // no selection: the thread may run anywhere again
+        g_threadNote[0] = 0;
+    } else {
+        int total = 0;
+        const std::vector<ULONG> ids = perfCpuSets(&total);
+        if (ids.empty()) {
+            snprintf(g_threadNote, sizeof(g_threadNote), "no hybrid CPU: unchanged");
+        } else if (fn(t, ids.data(), static_cast<ULONG>(ids.size()))) {
+            snprintf(g_threadNote, sizeof(g_threadNote), "%u of %d CPU sets", static_cast<unsigned>(ids.size()), total);
+        } else {
+            ok = false;
+            snprintf(g_threadNote, sizeof(g_threadNote), "refused by Windows (%lu)", GetLastError());
+        }
+    }
+    CloseHandle(t);
+    return ok;
+}
+
+const char* threadCoresNote() { return g_threadNote; }
+
+bool setTimer1ms(bool on) {
+    if (on == g_timer1ms) return true;
+    HMODULE winmm = GetModuleHandleW(L"winmm.dll");
+    if (!winmm) winmm = LoadLibraryW(L"winmm.dll"); // all five games import it, so this only adds a reference
+    if (!winmm) return false;
+    using Fn = UINT(WINAPI*)(UINT);
+    auto fn = reinterpret_cast<Fn>(GetProcAddress(winmm, on ? "timeBeginPeriod" : "timeEndPeriod"));
+    if (!fn || fn(1) != 0) return false; // TIMERR_NOERROR = 0
+    g_timer1ms = on;
+    return true;
+}
+
+bool setMmcssGames(bool on) {
+    HMODULE avrt = GetModuleHandleW(L"avrt.dll");
+    if (!avrt) avrt = LoadLibraryW(L"avrt.dll");
+    if (!avrt) {
+        snprintf(g_mmcssNote, sizeof(g_mmcssNote), "avrt.dll missing");
+        return false;
+    }
+    if (!on) {
+        if (!g_mmcss) {
+            g_mmcssNote[0] = 0;
+            return true;
+        }
+        if (GetCurrentThreadId() != g_mmcssThread) return false; // only the thread that joined can leave
+        using Fn = BOOL(WINAPI*)(HANDLE);
+        auto fn = reinterpret_cast<Fn>(GetProcAddress(avrt, "AvRevertMmThreadCharacteristics"));
+        const bool ok = fn && fn(g_mmcss);
+        g_mmcss = nullptr;
+        g_mmcssThread = 0;
+        g_mmcssNote[0] = 0;
+        return ok;
+    }
+    if (g_mmcss) return GetCurrentThreadId() == g_mmcssThread;
+    using Fn = HANDLE(WINAPI*)(LPCWSTR, LPDWORD);
+    auto fn = reinterpret_cast<Fn>(GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW"));
+    DWORD task = 0;
+    HANDLE h = fn ? fn(L"Games", &task) : nullptr;
+    if (!h) {
+        snprintf(g_mmcssNote, sizeof(g_mmcssNote), "refused by Windows (%lu)", GetLastError());
+        return false;
+    }
+    g_mmcss = h;
+    g_mmcssThread = GetCurrentThreadId();
+    snprintf(g_mmcssNote, sizeof(g_mmcssNote), "task Games");
+    return true;
+}
+
+const char* mmcssNote() { return g_mmcssNote; }
 
 bool setPowerThrottlingOff(bool off) {
     using Fn = BOOL(WINAPI*)(HANDLE, PROCESS_INFORMATION_CLASS, LPVOID, DWORD);

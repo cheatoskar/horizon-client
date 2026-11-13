@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Horizon Performance: section "Smoothing" with three switches, all off by default and independent of Smooth / Low latency / Custom: **Pin thread** (the game thread on the performance cores' CPU sets, hybrid CPUs only), **Timer 1 ms** (`timeBeginPeriod(1)` and no power throttling; ESWC and Original never ask for it, their community builds patched the call out), **MMCSS** (task "Games" for the game thread). One log line per applied switch; benchmark-series options `threadCores`, `timer1ms`, `mmcss`. Static analysis of the main loop, timer, Present/GPU sync and shader creation of TMNF, ESWC, Sunrise and Original: `docs/performance-smooth.md`.
+
 ## 0.3.1 (2026-11-12)
 
 - Input Display 0.2.0: new style "Controller" (steering triangles left and right, filled by the steering; gas above and brake below in the middle). New installs start with the arrow keys ("Arrows", was "Keys") and without the graph; settings saved by 0.1 keep Bars and the graph. The widget is exactly as large as what it draws and has no window background: only the widget is on screen, the frame shows while the menu is open or in layout mode (new panel flag `HORIZON_PANEL_NO_BACKGROUND`). Keyboard and pad buttons are drawn as a steady on/off (a value that dropped to 0 for a frame made the bars flash); the Wheel style shows its pedal bars only for analog pedals. Outside a race nothing is drawn with the menu closed.

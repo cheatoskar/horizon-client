@@ -50,6 +50,7 @@ struct Settings {
     int limitFps = 0;       // 0 = off
     int vsync = 0;          // 0 = as the game sets it, 1 = off, 2 = on
     int priority = 0, affinity = 0, powerThrottlingOff = 0, fineTimer = 0;
+    int threadCores = 0, timer1ms = 0, mmcss = 0; // smoothing switches, independent of the preset (docs/performance-smooth.md)
     int preset = 0;         // perf::Preset: 0 Smooth (default), 1 Low latency, 2 Custom
     int hangLog = 1;
     int hangMs = 1500;
@@ -79,6 +80,9 @@ void loadSettings() {
     S.affinity = gi("affinity", S.affinity);
     S.powerThrottlingOff = gi("power_throttling_off", S.powerThrottlingOff);
     S.fineTimer = gi("fine_timer", S.fineTimer);
+    S.threadCores = gi("thread_cores", S.threadCores);
+    S.timer1ms = gi("timer_1ms", S.timer1ms);
+    S.mmcss = gi("mmcss", S.mmcss);
     // the choice: saved, or Custom for a player who set options before presets existed, else Smooth
     S.preset = gi("preset", -1);
     if (S.preset < perf::PresetSmooth || S.preset > perf::PresetCustom) {
@@ -182,6 +186,9 @@ std::vector<std::pair<std::string, std::string>> optionList() {
             {"affinity", i(S.affinity)},
             {"powerThrottlingOff", i(S.powerThrottlingOff)},
             {"fineTimer", i(S.fineTimer)},
+            {"threadCores", i(S.threadCores)},
+            {"timer1ms", i(S.timer1ms)},
+            {"mmcss", i(S.mmcss)},
             {"competitionPatch", i(g_competitionPatch)},
             {"wrapperD3d9", i(perf::d3d::filterBlockedWhy()[0] != 0)}};
 }
@@ -256,6 +263,9 @@ perf::SeriesOptions currentOptions() {
     o.affinity = S.affinity;
     o.powerThrottlingOff = S.powerThrottlingOff;
     o.fineTimer = S.fineTimer;
+    o.threadCores = S.threadCores;
+    o.timer1ms = S.timer1ms;
+    o.mmcss = S.mmcss;
     return o;
 }
 
@@ -399,6 +409,9 @@ void applySeriesOptions(const perf::SeriesOptions& o) {
     S.affinity = o.affinity;
     S.powerThrottlingOff = o.powerThrottlingOff;
     S.fineTimer = o.fineTimer;
+    S.threadCores = o.threadCores;
+    S.timer1ms = o.timer1ms;
+    S.mmcss = o.mmcss;
     applyProcessOptions();
 }
 
@@ -681,13 +694,50 @@ void applyPreset() {
     S.affinity = o.affinity;
     S.powerThrottlingOff = o.powerThrottlingOff;
     S.fineTimer = o.fineTimer;
+    S.threadCores = o.threadCores;
+    S.timer1ms = o.timer1ms;
+    S.mmcss = o.mmcss;
+}
+
+// ---- smoothing switches on the game thread (the thread that calls Present: messages, logic, physics, rendering)
+DWORD g_gameThread = 0;       // set at the first Present
+bool g_threadDirty = true;    // the thread options changed: applied at the next Present, on the game thread
+int g_appliedThreadCores = 0, g_appliedMmcss = 0, g_appliedTimer1ms = 0;
+
+// Runs on the game thread (MMCSS can only be joined and left by the thread itself).
+void applyThreadOptions() {
+    g_threadDirty = false;
+    const int cores = g_enabled ? S.threadCores : 0;
+    if (cores != g_appliedThreadCores) {
+        const bool ok = perf::sys::setThreadPerfCores(g_gameThread, cores != 0);
+        if (cores) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: game thread %lu on performance cores: %s", static_cast<unsigned long>(g_gameThread), perf::sys::threadCoresNote());
+        else logf(HORIZON_LOG_INFO, "smoothing: game thread back on all cores%s", ok ? "" : " (failed)");
+        g_appliedThreadCores = cores;
+    }
+    const int mm = g_enabled ? S.mmcss : 0;
+    if (mm != g_appliedMmcss) {
+        const bool ok = perf::sys::setMmcssGames(mm != 0);
+        if (mm) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: MMCSS %s for the game thread%s%s", ok ? "on" : "not applied",
+                     ok ? ", " : ": ", perf::sys::mmcssNote());
+        else logf(HORIZON_LOG_INFO, "smoothing: MMCSS off for the game thread%s", ok ? "" : " (failed)");
+        g_appliedMmcss = mm; // also after a failure: the next change of the switch tries again, not every frame
+    }
 }
 
 void applyProcessOptions() {
     if (!perf::sys::setPriority(S.priority)) logf(HORIZON_LOG_WARN, "priority %d refused by Windows", S.priority);
     if (!perf::sys::setAffinity(S.affinity)) logf(HORIZON_LOG_WARN, "core selection %d refused by Windows", S.affinity);
-    perf::sys::setPowerThrottlingOff(S.powerThrottlingOff != 0);
+    // "Timer 1 ms" also keeps Windows from throttling the process (and from ignoring its timer request when hidden)
+    perf::sys::setPowerThrottlingOff(S.powerThrottlingOff != 0 || S.timer1ms != 0);
     perf::sys::setFineTimer(S.fineTimer != 0);
+    if (S.timer1ms != g_appliedTimer1ms) {
+        const bool ok = perf::sys::setTimer1ms(S.timer1ms != 0);
+        if (S.timer1ms) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: timer 1 ms %s, power throttling off (timer now %.2f ms)", ok ? "on" : "refused", perf::sys::currentTimerMs());
+        else logf(HORIZON_LOG_INFO, "smoothing: timer 1 ms off%s", ok ? "" : " (failed)");
+        g_appliedTimer1ms = S.timer1ms;
+    }
+    g_threadDirty = true;
+    if (g_gameThread && GetCurrentThreadId() == g_gameThread) applyThreadOptions();
     g_pacer.setFps(S.limitFps);
     g_pacer.reset();
     perf::d3d::setMode(S.count && callsAllowed(), S.filter && callsAllowed());
@@ -830,6 +880,8 @@ void finishFrame(double tPre) {
 
 void HORIZON_CALL cbPrePresent(void*, void* device) {
     const double t = perf::sys::nowMs();
+    if (!g_gameThread) g_gameThread = GetCurrentThreadId();
+    if (g_threadDirty && GetCurrentThreadId() == g_gameThread) applyThreadOptions();
     perf::stall::frame(g_window);
     ensureHooks(device);
     finishFrame(t);
@@ -1173,6 +1225,34 @@ void drawMenu() {
         if (g_vsyncPending) dimWrapped("V-Sync: next start or Alt+Enter");
     }
 
+    // smoothing switches: independent of the choice above, all off by default (docs/performance-smooth.md)
+    ImGui::SeparatorText("Smoothing");
+    if (checkbox("Pin thread", &S.threadCores, "thread_cores")) {
+        g_custom.threadCores = S.threadCores;
+        applyProcessOptions();
+    }
+    hint("Keeps the game thread on performance cores. Hybrid CPUs only.");
+    if (S.threadCores && perf::sys::threadCoresNote()[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", perf::sys::threadCoresNote());
+    }
+    if (checkbox("Timer 1 ms", &S.timer1ms, "timer_1ms")) {
+        g_custom.timer1ms = S.timer1ms;
+        applyProcessOptions();
+    }
+    hint("1 ms timer, no power throttling. ESWC and Original never set it.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Now %.2f ms", perf::sys::currentTimerMs());
+    if (checkbox("MMCSS", &S.mmcss, "mmcss")) {
+        g_custom.mmcss = S.mmcss;
+        applyProcessOptions();
+    }
+    hint("Windows schedules the game thread as a game.");
+    if (S.mmcss && perf::sys::mmcssNote()[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", perf::sys::mmcssNote());
+    }
+
     ImGui::SeparatorText("Measure");
     ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
                        static_cast<unsigned>(g_live.stutters));
@@ -1328,6 +1408,9 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
     perf::stall::stop();
     perf::d3d::detach();
     perf::sys::setFineTimer(false);
+    perf::sys::setTimer1ms(false);
+    if (g_appliedThreadCores) perf::sys::setThreadPerfCores(g_gameThread, false);
+    if (g_appliedMmcss) perf::sys::setMmcssGames(false); // only works on the game thread; else it ends with the thread
     g_host = nullptr;
 }
 
@@ -1371,6 +1454,17 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
         perf::sys::setAffinity(0);
         perf::sys::setPowerThrottlingOff(false);
         perf::sys::setFineTimer(false);
+        if (g_appliedTimer1ms) {
+            perf::sys::setTimer1ms(false);
+            g_appliedTimer1ms = 0;
+            logf(HORIZON_LOG_INFO, "smoothing: timer 1 ms off (module off)");
+        }
+        if (g_gameThread && GetCurrentThreadId() == g_gameThread) {
+            applyThreadOptions(); // g_enabled is false: thread options off
+        } else if (g_appliedThreadCores || g_appliedMmcss) {
+            if (g_appliedThreadCores && perf::sys::setThreadPerfCores(g_gameThread, false)) g_appliedThreadCores = 0;
+            if (g_appliedMmcss) logf(HORIZON_LOG_WARN, "smoothing: MMCSS stays on the game thread until the module is on again or the game ends");
+        }
         perf::stall::setEnabled(false);
         g_pacer.reset();
     } else {

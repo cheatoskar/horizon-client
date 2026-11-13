@@ -270,6 +270,13 @@ static void testSeries() {
     CHECK(perf::parseBenchRequest(R"({"version":1,"series":{"map":"C:\\m.Challenge.Gbx","seconds":1,"settle":0.5,
         "sets":[{"label":"a"},{"label":"b","options":{"priority":2,"fineTimer":true}}]}})", r, why));
     CHECK(r.series->where == "map" && r.mode == "map" && r.series->sets.size() == 2 && r.series->sets[1].options.fineTimer == 1);
+    // the smoothing switches (docs/performance-smooth.md) can be set per set
+    CHECK(perf::parseBenchRequest(R"({"version":1,"series":{"mode":"now","sets":[{"label":"base"},
+        {"label":"smooth","options":{"threadCores":1,"timer1ms":1,"mmcss":true}}]}})", r, why));
+    CHECK(r.series->sets.size() == 2 && r.series->sets[0].options.allOff() && r.series->sets[1].options.threadCores == 1 &&
+          r.series->sets[1].options.timer1ms == 1 && r.series->sets[1].options.mmcss == 1);
+    CHECK(perf::seriesOptionsJson(r.series->sets[1].options).find("\"threadCores\": 1, \"timer1ms\": 1, \"mmcss\": 1") != std::string::npos);
+    CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a","options":{"mmcss":2}}]}})", r, why));
     CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a","options":{"turbo":1}}]}})", r, why));
     CHECK(why.find("turbo") != std::string::npos);
     CHECK(!perf::parseBenchRequest(R"({"version":1,"series":{"sets":[{"label":"a"},{"label":"a"}]}})", r, why));
@@ -497,6 +504,16 @@ static void testPresets() {
     CHECK(perf::presetOptions(perf::PresetSmooth, 1, mine).limitFps == 0);
     CHECK(perf::presetOptions(perf::PresetCustom, 144, mine) == mine);
     CHECK(perf::presetOptions(7, 144, mine) == mine);
+    // the smoothing switches are not part of a preset: they stay the player's in every choice
+    mine.threadCores = 1;
+    mine.timer1ms = 1;
+    mine.mmcss = 1;
+    for (int p : {perf::PresetSmooth, perf::PresetLowLatency, perf::PresetCustom}) {
+        const perf::SeriesOptions o = perf::presetOptions(p, 60, mine);
+        CHECK(o.threadCores == 1 && o.timer1ms == 1 && o.mmcss == 1);
+    }
+    perf::SeriesOptions none;
+    CHECK(perf::presetOptions(perf::PresetSmooth, 60, none).threadCores == 0 && perf::presetOptions(perf::PresetSmooth, 60, none).mmcss == 0);
 }
 static int unit() {
     testStats();
@@ -771,6 +788,11 @@ static int host(const std::wstring& dir, const std::wstring& outTxt, const std::
     CHECK(has(log, "post_present yes"));
     CHECK(!has(log, "crashed"));
     const std::string settings = readAll(dir + L"\\horizon\\settings\\performance.json");
+    // smoothing switches (docs/performance-smooth.md): one log line each, applied on the thread that presents
+    if (has(settings, "\"timer_1ms\": 1")) CHECK(has(log, "smoothing: timer 1 ms on, power throttling off"));
+    if (has(settings, "\"mmcss\": 1")) CHECK(has(log, "smoothing: MMCSS on for the game thread, task Games"));
+    if (has(settings, "\"thread_cores\": 1")) CHECK(has(log, "on performance cores: "));
+    if (!has(settings, "\"timer_1ms\": 1") && !has(settings, "\"mmcss\": 1")) CHECK(!has(log, "smoothing:"));
     if (has(settings, "\"count\": 1")) {
         CHECK(has(log, "slots hooked in the device method table"));
         CHECK(has(log, "slots hooked in the query method table"));
