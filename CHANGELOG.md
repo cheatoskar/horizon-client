@@ -22,6 +22,10 @@
 - WR Hunter 0.1.1: on a map without PB or target the latest checkpoint was labelled the finish ("Finish" after CP 1, "Fin" after CP 2). The finish row now needs the finish (or a PB/target of that length); the compact line shows "CP n" while the count is unknown.
 - TMX Browser 0.2.1: "Plays in the main menu" shown once (it was also in the status line).
 - Other mods: the TM Vibrant Shaders modules and their tmvs-core.dll were listed and logged as "TM Vibrant Shaders" five times and their keys counted as foreign. DLLs in the host's plugins folder are modules, never other mods; a product is listed once; the game's own d3d9.dll wrapper (dgVoodoo in the Sunrise repack) is only logged.
+- Leaving a race (`return_to_menu`, used by the Legacy Randomizer and TMX Play) on ESWC, Sunrise and Original went into the editor first: the race's quit button (`ButtonQuitOnClick`) is the editor's "back to editing", and every solo race on these games runs under a puzzle editor. It now does what Esc > Quit does: the race asks for the quit dialog and the host presses its Quit (the game's own handler), so the game goes straight to the menu and the next map loads. TMNF/TMUF unchanged. Read from the exes, not run in a game yet.
+- TMX Browser 0.2.2: Play during a solo race (ESWC, Sunrise, Original) leaves the race and starts the map (no more "Play later" there). Forever keeps Play later.
+- WR Hunter 0.1.2: TMX records of ESWC (nations.tm-exchange.com, also Nadeo maps) were "Record unreadable (no map UID in the header)": the old games write replays with the old chunk ids (header 0x2403F000, ghost 0x2401B005/0x2401B00B). The split table marks checkpoints blue and the finish red (was the orange accent).
+- Game settings 1.1.1: no Sounds slider. The games' own options have Volume and Music only, and the slider was not heard on ESWC; a Sounds value saved by 1.1.0 is no longer put into the game.
 - Version 0.3.1 (`HorizonHost_Version` 0x000301).
 
 ## 0.3.0 (2026-11-12)
