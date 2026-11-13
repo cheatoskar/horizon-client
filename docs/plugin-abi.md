@@ -217,6 +217,7 @@ host->register_panel(host->plugin, &d);
 - "Pop out" (top right of the tab) puts the panel into its own window. With the menu open the window sits above the menu and can be moved and resized; its close button and **Dock** (right-click) bring it back. A panel with a size (`default_w` > 0) opens at its saved size, else at `default_w` x `default_h` of the screen, at least the plugin's `ui.min_w` x `ui.min_h` (plugin.json), clamped to the screen below the top bar and the menu's header; smaller than its content it scrolls. Right-click in the window, or the tab of a popped-out panel, shows its options: **Keep open** (stays with the menu closed), **Lock layout** (no moving or resizing), **Click-through** (with the menu closed, clicks go to the game), **Hide in photos and videos** (on by default, see `HORIZON_HOST_FLAG_CAPTURE`), **Opacity** 30-100 %.
 - With the menu closed, kept windows have no title bar and can't be moved; they take mouse clicks unless they are click-through.
 - `HORIZON_PANEL_HUD`: starts popped out and kept open (a timer, a split display). The player can still bring it into the menu.
+- `HORIZON_PANEL_HUD | HORIZON_PANEL_NO_BACKGROUND` (host 0.3.1, ABI 1.5; an older host ignores the bit): a widget without window background or border while the menu is closed, only what the panel draws, so it can sit bare in a corner (Input Display). With the menu open and in layout mode the window shows its frame as usual, so it can be found and moved. The window keeps a small padding in both states (the content does not jump) and takes no mouse input while the menu is closed.
 - `HORIZON_PANEL_HUD | HORIZON_PANEL_START_HIDDEN` (host 0.3.0, no ABI change; an older host ignores the bit and shows the widget at once): a widget that is off until the player shows it, from the list of hidden widgets in layout mode ("+ Title") or "Show" on its tab. Its tab then has "Hide". Reset in layout mode leaves hidden ones hidden. Horizon Scripts registers every script widget (`UI::AddWidget`) this way.
 - The host saves the layout per plugin id + key in `horizon\settings\host.json` (`panel.<plugin>.<key>`), or with the shared setup on in `%APPDATA%\Horizon Client\shared\host.json` ([shared-setup.md](shared-setup.md)).
 - Panels of a plugin that is off, failed or gated online are not drawn. `panel_visible(plugin, key)` says whether the body was drawn in the last frame (skip work otherwise).
@@ -301,6 +302,31 @@ A free or popped-out window opens at the plugin's `ui.pref_w` x `ui.pref_h` (plu
 The player sets the menu size (Auto, 60, 70, 80 or 90 % of the screen; Auto is 80 % at 1440p and higher, 85 % below) and the content scale (80-125 %; Auto is 90 % at 1440p and higher, 100 % below) in General -> Display, or changes the content scale with Ctrl + mouse wheel while the menu is open. A plugin page with a wide layout (columns, tables) picks fewer columns from the room it has, for example `const int columns = room > 1100.0f * scale ? 3 : room > 700.0f * scale ? 2 : 1;`.
 
 The pointer stays valid for the whole start; the values change between frames. `offsetof(HorizonHostApi, ui_metrics)` equals the size of the 1.3 table (unit test `static_assert`), so a plugin built against 1.3 never sees it, and one built against 1.4 checks `host->abi_minor >= 4` (or `host->size`) first.
+
+## ABI 1.5: `suspend_widgets`, `HORIZON_PANEL_NO_BACKGROUND`
+
+```c
+HorizonResult (HORIZON_CALL* suspend_widgets)(HorizonPluginHandle plugin, const char* plugin_id, const char* key_prefix, int32_t on);
+```
+
+Hides other plugins' widgets while this plugin needs the screen. The Legacy Randomizer shows the map with its picture and the medals itself, so during a run it hides the Clock and Map Info script widgets, which would only cover its panels:
+
+```c
+if (host->abi_minor >= 5 && host->suspend_widgets) {
+    host->suspend_widgets(host->plugin, "scripts", "w-clock-clock-", 1);       /* run starts */
+    host->suspend_widgets(host->plugin, "scripts", "w-map-info-map-info-", 1);
+}
+/* ... run ends: the same calls with on = 0 */
+```
+
+- `plugin_id`: whose widgets; `key_prefix`: panel keys that start with it (`""` or NULL = every widget of that plugin). Script widgets have the key `w-<script id>-<widget id>-<hash>`.
+- Nothing is saved. A request counts only while the plugin that made it runs and is on: switched off, crashed or unloaded, the widgets are back at once; at the next start nothing is hidden. Calls of several plugins add up; the same call twice is one request.
+- A hidden widget is not drawn, not listed in layout mode and not used for snapping; its tab says "Hidden while <module> runs." The player's own settings (shown, place, size) stay as they are.
+- Game thread only (`HORIZON_ERR_WRONG_STATE` otherwise). `HORIZON_ERR_INVALID_ARG`: no `plugin_id`, or the plugin's own id.
+
+`offsetof(HorizonHostApi, suspend_widgets)` equals the size of the 1.4 table (unit test `static_assert`). A plugin checks `host->abi_minor >= 5` (or `host->size`) first.
+
+The panel flag `HORIZON_PANEL_NO_BACKGROUND` (see "Panels") came with the same minor.
 
 ## Loading while the game runs
 
@@ -444,7 +470,7 @@ How they live together with the Legacy Loader:
 
 - Every struct starts with its own size (or the ABI number). The host's `HorizonHostApi.size` and `abi_minor` say how much of the table exists.
 - Changes are additive only: new fields go at the end, new events get new numbers, nothing is reordered or removed.
-- `HORIZON_ABI_MINOR` is 4 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = `open_page`, toasts (`notify`), the TM Horizon bridge (`bridge_request`, `bridge_state`) and `HorizonDeviceCallbacks.post_present`, see "ABI 1.3" above, 4 = `ui_metrics`, see "ABI 1.4". It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
+- `HORIZON_ABI_MINOR` is 5 today: 1 = textures and `save_replay`, 2 = panels and host flags, 3 = `open_page`, toasts (`notify`), the TM Horizon bridge (`bridge_request`, `bridge_state`) and `HorizonDeviceCallbacks.post_present`, see "ABI 1.3" above, 4 = `ui_metrics`, see "ABI 1.4", 5 = `suspend_widgets` and `HORIZON_PANEL_NO_BACKGROUND`, see "ABI 1.5". It counts additive changes. A plugin built against a newer minor still loads in an older host. Before using a function added later I check `host->size` (or `abi_minor`) and fall back if it is missing.
 - `HORIZON_ABI` changes only if something cannot stay compatible. The host refuses a plugin with a different `abi`.
 
 ## Building

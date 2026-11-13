@@ -166,6 +166,19 @@ Nur Testkopien. Das Modul ist auf Sunrise und Original neu, alles nur aus den Ad
 5. Dasselbe auf Original (Online-Patch-v2-Exe): Schritte 1 bis 4.
 6. ESWC einmal gegenprüfen: speichert wie vorher (auch die TMX-Kopie).
 
+## 0.3.1 Oberfläche (Branch `fix-0.3.1-ui`, mit Legacy Randomizer 0.3.1)
+
+1. Input Display einschalten (frische Einstellungen: die Datei `input-display.json` in `horizon\settings\` bzw. bei gemeinsamer Einrichtung in `%APPDATA%\Horizon Client\shared\` vorher wegbenennen). Erwartet: Stil „Arrows“, kein Graph. Mit alter Datei: das bisherige Aussehen bleibt.
+2. Im Rennen, Menü zu: nur das Widget selbst, kein Kasten dahinter. Menü auf: Rahmen sichtbar, Widget lässt sich ziehen. Strg+Einfg (Layout): Rahmen und Name wie bei den anderen Widgets.
+3. Das Fenster ist genau so groß wie die Anzeige (alle fünf Stile durchklicken, auch „Controller“: Dreiecke links/rechts, Gas oben, Bremse unten).
+4. Mit Tastatur fahren: Wheel zeigt keine Pedalbalken, Arrows/Controller blinken nicht mehr. Mit Pad und analogen Triggern: Balken erscheinen nach kurzer Zeit und zeigen Zwischenwerte.
+5. Seite von Input Display: oben rechts neben dem Titel der Schalter „Inputs“ blendet das Widget ein und aus. Horizon Scripts: dort Schalter „Clock“ und „Map Info“.
+6. Horizon Scripts im kleinen Menü (General › Menu size 60 %): ausgewählte Zeile grau mit orangem Strich links, Knöpfe und Chips brechen um, „24 hours“-Feld und „Format“ ganz sichtbar.
+7. General › Menu background auf 50 %: Menü und Dimmung deutlich durchsichtiger; nach Neustart bleibt der Wert.
+8. Randomizer starten (ESWC): Clock und Map Info verschwinden, Randomizer-Panels ohne abgeschnittene Texte („Free skip“, „Gold skip“, „Skips 0 (1 free)“). Lauf stoppen: beide Widgets wieder da, an ihrem Platz. Spiel während eines Laufs beenden und neu starten: beide Widgets da. Randomizer › HUD & layout › „Hide Clock and Map Info“ aus: Widgets bleiben im Lauf sichtbar.
+
+Im Log suchen: `[legacy-randomizer] widgets of scripts w-clock-clock- hidden for now` und `... shown again`, `widget "inputs" shown (page header)`.
+
 ## Entfernen
 
 `Horizon-Uninstall.cmd` im Spielordner (macht aus `dinput8.chain.dll` wieder `dinput8.dll`), danach den Ordner `horizon` löschen. Oder einfach die Testkopie löschen.

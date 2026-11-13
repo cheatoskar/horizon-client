@@ -75,6 +75,9 @@ struct PanelView {
     std::string title;
     unsigned icon = 0;        // codepoint, 0 = none
     bool detached = false;    // in its own window
+    bool hud = false;         // a widget (HORIZON_PANEL_HUD): the page header gets a switch for it
+    bool onScreen = false;    // the widget is on screen (or minimised to its edge icon)
+    bool usable = true;       // its plugin runs, is on and not gated
 };
 
 struct PluginView {
@@ -176,6 +179,7 @@ struct Model {
     std::string layoutWhy;                     // why not, short
     bool forever = false;                      // TMNF/TMUF: say that layout mode is only for the menus
     int widgetOpacity = 65;                    // widget background in % (host.json widgets.opacity)
+    int menuOpacity = 94;                      // menu background in % (host.json menu.opacity, 50..100)
     int iconStyle = 0;                         // module icons: 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
     // Shared setup (General): one setup for every game install of this Windows user
     bool setupAvailable = false;               // false in the test program (no shared folder)
@@ -216,6 +220,8 @@ struct Actions {
     std::function<void(int pct)> setContentScale; // 0 = Auto, else 80..125
     std::function<void()> toggleLayout;           // "Edit layout" (closes the menu)
     std::function<void(int pct)> setWidgetOpacity; // widget background 20..100 %
+    std::function<void(int pct)> setMenuOpacity;   // menu background 50..100 %
+    std::function<void(const std::string& pluginId, const std::string& key, bool show)> setWidgetShown; // header switch
     std::function<void(int style)> setIconStyle;  // 0 Distinct (icon.png), 1 Saturn (icon-alt.png)
     std::function<void(bool on)> setSharedSetup;  // General > Shared setup
     std::function<void()> copySetupFromGame;      // this game's own setup becomes the shared one

@@ -398,6 +398,18 @@ int32_t HORIZON_CALL apiBridgeState() { return bridgeState(); }
 // ---- ABI minor 4: menu size and content scale
 const HorizonUiMetrics* HORIZON_CALL apiUiMetrics() { return hostUiMetrics(); }
 
+// ---- ABI minor 5: other plugins' widgets hidden for a while
+HorizonResult HORIZON_CALL apiSuspendWidgets(HorizonPluginHandle h, const char* pluginId, const char* keyPrefix, int32_t on) {
+    Plugin* p = fromHandle(h);
+    if (!p || !pluginId || !*pluginId || p->id == pluginId) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "suspend_widgets: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    panelsSuspend(p, pluginId, keyPrefix ? keyPrefix : "", on != 0);
+    return HORIZON_OK;
+}
+
 void fillApi(Plugin* p) {
     HorizonHostApi& a = p->api;
     a = HorizonHostApi{};
@@ -449,6 +461,7 @@ void fillApi(Plugin* p) {
     a.bridge_request = &apiBridgeRequest;
     a.bridge_state = &apiBridgeState;
     a.ui_metrics = &apiUiMetrics;
+    a.suspend_widgets = &apiSuspendWidgets;
 }
 
 // ---------------------------------------------------------------- loading

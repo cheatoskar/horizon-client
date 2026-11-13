@@ -89,14 +89,27 @@ ImVec4 stateColor(ScriptState s) {
     }
 }
 
-void chip(const char* label, ImVec4 c) {
+// SameLine() when an item w pixels wide still fits after the last item, else the next item starts a new line
+// (buttons and chips wrap instead of being cut off in a narrow menu).
+void sameLineIfFits(float w) {
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w <= right) ImGui::SameLine();
+}
+float buttonWidth(const char* label) { return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f; }
+
+ImVec2 chipSize(const char* label) {
     const float s = uiScale();
     const ImVec2 ts = ImGui::CalcTextSize(label);
+    return ImVec2(ts.x + 16.0f * s, ts.y + 6.0f * s);
+}
+// A small neutral tag (permissions, online, games): grey like the rest of the menu; c only tints the text.
+void chip(const char* label, ImVec4 c) {
+    const float s = uiScale();
     const ImVec2 pad(8.0f * s, 3.0f * s);
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const ImVec2 size(ts.x + pad.x * 2, ts.y + pad.y * 2);
+    const ImVec2 size = chipSize(label);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::ColorConvertFloat4ToU32(ImVec4(c.x, c.y, c.z, 0.16f)), size.y * 0.5f);
+    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, 0.07f)), size.y * 0.5f);
     dl->AddText(ImVec2(p.x + pad.x, p.y + pad.y), ImGui::ColorConvertFloat4ToU32(c), label);
     ImGui::Dummy(size);
 }
@@ -199,7 +212,12 @@ void drawSettingWidget(Script& s, ScriptSetting& st) {
 
 void drawSettings(Script& s) {
     int shown = 0;
-    ImGui::PushItemWidth(260.0f * uiScale());
+    // the field and its label both fit: the field gets what is left after the longest label, at most 260 px
+    float labelW = 0.0f;
+    for (const ScriptSetting& st : s.settings)
+        if (!st.meta.hidden) labelW = std::max(labelW, ImGui::CalcTextSize((st.meta.name.empty() ? st.var : st.meta.name).c_str()).x);
+    const float room = ImGui::GetContentRegionAvail().x - labelW - ImGui::GetStyle().ItemInnerSpacing.x - 4.0f * uiScale();
+    ImGui::PushItemWidth(std::max(90.0f * uiScale(), std::min(260.0f * uiScale(), room)));
     for (ScriptSetting& st : s.settings) {
         if (st.meta.hidden) continue;
         drawSettingWidget(s, st);
@@ -275,34 +293,39 @@ void drawDetails(Script& s) {
     }
 
     // buttons
+    // buttons: the next one starts a new line when it would not fit (nothing cut off in a small menu)
     ImGui::Spacing();
-    if (ImGui::Button(HZ_ICON_REFRESH_CW_U8 " Reload")) g_mgr.reload(s);
-    ImGui::SameLine();
-    if (ImGui::Button(HZ_ICON_FOLDER_OPEN_U8 " Open folder")) openFolder(s.folder);
-    ImGui::SameLine();
-    if (ImGui::Button("Data folder")) openFolder(s.dataFolder);
+    const char* reloadL = HZ_ICON_REFRESH_CW_U8 " Reload";
+    const char* folderL = HZ_ICON_FOLDER_OPEN_U8 " Open folder";
+    const char* dataL = HZ_ICON_FOLDER_OPEN_U8 " Data folder";
+    if (ImGui::Button(reloadL)) g_mgr.reload(s);
+    sameLineIfFits(buttonWidth(folderL));
+    if (ImGui::Button(folderL)) openFolder(s.folder);
+    sameLineIfFits(buttonWidth(dataL));
+    if (ImGui::Button(dataL)) openFolder(s.dataFolder);
     if (s.loaded()) {
-        ImGui::SameLine();
         char b[96];
         snprintf(b, sizeof(b), "last call %.2f ms, slowest %.2f ms", s.lastMs, s.maxMs);
         mutedText(b);
     }
 
-    // permissions, online, games
+    // permissions, online, games: neutral tags that wrap
     if (s.hasManifest) {
         ImGui::Spacing();
         const uint32_t perms[] = {PermUi, PermSettings, PermReadGame, PermGameControl};
         bool any = false;
         for (uint32_t p : perms) {
             if (!(s.manifest.perms & p)) continue;
-            if (any) ImGui::SameLine();
-            chip(permLabel(p), p == PermGameControl ? warn() : accent());
+            if (any) sameLineIfFits(chipSize(permLabel(p)).x);
+            chip(permLabel(p), p == PermGameControl ? warn() : text2());
             any = true;
         }
-        if (any) ImGui::SameLine();
-        chip(s.manifest.online == OnlineMode::OnlineOk ? "Online OK" : "Solo only", text2());
-        ImGui::SameLine();
-        chip(gamesText(s.manifest.games).c_str(), muted());
+        const char* online = s.manifest.online == OnlineMode::OnlineOk ? "Online OK" : "Solo only";
+        if (any) sameLineIfFits(chipSize(online).x);
+        chip(online, text2());
+        const std::string games = gamesText(s.manifest.games);
+        sameLineIfFits(chipSize(games.c_str()).x);
+        chip(games.c_str(), muted());
         if (!any) mutedText("No permissions: log, time and its own data files only.");
     }
 
@@ -351,9 +374,9 @@ void drawScriptsTab() {
     snprintf(line, sizeof(line), "%d script%s, %d running", static_cast<int>(scripts.size()), scripts.size() == 1 ? "" : "s", running);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(line);
-    ImGui::SameLine();
+    sameLineIfFits(buttonWidth(HZ_ICON_FOLDER_OPEN_U8 " Scripts folder"));
     if (ImGui::Button(HZ_ICON_FOLDER_OPEN_U8 " Scripts folder")) openFolder(g_mgr.scriptsDir());
-    ImGui::SameLine();
+    sameLineIfFits(buttonWidth(HZ_ICON_REFRESH_CW_U8 " Reload all"));
     if (ImGui::Button(HZ_ICON_REFRESH_CW_U8 " Reload all")) {
         g_mgr.rescan();
         g_mgr.reloadAll();
@@ -370,34 +393,52 @@ void drawScriptsTab() {
     }
     if (g_selected.empty() || !g_mgr.find(g_selected)) g_selected = scripts.front()->id;
 
-    const float listW = 250.0f * s;
+    // the list: 250 px, narrower in a small menu so the details keep room
+    const float listW = std::max(150.0f * s, std::min(250.0f * s, ImGui::GetContentRegionAvail().x * 0.34f));
     float height = ImGui::GetContentRegionAvail().y;
     if (height < 420.0f * s) height = 420.0f * s;
     if (ImGui::BeginChild("##list", ImVec2(listW, height), ImGuiChildFlags_Borders)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
         for (auto& sp : scripts) {
             Script& sc = *sp;
             ImGui::PushID(sc.id.c_str());
-            bool on = sc.enabled;
-            if (ImGui::Checkbox("##on", &on)) g_mgr.setEnabled(sc, on);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(on ? "On" : "Off");
-            ImGui::SameLine();
-            const std::string name = sc.hasManifest && !sc.manifest.name.empty() ? sc.manifest.name : sc.id;
-            const ImVec2 start = ImGui::GetCursorPos();
-            if (ImGui::Selectable("##sel", g_selected == sc.id, 0, ImVec2(0, ImGui::GetTextLineHeight() * 2.1f))) {
+            // one row: switch, then name and state. Selected like the menu's own lists: a light row with an accent
+            // bar at its left edge, no orange fill.
+            const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            const float rowW = ImGui::GetContentRegionAvail().x;
+            const float lineH = ImGui::GetTextLineHeight();
+            const float rowH = std::max(ImGui::GetFrameHeight(), lineH * 2.0f + 2.0f * s) + 10.0f * s;
+            const bool selected = g_selected == sc.id;
+            ImGui::SetNextItemAllowOverlap();
+            if (ImGui::InvisibleButton("##sel", ImVec2(rowW, rowH))) {
                 g_selected = sc.id;
                 g_host->set_string(g_host->plugin, "Selected", g_selected.c_str()); // the tab opens on it next time
             }
-            ImGui::SetCursorPos(start);
-            ImGui::BeginGroup();
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::PushStyleColor(ImGuiCol_Text, stateColor(sc.state));
+            const bool hov = ImGui::IsItemHovered();
+            const float rr = 8.0f * s;
+            if (selected) {
+                dl->AddRectFilled(rowPos, ImVec2(rowPos.x + rowW, rowPos.y + rowH), ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.07f)), rr);
+                dl->AddRectFilled(ImVec2(rowPos.x, rowPos.y + rowH * 0.25f), ImVec2(rowPos.x + 3.0f * s, rowPos.y + rowH * 0.75f),
+                                  ImGui::ColorConvertFloat4ToU32(accent()), 2.0f * s);
+            } else if (hov) {
+                dl->AddRectFilled(rowPos, ImVec2(rowPos.x + rowW, rowPos.y + rowH), ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.04f)), rr);
+            }
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x + 8.0f * s, rowPos.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));
+            bool on = sc.enabled;
+            if (ImGui::Checkbox("##on", &on)) g_mgr.setEnabled(sc, on);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(on ? "On" : "Off");
+            const float tx = ImGui::GetItemRectMax().x + 10.0f * s;
+            const float ty = rowPos.y + (rowH - lineH * 2.0f - 2.0f * s) * 0.5f;
+            const std::string name = sc.hasManifest && !sc.manifest.name.empty() ? sc.manifest.name : sc.id;
             std::string sub = stateLabel(sc.state);
             if (sc.errorCount) sub += "  \xC2\xB7  " + std::to_string(sc.errorCount) + (sc.errorCount == 1 ? " error" : " errors");
-            ImGui::TextUnformatted(sub.c_str());
-            ImGui::PopStyleColor();
-            ImGui::EndGroup();
+            dl->PushClipRect(ImVec2(tx, rowPos.y), ImVec2(rowPos.x + rowW - 4.0f * s, rowPos.y + rowH), true);
+            dl->AddText(ImVec2(tx, ty), ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
+            dl->AddText(ImVec2(tx, ty + lineH + 2.0f * s), ImGui::ColorConvertFloat4ToU32(stateColor(sc.state)), sub.c_str());
+            dl->PopClipRect();
+            ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + rowH));
+            ImGui::Dummy(ImVec2(rowW, 2.0f * s));
             ImGui::PopID();
-            ImGui::Spacing();
         }
     }
     ImGui::EndChild();
@@ -551,7 +592,7 @@ static const HorizonPluginInfo kInfo = {
     HORIZON_ABI,
     "scripts",
     "Horizon Scripts",
-    "0.2.0",
+    "0.2.1",
     HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL | HORIZON_GAME_TMNF | HORIZON_GAME_TMUF,
     HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS | HORIZON_CAP_GAME_CONTROL, // page = two panels (ABI 1.2), no DrawMenu
     HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
