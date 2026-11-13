@@ -74,6 +74,30 @@ const Spec kSpecs[] = {
      0x005cdf70, 0x418, 0x194, 0x784, 0x13c, 0, 0, 0x704, 1, 0x454, 0x0047b0e0, L"docs"},
 };
 
+// Leaving a solo race on ESWC, Sunrise and Original (static, 2026-11-13; TMNF/TMUF keep ButtonQuitOnClick).
+// CTrackManiaRace::ButtonQuitOnClick only sets the race's result (race+0x14, setter ESWC 0x71e040) to 2, and the app
+// loop (ESWC 0x6ed9f2) handles result 2 of a ChallengeType 3 race by going back to the CTrackManiaEditorPuzzle that
+// every solo race runs under (0x6eedc8 -> 0x6ebd30): the player lands in the editor and the menu only comes after he
+// leaves it. Esc in a race (the race's input handler, ESWC 0x6d7147, Sunrise 0x7ea1a2, Original 0x7e8802) sets result
+// 0xb (ESWC) / 0xa (Sunrise, Original) instead; the app answers with CTrackManiaMenus::DialogQuitRace, and its Quit
+// button (DialogQuitRace_OnQuit: hide the dialog layer, dialog result 0x10 / 0xe) makes the app leave to the menu
+// (ESWC 0x6edd9f -> 0x6f0770). returnToMenu() does the same: result = Esc, and once the dialog layer is up, the
+// Quit button's own handler.
+struct QuitSpec {
+    Game game;
+    uint32_t escResult;       // race result of Esc
+    uintptr_t dialogQuit;     // CTrackManiaMenus::DialogQuitRace_OnQuit (thiscall, menus)
+    size_t menusDialogResult; // the menus' dialog result, written by OnQuit
+    size_t menusDialogLayer;  // the menus' dialog layer; layer+0x74 != 0 while it is shown (ESWC 0x716dd0)
+};
+const QuitSpec kQuitSpecs[] = {
+    {Game::Eswc, 0xb, 0x0074d4a0, 0x2e0, 0x37c},     // reflection: DialogQuitRace_OnQuit 0x74d4a0
+    {Game::Sunrise, 0xa, 0x008437f0, 0x254, 0x2f0},  // reflection: DialogQuitRace_OnQuit 0x8437f0
+    {Game::Original, 0xa, 0x00841b80, 0x254, 0x2f0}, // same bytes as Sunrise's (pattern), no reflection dump
+};
+constexpr size_t kRaceResult = 0x14;
+constexpr size_t kLayerShown = 0x74;
+
 // CConstructionChallengeInfo+0x14: the info's CSystemFidFile (Build 0x702a60 / 0x85ede0 / 0x85d1a0 look infos up by
 // it, RefreshFromDisk drops infos whose file is gone, the play fiber loads it). Same in ESWC, Sunrise, Original.
 constexpr size_t kInfoFid = 0x14;
@@ -133,7 +157,17 @@ void* fieldOfKind(void* obj, size_t hint, const char* kind) {
         if (off == hint) continue;
         if (readAt(obj, off, &p) && p && reinterpret_cast<uintptr_t>(p) > 0x10000 &&
             reflect::isKindOf(reflect::classOfObject(p), kind)) {
-            if (hint) logf("gamectl: %s found at +0x%X instead of +0x%X", kind, (unsigned)off, (unsigned)hint);
+            // once per class and place (tick() reads the race every frame while leaving)
+            static char logged[8][48];
+            static int nLogged = 0;
+            char key[48];
+            _snprintf_s(key, _TRUNCATE, "%s+%X", kind, (unsigned)off);
+            bool seen = false;
+            for (int i = 0; i < nLogged && !seen; i++) seen = strcmp(logged[i], key) == 0;
+            if (hint && !seen) {
+                logf("gamectl: %s found at +0x%X instead of +0x%X", kind, (unsigned)off, (unsigned)hint);
+                if (nLogged < 8) strcpy_s(logged[nLogged++], key);
+            }
             return p;
         }
     }
@@ -328,6 +362,81 @@ bool pressQuit(void* race) {
         return false;
     }
 }
+
+const QuitSpec* quitSpec() {
+    for (const QuitSpec& q : kQuitSpecs)
+        if (g_spec && q.game == g_spec->game) return &q;
+    return nullptr;
+}
+
+bool bytesAt(uintptr_t addr, uint8_t* out, size_t n) {
+    __try {
+        memcpy(out, reinterpret_cast<const void*>(addr), n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The code the quit path relies on, byte for byte: ButtonQuitOnClick = push 2; call setter (setter: mov eax,
+// [esp+4]; cmp [ecx+14h], eax), DialogQuitRace_OnQuit = push esi; mov esi, ecx; call close; mov [esi+result], code;
+// pop esi; ret.
+bool quitCodeOk(const QuitSpec& q, const char** why) {
+    uint8_t b[20] = {};
+    if (!bytesAt(A(g_spec->quitButton), b, 8) || b[0] != 0x6a || b[1] != 0x02 || b[2] != 0xe8 || b[7] != 0xc3) {
+        *why = "ButtonQuitOnClick";
+        return false;
+    }
+    int32_t rel = 0;
+    memcpy(&rel, b + 3, 4);
+    const uintptr_t setter = A(g_spec->quitButton) + 7 + rel;
+    static const uint8_t kSetter[] = {0x8b, 0x44, 0x24, 0x04, 0x39, 0x41, 0x14};
+    uint8_t s[sizeof(kSetter)] = {};
+    if (!bytesAt(setter, s, sizeof(s)) || memcmp(s, kSetter, sizeof(s)) != 0) {
+        *why = "the race result setter";
+        return false;
+    }
+    uint32_t off = 0;
+    if (!bytesAt(A(q.dialogQuit), b, 20) || b[0] != 0x56 || b[1] != 0x8b || b[2] != 0xf1 || b[3] != 0xe8 || b[8] != 0xc7 ||
+        b[9] != 0x86 || b[18] != 0x5e || b[19] != 0xc3) {
+        *why = "DialogQuitRace_OnQuit";
+        return false;
+    }
+    memcpy(&off, b + 10, 4);
+    if (off != q.menusDialogResult) {
+        *why = "the dialog result offset";
+        return false;
+    }
+    return true;
+}
+
+bool writeRaceResult(void* race, uint32_t v) {
+    __try {
+        *reinterpret_cast<uint32_t*>(static_cast<char*>(race) + kRaceResult) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool pressDialogQuit(const QuitSpec& q, void* menus) {
+    __try {
+        reinterpret_cast<void(__thiscall*)(void*)>(A(q.dialogQuit))(menus);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        logf("gamectl: exception 0x%08X in DialogQuitRace_OnQuit", GetExceptionCode());
+        return false;
+    }
+}
+
+// A returnToMenu() on ESWC/Sunrise/Original in progress (tick() finishes it).
+struct Leaving {
+    bool active = false;
+    void* race = nullptr;
+    DWORD start = 0;
+    int frames = 0, presses = 0, lastPress = -100;
+} g_leave;
+constexpr DWORD kLeaveTimeoutMs = 6000;
 
 // Unknown exe (another version of a known game): log what the reflection finds, so one run is enough
 // to fill in a Spec. Changes nothing in the game.
@@ -531,7 +640,60 @@ Result returnToMenu() {
     void* app = appPtr();
     void* race = app ? racePtr(app) : nullptr;
     if (!race) return Result::WrongState;
-    return pressQuit(race) ? Result::Ok : Result::GameError;
+    const QuitSpec* q = quitSpec();
+    if (!q) return pressQuit(race) ? Result::Ok : Result::GameError; // TMNF/TMUF
+    if (g_leave.active && g_leave.race == race && GetTickCount() - g_leave.start < kLeaveTimeoutMs) return Result::Ok;
+    const char* why = "";
+    if (!quitCodeOk(*q, &why)) {
+        logf("gamectl: %s has unexpected bytes - not leaving the race", why);
+        return Result::GameError;
+    }
+    uint32_t result = 0;
+    if (!readAt(race, kRaceResult, &result)) return Result::GameError;
+    if (result == 0) {
+        if (!writeRaceResult(race, q->escResult)) return Result::GameError;
+        logf("gamectl: leaving the race like Esc > Quit: race result 0x%X, then the quit dialog's Quit", q->escResult);
+    } else {
+        logf("gamectl: leaving the race: race result %u already pending, pressing the dialog's Quit when it is up", result);
+    }
+    g_leave = Leaving();
+    g_leave.active = true;
+    g_leave.race = race;
+    g_leave.start = GetTickCount();
+    return Result::Ok;
+}
+
+void tick() {
+    if (!g_leave.active || !g_spec) return;
+    const QuitSpec* q = quitSpec();
+    void* app = appPtr();
+    void* race = app ? racePtr(app) : nullptr;
+    g_leave.frames++;
+    if (!q || race != g_leave.race) {
+        logf("gamectl: race left after %d frames (%lu ms, %d dialog press(es))", g_leave.frames, GetTickCount() - g_leave.start,
+             g_leave.presses);
+        g_leave = Leaving();
+        return;
+    }
+    if (GetTickCount() - g_leave.start > kLeaveTimeoutMs) {
+        logf("gamectl: the race did not end within %lu ms (%d dialog press(es)); leave it by hand", kLeaveTimeoutMs, g_leave.presses);
+        g_leave = Leaving();
+        return;
+    }
+    // The app reads the result on its next frame and opens the dialog; at most three presses, 15 frames apart.
+    if (g_leave.frames < 2 || g_leave.presses >= 3 || g_leave.frames - g_leave.lastPress < 15) return;
+    void* menus = menusPtr(app);
+    void* layer = nullptr;
+    int shown = 0, dialogResult = -1;
+    uint32_t result = 0;
+    if (!menus || !readAt(menus, q->menusDialogLayer, &layer) || !layer || !readAt(layer, kLayerShown, &shown) ||
+        !readAt(menus, q->menusDialogResult, &dialogResult) || !readAt(race, kRaceResult, &result))
+        return;
+    if (!shown || dialogResult != 0 || result == 0) return;
+    g_leave.presses++;
+    g_leave.lastPress = g_leave.frames;
+    logf("gamectl: quit dialog up after %d frames: pressing its Quit", g_leave.frames);
+    if (!pressDialogQuit(*q, menus)) g_leave = Leaving();
 }
 
 bool currentMap(MapInfo* out) {

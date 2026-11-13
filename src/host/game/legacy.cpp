@@ -415,6 +415,7 @@ void LegacyAdapter::emitMapLoaded(void* challenge) {
 }
 
 void LegacyAdapter::frame() {
+    gamectl::tick(); // a returnToMenu() in progress presses the quit dialog's Quit
     Snapshot s;
     const bool ok = read(s);
     if (!eswc() && s.race != g_sunRace) {
