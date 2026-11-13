@@ -2,4 +2,4 @@ executable: HorizonHost.dll
 dependencies:
   - id: CoreMod
     version: ^1.0.1
-changelog: '- @VERSION@: Horizon Client: in-game menu (Insert), widgets and modules. Read-only on Forever: no game hooks, no input changes.'
+changelog: '- @VERSION@: Horizon Client: in-game menu (Insert), widgets and modules. Read-only on Forever: no game hooks; keys typed into the menu stay out of the game.'

@@ -23,8 +23,11 @@
 #include "horizon_plugin.h"
 
 #include "d3d_hooks.h"
+#include "gpusync.h"
+#include "gpusync_live.h"
 #include "perf_core.h"
 #include "series.h"
+#include "shadercache.h"
 #include "stall.h"
 #include "sysopts.h"
 
@@ -50,6 +53,8 @@ struct Settings {
     int limitFps = 0;       // 0 = off
     int vsync = 0;          // 0 = as the game sets it, 1 = off, 2 = on
     int priority = 0, affinity = 0, powerThrottlingOff = 0, fineTimer = 0;
+    int threadCores = 0, timer1ms = 0, mmcss = 0; // smoothing switches, independent of the preset (docs/performance-smooth.md)
+    int shaderCache = 0;    // shader disk cache, ESWC/Sunrise/Original only (shadercache.h)
     int preset = 0;         // perf::Preset: 0 Smooth (default), 1 Low latency, 2 Custom
     int hangLog = 1;
     int hangMs = 1500;
@@ -79,6 +84,10 @@ void loadSettings() {
     S.affinity = gi("affinity", S.affinity);
     S.powerThrottlingOff = gi("power_throttling_off", S.powerThrottlingOff);
     S.fineTimer = gi("fine_timer", S.fineTimer);
+    S.threadCores = gi("thread_cores", S.threadCores);
+    S.timer1ms = gi("timer_1ms", S.timer1ms);
+    S.mmcss = gi("mmcss", S.mmcss);
+    S.shaderCache = gi("shader_cache", S.shaderCache);
     // the choice: saved, or Custom for a player who set options before presets existed, else Smooth
     S.preset = gi("preset", -1);
     if (S.preset < perf::PresetSmooth || S.preset > perf::PresetCustom) {
@@ -102,6 +111,7 @@ double g_tPre = 0, g_tPrevPre = 0, g_tPost = 0, g_sleepMs = 0, g_presentMs = 0;
 perf::Pacer g_pacer;
 uint64_t g_frameNo = 0;
 perf::Summary g_live;   // last 10 s, refreshed twice a second
+double g_liveHookCalls = -1; // calls through my Direct3D hooks per frame in those 10 s (-1: no hooks)
 double g_liveAt = 0;
 HWND g_window = nullptr;
 
@@ -182,6 +192,9 @@ std::vector<std::pair<std::string, std::string>> optionList() {
             {"affinity", i(S.affinity)},
             {"powerThrottlingOff", i(S.powerThrottlingOff)},
             {"fineTimer", i(S.fineTimer)},
+            {"threadCores", i(S.threadCores)},
+            {"timer1ms", i(S.timer1ms)},
+            {"mmcss", i(S.mmcss)},
             {"competitionPatch", i(g_competitionPatch)},
             {"wrapperD3d9", i(perf::d3d::filterBlockedWhy()[0] != 0)}};
 }
@@ -256,6 +269,9 @@ perf::SeriesOptions currentOptions() {
     o.affinity = S.affinity;
     o.powerThrottlingOff = S.powerThrottlingOff;
     o.fineTimer = S.fineTimer;
+    o.threadCores = S.threadCores;
+    o.timer1ms = S.timer1ms;
+    o.mmcss = S.mmcss;
     return o;
 }
 
@@ -399,6 +415,9 @@ void applySeriesOptions(const perf::SeriesOptions& o) {
     S.affinity = o.affinity;
     S.powerThrottlingOff = o.powerThrottlingOff;
     S.fineTimer = o.fineTimer;
+    S.threadCores = o.threadCores;
+    S.timer1ms = o.timer1ms;
+    S.mmcss = o.mmcss;
     applyProcessOptions();
 }
 
@@ -681,18 +700,113 @@ void applyPreset() {
     S.affinity = o.affinity;
     S.powerThrottlingOff = o.powerThrottlingOff;
     S.fineTimer = o.fineTimer;
+    S.threadCores = o.threadCores;
+    S.timer1ms = o.timer1ms;
+    S.mmcss = o.mmcss;
+}
+
+// ---- smoothing switches on the game thread (the thread that calls Present: messages, logic, physics, rendering)
+DWORD g_gameThread = 0;       // set at the first Present
+bool g_threadDirty = true;    // the thread options changed: applied at the next Present, on the game thread
+int g_appliedThreadCores = 0, g_appliedMmcss = 0, g_appliedTimer1ms = 0;
+
+// Runs on the game thread (MMCSS can only be joined and left by the thread itself).
+void applyThreadOptions() {
+    g_threadDirty = false;
+    const int cores = g_enabled ? S.threadCores : 0;
+    if (cores != g_appliedThreadCores) {
+        const bool ok = perf::sys::setThreadPerfCores(g_gameThread, cores != 0);
+        if (cores) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: game thread %lu on performance cores: %s", static_cast<unsigned long>(g_gameThread), perf::sys::threadCoresNote());
+        else logf(HORIZON_LOG_INFO, "smoothing: game thread back on all cores%s", ok ? "" : " (failed)");
+        g_appliedThreadCores = cores;
+    }
+    const int mm = g_enabled ? S.mmcss : 0;
+    if (mm != g_appliedMmcss) {
+        const bool ok = perf::sys::setMmcssGames(mm != 0);
+        if (mm) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: MMCSS %s for the game thread%s%s", ok ? "on" : "not applied",
+                     ok ? ", " : ": ", perf::sys::mmcssNote());
+        else logf(HORIZON_LOG_INFO, "smoothing: MMCSS off for the game thread%s", ok ? "" : " (failed)");
+        g_appliedMmcss = mm; // also after a failure: the next change of the switch tries again, not every frame
+    }
 }
 
 void applyProcessOptions() {
     if (!perf::sys::setPriority(S.priority)) logf(HORIZON_LOG_WARN, "priority %d refused by Windows", S.priority);
     if (!perf::sys::setAffinity(S.affinity)) logf(HORIZON_LOG_WARN, "core selection %d refused by Windows", S.affinity);
-    perf::sys::setPowerThrottlingOff(S.powerThrottlingOff != 0);
+    // "Timer 1 ms" also keeps Windows from throttling the process (and from ignoring its timer request when hidden)
+    perf::sys::setPowerThrottlingOff(S.powerThrottlingOff != 0 || S.timer1ms != 0);
     perf::sys::setFineTimer(S.fineTimer != 0);
+    if (S.timer1ms != g_appliedTimer1ms) {
+        const bool ok = perf::sys::setTimer1ms(S.timer1ms != 0);
+        if (S.timer1ms) logf(ok ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "smoothing: timer 1 ms %s, power throttling off (timer now %.2f ms)", ok ? "on" : "refused", perf::sys::currentTimerMs());
+        else logf(HORIZON_LOG_INFO, "smoothing: timer 1 ms off%s", ok ? "" : " (failed)");
+        g_appliedTimer1ms = S.timer1ms;
+    }
+    g_threadDirty = true;
+    if (g_gameThread && GetCurrentThreadId() == g_gameThread) applyThreadOptions();
     g_pacer.setFps(S.limitFps);
     g_pacer.reset();
     perf::d3d::setMode(S.count && callsAllowed(), S.filter && callsAllowed());
     perf::stall::setEnabled(S.hangLog != 0);
     perf::stall::setThresholdMs(S.hangMs);
+}
+
+// ---- shader disk cache (2006 engine only; TMNF/TMUF never: Competition Patch, no hooks in the exe there)
+bool legacyGame() { return (g_game & HORIZON_GAME_LEGACY) != 0; }
+std::string g_scBucket = "menu and loading"; // what the current hit/miss count belongs to
+
+void scLog(int level, const char* fmt, ...) {
+    char buf[600];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    logf(level, "%s", buf);
+}
+
+// Writes the count of the bucket that ends (one line, only if a shader was asked for) and starts `next`.
+void shaderCacheFlush(const char* next) {
+    if (perf::shadercache::installed()) {
+        const perf::shadercache::Stats s = perf::shadercache::take();
+        if (s.hits || s.misses || s.fallbacks)
+            logf(HORIZON_LOG_INFO, "shader cache: %s: %s", g_scBucket.c_str(), perf::shadercache::statsLine(s).c_str());
+    }
+    if (next) g_scBucket = next;
+}
+
+// Installs the hook the first time it is wanted (bytes checked, refused with a log line otherwise) and switches
+// it between caching and pass-through.
+void shaderCacheApply() {
+    if (!legacyGame()) return;
+    const bool want = g_enabled && S.shaderCache;
+    static bool tried = false;
+    if (want && !perf::shadercache::installed() && !tried) {
+        tried = true;
+        const HorizonGameInfo* gi = g_host->game_info();
+        const perf::shadercache::Spec* spec = gi ? perf::shadercache::specFor(gi->exe_timestamp) : nullptr;
+        if (!spec || g_gameKey != spec->game) {
+            logf(HORIZON_LOG_WARN, "shader cache: off, unknown exe build (PE timestamp %08lx)", static_cast<unsigned long>(gi ? gi->exe_timestamp : 0));
+        } else {
+            perf::shadercache::Config cfg;
+            cfg.folder = g_data + L"shadercache\\" + widen(spec->game) + L"\\";
+            char id[64];
+            snprintf(id, sizeof(id), "%s-%08lx-d3dx-static", spec->game, static_cast<unsigned long>(spec->timestamp));
+            cfg.exeId = id;
+            cfg.log = &scLog;
+            cfg.delta = gi ? static_cast<intptr_t>(gi->exe_base) - 0x00400000 : 0;
+            perf::shadercache::install(*spec, cfg);
+        }
+    }
+    if (perf::shadercache::installed() && perf::shadercache::active() != want) {
+        if (!want) shaderCacheFlush(nullptr);
+        perf::shadercache::setActive(want);
+        logf(HORIZON_LOG_INFO, "shader cache: %s", want ? "caching" : "pass-through (switched off)");
+    }
+}
+const char* shaderCacheNote() {
+    if (perf::shadercache::refusedWhy()[0]) return perf::shadercache::refusedWhy();
+    if (S.shaderCache && legacyGame() && !perf::shadercache::installed()) return "unknown exe build";
+    return "";
 }
 
 void d3dLog(int level, const char* fmt, ...) {
@@ -760,6 +874,8 @@ bool windowInFront() {
     return f && (f == g_window || GetAncestor(f, GA_ROOTOWNER) == GetAncestor(g_window, GA_ROOTOWNER));
 }
 
+std::string hookCostText(double callsPerFrame); // below, with the page's live numbers
+
 void finishFrame(double tPre) {
     if (g_tPrevPre <= 0) {
         g_tPrevPre = tPre;
@@ -796,10 +912,11 @@ void finishFrame(double tPre) {
         s_nextLog = tPre + 30000;
         perf::CallCounts sum;
         size_t n = 0, withCalls = 0;
-        double total = 0;
+        double total = 0, hookCalls = 0;
         for (size_t i = g_ring.size(); i > 0 && total < 30000; i--, n++) {
             const perf::FrameSample& x = g_ring.at(i - 1);
             total += x.frameMs;
+            hookCalls += x.calls.hookCalls;
             if (!x.hasCalls) continue;
             withCalls++;
             sum.draws += x.calls.draws + x.calls.drawsUP;
@@ -811,16 +928,21 @@ void finishFrame(double tPre) {
             sum.drawsSoftwareVP += x.calls.drawsSoftwareVP;
         }
         const perf::Summary s = perf::summarize(g_ring.last(n));
-        char left[96] = "";
+        char left[200] = "";
+        const std::string hooks = hookCostText(n ? hookCalls / static_cast<double>(n) : -1);
         if (s.skipped)
             snprintf(left, sizeof(left), "; %u frames left out (background, loading, after a Reset)", static_cast<unsigned>(s.skipped));
+        if (!hooks.empty()) {
+            const size_t used = strlen(left);
+            snprintf(left + used, sizeof(left) - used, "; hooks: %s", hooks.c_str());
+        }
         if (withCalls) {
             const double k = 1.0 / static_cast<double>(withCalls);
             logf(HORIZON_LOG_INFO,
                  "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms; per frame: %.0f draws (%.0f software VP), "
-                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f%s",
+                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f, limiter %.2f ms%s",
                  s.avgFps, s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, sum.draws * k, sum.drawsSoftwareVP * k,
-                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k, left);
+                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k, s.sleepMsAvg, left);
         } else {
             logf(HORIZON_LOG_INFO, "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms, limiter %.2f ms%s", s.avgFps,
                  s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, s.sleepMsAvg, left);
@@ -828,8 +950,20 @@ void finishFrame(double tPre) {
     }
 }
 
+int g_gsPending = -1; // Cpu/Gpu synchro picked on the page, applied in the next pre_present (game thread, between frames)
+void applyGpuSync(int value);
+void logGpuSync();
+
 void HORIZON_CALL cbPrePresent(void*, void* device) {
     const double t = perf::sys::nowMs();
+    if (!g_gameThread) g_gameThread = GetCurrentThreadId();
+    if (g_threadDirty && GetCurrentThreadId() == g_gameThread) applyThreadOptions();
+    if (g_gsPending >= 0 && GetCurrentThreadId() == g_gameThread) {
+        const int v = g_gsPending;
+        g_gsPending = -1;
+        applyGpuSync(v);
+    }
+    if (g_frameNo == 300) logGpuSync(); // once, when the game's viewport is up
     perf::stall::frame(g_window);
     ensureHooks(device);
     finishFrame(t);
@@ -893,6 +1027,96 @@ EngineView readEngine() {
     return v;
 }
 
+// ---- Cpu/Gpu synchro (gpusync.h, gpusync_live.h): the game's wait for the GPU after each frame
+void* pointerAt(void* base, int32_t off) {
+    if (!base || off < 0) return nullptr;
+    __try {
+        return *reinterpret_cast<void**>(static_cast<unsigned char*>(base) + off);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+void* gameViewport() {
+    if (!g_host->reflect_offset) return nullptr;
+    return pointerAt(g_host->engine_pointer(HORIZON_ENGINE_APP), g_host->reflect_offset("CGameApp", "Viewport"));
+}
+// CGameApp.Viewport -> CHmsViewport.Config -> CSystemConfig.Display (CSystemConfigDisplay); *off: its GpuSync member
+void* gameDisplayConfig(int32_t* off) {
+    *off = g_host->reflect_offset ? g_host->reflect_offset("CSystemConfigDisplay", "GpuSync") : -1;
+    if (*off < 0) return nullptr;
+    void* config = pointerAt(gameViewport(), g_host->reflect_offset("CHmsViewport", "Config"));
+    return pointerAt(config, g_host->reflect_offset("CSystemConfig", "Display"));
+}
+std::wstring systemConfigFile() {
+    wchar_t exe[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return std::wstring();
+    std::wstring dir(exe);
+    return dir.substr(0, dir.find_last_of(L"\\/") + 1) + L"Default.SystemConfig.Gbx";
+}
+int g_gsFile = -1;      // ESWC/Sunrise/Original: the value in Default.SystemConfig.Gbx (-1 unknown)
+std::string g_gsNote;    // the last change's result, one short line on the page
+bool foreverGame() { return (g_game & (HORIZON_GAME_TMNF | HORIZON_GAME_TMUF)) != 0; }
+// with Competition Patch loaded Horizon touches nothing beyond its overlay on TMNF/TMUF (owner's rule)
+bool gsLiveAllowed() { return !(foreverGame() && g_competitionPatch); }
+
+void readSystemConfigFile() {
+    g_gsFile = -1;
+    if (foreverGame()) return;
+    FILE* f = _wfopen(systemConfigFile().c_str(), L"rb");
+    if (!f) return;
+    std::string in;
+    char buf[4096];
+    size_t got = 0;
+    while ((got = fread(buf, 1, sizeof(buf), f)) > 0 && in.size() < (1u << 20)) in.append(buf, got);
+    fclose(f);
+    g_gsFile = perf::gpusync::readFromConfig(in);
+}
+
+void logGpuSync() {
+    const perf::gpusync::Live l = perf::gpusync::readLive(gameViewport(), g_game);
+    if (l.verified)
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: %s (live switch %s)%s%s", perf::gpusync::name(l.value),
+             gsLiveAllowed() ? "available" : "off: Competition Patch", g_gsFile >= 0 ? ", file: " : "", g_gsFile >= 0 ? perf::gpusync::name(g_gsFile) : "");
+    else
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: no live switch (%s)%s%s", l.why.c_str(), g_gsFile >= 0 ? ", file: " : "",
+             g_gsFile >= 0 ? perf::gpusync::name(g_gsFile) : "");
+}
+
+void applyGpuSync(int value) {
+    const perf::gpusync::Live before = perf::gpusync::readLive(gameViewport(), g_game);
+    const char* was = before.verified ? perf::gpusync::name(before.value) : "?";
+    std::string why;
+    bool live = false;
+    if (gsLiveAllowed()) live = perf::gpusync::setLive(gameViewport(), g_game, value, &why);
+    else why = "Competition Patch loaded";
+    if (live) logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: %s -> %s (live)", was, perf::gpusync::name(value));
+    else logf(HORIZON_LOG_WARN, "Cpu/Gpu synchro: not switched live (%s)", why.c_str());
+    if (foreverGame()) {
+        // the binary, compressed Documents config is never written; the launcher keeps the setting
+        g_gsNote = live ? "This session only." : "Not changed: " + why + ".";
+        return;
+    }
+    // the engine's own config value too, so a later ApplySystemConfig or config save keeps the choice
+    int32_t off = -1;
+    void* display = gameDisplayConfig(&off);
+    const int oldDisplay = perf::gpusync::readDisplayValue(display, off);
+    // only when that field holds what the file or the viewport says (else it is not the field I think it is)
+    const bool plausible = oldDisplay >= 0 && (oldDisplay == g_gsFile || (before.verified && oldDisplay == before.value));
+    if (plausible && perf::gpusync::setDisplayValue(display, off, value))
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: the game's display config %s -> %s", perf::gpusync::name(oldDisplay), perf::gpusync::name(value));
+    else
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: the game's display config left as it is (%s)", oldDisplay < 0 ? "not found" : "does not match");
+    int old = -1;
+    std::string msg;
+    const bool saved = perf::gpusync::persist(systemConfigFile(), value, &old, &msg);
+    logf(saved ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "Cpu/Gpu synchro: Default.SystemConfig.Gbx %s -> %s: %s", perf::gpusync::name(old),
+         perf::gpusync::name(value), msg.c_str());
+    readSystemConfigFile();
+    if (saved) g_gsNote = live ? "Now and at the next start." : "At the next start.";
+    else g_gsNote = std::string(live ? "Now only. " : "Not changed. ") + "File: " + msg + ".";
+}
+
 // ---- drawing
 ImVec4 col(const HorizonColor& c) { return ImVec4(c.r, c.g, c.b, c.a); }
 
@@ -902,8 +1126,23 @@ void refreshLive(double now) {
     // the last ~10 s
     size_t n = 0;
     double sum = 0;
-    for (size_t i = g_ring.size(); i > 0 && sum < 10000; i--, n++) sum += g_ring.at(i - 1).frameMs;
+    double hooks = 0;
+    for (size_t i = g_ring.size(); i > 0 && sum < 10000; i--, n++) {
+        sum += g_ring.at(i - 1).frameMs;
+        hooks += g_ring.at(i - 1).calls.hookCalls;
+    }
     g_live = perf::summarize(g_ring.last(n));
+    g_liveHookCalls = perf::d3d::attached() && n ? hooks / static_cast<double>(n) : -1;
+}
+
+// What my Direct3D hooks cost a frame: "4210 hooked calls, about 0.08 ms" ("" without hooks).
+std::string hookCostText(double callsPerFrame) {
+    if (callsPerFrame < 0 || !perf::d3d::attached()) return "";
+    char b[96];
+    const double us = perf::d3d::perCallUs();
+    if (us >= 0) snprintf(b, sizeof(b), "%.0f hooked calls, about %.2f ms", callsPerFrame, callsPerFrame * us / 1000.0);
+    else snprintf(b, sizeof(b), "%.0f hooked calls", callsPerFrame);
+    return b;
 }
 
 void drawGraph(float width, float height) {
@@ -1090,6 +1329,37 @@ void exportLast60() {
     g_lastResult = ok ? "Saved (CSV)" : "CSV not written";
 }
 
+// Cpu/Gpu synchro: the game waits for the GPU after each frame (Immediate by default in all five games). The choice
+// shows what the game runs with now; ESWC/Sunrise/Original also keep it for the next start (their text config file),
+// TMNF/TMUF only for this session (their config is a compressed binary file: the launcher sets it).
+void drawGpuSync(float fieldW) {
+    using namespace perf::gpusync;
+    static const int kChoices[3] = {kImmediate, kHalfFrame, kOneFrame};
+    const Live live = readLive(gameViewport(), g_game);
+    const bool forever = foreverGame();
+    const bool canLive = live.verified && gsLiveAllowed();
+    const bool canPick = forever ? canLive : true; // ESWC/Sunrise/Original: the file at least
+    const int shown = live.verified && live.value >= 0 ? live.value : (!forever ? g_gsFile : -1);
+    ImGui::BeginDisabled(!canPick || g_gsPending >= 0);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::BeginCombo("Cpu/Gpu synchro", shown >= 0 ? name(shown) : "Unknown")) {
+        for (int v : kChoices)
+            if (ImGui::Selectable(name(v), v == shown) && v != shown) g_gsPending = v;
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    hint("More FPS, about one frame more input delay.");
+    if (forever) {
+        if (!gsLiveAllowed()) dimWrapped("Competition Patch: not changed here. Set it in TM Horizon or TmForeverLauncher > Advanced.");
+        else if (!live.verified) dimWrapped("Not on this exe (%s). Set it in TM Horizon or TmForeverLauncher > Advanced.", live.why.c_str());
+        else dimWrapped("This session only. To keep it: TM Horizon or TmForeverLauncher > Advanced.");
+    } else {
+        if (!live.verified) dimWrapped("Next start only (%s).", live.why.c_str());
+        else if (g_gsFile >= 0 && g_gsFile != live.value) dimWrapped("Next start: %s", name(g_gsFile));
+    }
+    if (!g_gsNote.empty()) dimWrapped("%s", g_gsNote.c_str());
+}
+
 // The options one by one (Custom). Every change is also the new Custom set.
 void drawCustomOptions(float fieldW) {
     const perf::SeriesOptions before = currentOptions();
@@ -1171,12 +1441,60 @@ void drawMenu() {
             else dimWrapped("No limit (refresh rate unknown)   V-Sync %s   Above normal", S.vsync == 1 ? "off" : "game");
         }
         if (g_vsyncPending) dimWrapped("V-Sync: next start or Alt+Enter");
+        // the cap in effect now, and whether it takes anything away (it only waits when the game is faster)
+        if (S.limitFps > 0 && g_live.frames) {
+            if (g_live.sleepMsAvg >= 0.05) dimWrapped("Cap %d fps: waits %.2f ms a frame", S.limitFps, g_live.sleepMsAvg);
+            else dimWrapped("Cap %d fps: game below it, no wait", S.limitFps);
+        }
     }
+
+    // smoothing switches: independent of the choice above, all off by default (docs/performance-smooth.md)
+    ImGui::SeparatorText("Smoothing");
+    if (checkbox("Pin thread", &S.threadCores, "thread_cores")) {
+        g_custom.threadCores = S.threadCores;
+        applyProcessOptions();
+    }
+    hint("Keeps the game thread on performance cores. Hybrid CPUs only.");
+    if (S.threadCores && perf::sys::threadCoresNote()[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", perf::sys::threadCoresNote());
+    }
+    if (checkbox("Timer 1 ms", &S.timer1ms, "timer_1ms")) {
+        g_custom.timer1ms = S.timer1ms;
+        applyProcessOptions();
+    }
+    hint("1 ms timer, no power throttling. ESWC and Original never set it.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Now %.2f ms", perf::sys::currentTimerMs());
+    if (checkbox("MMCSS", &S.mmcss, "mmcss")) {
+        g_custom.mmcss = S.mmcss;
+        applyProcessOptions();
+    }
+    hint("Windows schedules the game thread as a game.");
+    if (S.mmcss && perf::sys::mmcssNote()[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", perf::sys::mmcssNote());
+    }
+    if (legacyGame()) {
+        if (checkbox("Shader cache", &S.shaderCache, "shader_cache")) shaderCacheApply();
+        hint("Keeps compiled shaders on disk. No compile stutter when a map runs again.");
+        if (shaderCacheNote()[0]) {
+            dimWrapped("Off: %s", shaderCacheNote());
+        } else if (S.shaderCache && perf::shadercache::active()) {
+            const perf::shadercache::Stats cs = perf::shadercache::peek();
+            dimWrapped("Now: %u from cache, %u compiled", cs.hits, cs.misses);
+        }
+    }
+    drawGpuSync(fieldW);
 
     ImGui::SeparatorText("Measure");
     ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
                        static_cast<unsigned>(g_live.stutters));
     dimWrapped("Game %.2f   Present %.2f   Wait %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
+    {
+        const std::string hooks = hookCostText(g_liveHookCalls);
+        if (!hooks.empty()) dimWrapped("Hooks: %s", hooks.c_str());
+    }
     if (checkbox("Frame-time window", &S.overlay, "overlay")) registerOverlay();
     hint("FPS, lows and a frame graph on screen.");
     ImGui::BeginDisabled(!callsAllowed());
@@ -1245,8 +1563,10 @@ void drawMenu() {
         dimWrapped("Engine: no data");
     }
     const perf::sys::Memory m = perf::sys::memory();
-    dimWrapped("Memory %.0f MB   Address space %.0f / %.0f MB   %s", m.privateMB, m.addressSpaceUsedMB, m.addressSpaceTotalMB,
-               m.largeAddressAware ? "LAA" : "no LAA (2 GB)");
+    dimWrapped("Memory %.0f MB   Address space %.0f / %.0f MB", m.privateMB, m.addressSpaceUsedMB, m.addressSpaceTotalMB);
+    ImGui::TextDisabled("Large address aware: %s", m.largeAddressAware ? "yes" : "no");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", m.largeAddressAware ? "The game can use up to 4 GB of memory." : "The game can use only 2 GB of memory.");
     char folder[300];
     WideCharToMultiByte(CP_UTF8, 0, g_data.c_str(), -1, folder, sizeof(folder), nullptr, nullptr);
     dimWrapped("Files: %s", folder);
@@ -1288,6 +1608,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         perf::stall::setAssumeFront(g_assumeFront);
     }
     loadSettings();
+    readSystemConfigFile();
     g_custom = currentOptions();
     applyPreset();
     perf::sys::captureOriginals();
@@ -1302,6 +1623,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     perf::stall::note("Horizon Performance started on %s (host %s, %s)", g_gameKey.c_str(), gi && gi->host_version ? gi->host_version : "?",
                       g_competitionPatch ? "Competition Patch loaded" : "no Competition Patch");
     applyProcessOptions();
+    shaderCacheApply();
 
     HorizonDeviceCallbacks cb = {};
     cb.size = sizeof(cb);
@@ -1324,10 +1646,15 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
 
 HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_Shutdown(void) {
     perf::stall::note("shutdown");
+    shaderCacheFlush(nullptr);
+    perf::shadercache::uninstall();
     if (g_series.active()) g_series.abort("the game was closed", g_seriesIO);
     perf::stall::stop();
     perf::d3d::detach();
     perf::sys::setFineTimer(false);
+    perf::sys::setTimer1ms(false);
+    if (g_appliedThreadCores) perf::sys::setThreadPerfCores(g_gameThread, false);
+    if (g_appliedMmcss) perf::sys::setMmcssGames(false); // only works on the game thread; else it ends with the thread
     g_host = nullptr;
 }
 
@@ -1354,6 +1681,10 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_OnEvent(const HorizonEvent* e) {
     case HORIZON_EVENT_MAP_LOADED:
         perf::stall::note("map loaded: %s", e->map && e->map->name ? e->map->name : "?");
         settleFor(1000);
+        shaderCacheFlush(e->map && e->map->name && e->map->name[0] ? e->map->name : "map");
+        break;
+    case HORIZON_EVENT_MENU_ENTERED:
+        shaderCacheFlush("menu and loading");
         break;
     case HORIZON_EVENT_ONLINE_CHANGED:
         perf::stall::note("online: %s", e->is_online ? "yes" : "no");
@@ -1371,12 +1702,24 @@ HORIZON_EXPORT void HORIZON_CALL HorizonPlugin_SetEnabled(int32_t enabled) {
         perf::sys::setAffinity(0);
         perf::sys::setPowerThrottlingOff(false);
         perf::sys::setFineTimer(false);
+        if (g_appliedTimer1ms) {
+            perf::sys::setTimer1ms(false);
+            g_appliedTimer1ms = 0;
+            logf(HORIZON_LOG_INFO, "smoothing: timer 1 ms off (module off)");
+        }
+        if (g_gameThread && GetCurrentThreadId() == g_gameThread) {
+            applyThreadOptions(); // g_enabled is false: thread options off
+        } else if (g_appliedThreadCores || g_appliedMmcss) {
+            if (g_appliedThreadCores && perf::sys::setThreadPerfCores(g_gameThread, false)) g_appliedThreadCores = 0;
+            if (g_appliedMmcss) logf(HORIZON_LOG_WARN, "smoothing: MMCSS stays on the game thread until the module is on again or the game ends");
+        }
         perf::stall::setEnabled(false);
         g_pacer.reset();
     } else {
         applyPreset();
         applyProcessOptions();
     }
+    shaderCacheApply();
 }
 
 } // extern "C"

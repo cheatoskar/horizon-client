@@ -45,6 +45,9 @@ struct DeviceFacts {
     char d3d9Path[260] = "";
 };
 const DeviceFacts& facts();
+// Measured cost of one call through a detour with counting and filtering off, in microseconds (-1: not
+// measured, e.g. a pure device). Times CallCounts::hookCalls = what the hooks cost a frame.
+double perCallUs();
 
 } // namespace d3d
 } // namespace perf

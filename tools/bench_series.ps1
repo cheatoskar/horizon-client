@@ -8,6 +8,8 @@
 #   tools/bench_series.ps1 -Forever -Install                         ... and copies it there itself
 #   options: -Replay <path or name>  -Map <path of a .Challenge.Gbx> (the plugin starts the map itself)
 #            -Now (start by the key, whatever is on screen)  -Runs 3  -Warmup 1  -Seconds 20  -Settle 2
+#            -Smooth (sets baseline, pin-thread, timer-1ms, mmcss, all-three instead of the 7 default sets;
+#                     docs/performance-smooth.md, section 4)
 #
 # Start: replay mode starts by itself as soon as the game reports a replay (ESWC, TMNF, TMUF). Where the game
 # cannot report it (Sunrise) or if nothing happens: press the benchmark key (default Ctrl+Shift+B) while the
@@ -22,7 +24,8 @@ param(
     [double]$Settle = 2,
     [switch]$Now,
     [switch]$Forever,
-    [switch]$Install
+    [switch]$Install,
+    [switch]$Smooth
 )
 $ErrorActionPreference = "Stop"
 
@@ -40,11 +43,23 @@ $series.seconds = $Seconds
 $series.settle = $Settle
 $series.runs = $Runs
 $series.warmup = $Warmup
+$setCount = 7
+if ($Smooth) {
+    # the smoothing switches against one baseline (every set starts from "everything off")
+    $series.sets = @(
+        [ordered]@{ label = "baseline"; options = [ordered]@{} },
+        [ordered]@{ label = "pin-thread"; options = [ordered]@{ threadCores = 1 } },
+        [ordered]@{ label = "timer-1ms"; options = [ordered]@{ timer1ms = 1 } },
+        [ordered]@{ label = "mmcss"; options = [ordered]@{ mmcss = 1 } },
+        [ordered]@{ label = "all-three"; options = [ordered]@{ threadCores = 1; timer1ms = 1; mmcss = 1 } }
+    )
+    $setCount = $series.sets.Count
+}
 $request = [ordered]@{ version = 1; label = "series"; series = $series }
 $json = ($request | ConvertTo-Json -Depth 6)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
-$windows = 7 * ($Runs + $Warmup)
+$windows = $setCount * ($Runs + $Warmup)
 $minutes = ($windows * ($Seconds + $Settle)) / 60
 $replayLen = [int][Math]::Ceiling(2 * $Seconds)
 function Show-Steps {
@@ -58,7 +73,7 @@ function Show-Steps {
         Write-Host ("Replay-Modus: Spiel starten, ein Replay oeffnen (mind. {0} s lang, es darf in Schleife laufen)." -f $replayLen)
         Write-Host "  Die Serie startet von selbst. Startet sie nicht (Sunrise): Strg+Umschalt+B druecken, solange das Replay laeuft."
     }
-    Write-Host "  Oben im Bild steht, was zu tun ist, und der Fortschritt (Benchmark x/21 ...). Dieselbe Taste bricht ab."
+    Write-Host "  Oben im Bild steht, was zu tun ist, und der Fortschritt (Benchmark x/$($setCount * $Runs) ...). Dieselbe Taste bricht ab."
     Write-Host "  Das Performance-Modul muss nicht eingeschaltet sein: der Auftrag schaltet es fuer diesen Start ein."
 }
 

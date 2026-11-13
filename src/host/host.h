@@ -11,8 +11,8 @@
 
 namespace horizon {
 
-constexpr const char* kHostVersion = "0.3.1";
-constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 1u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
+constexpr const char* kHostVersion = "0.3.2";
+constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 2u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
 
 enum class LoaderKind : uint32_t { Legacy = 1, TMLoader = 2, Test = 3 };
 
@@ -95,7 +95,11 @@ public:
         if (why) *why = "not supported for this game";
         return HORIZON_ERR_NOT_SUPPORTED;
     }
-    virtual bool usesDirectInputBlock() const { return true; } // false on Forever (Competition Patch rule)
+    // What of the game's DirectInput the host holds back while it has the input: Full (keyboard and mouse,
+    // legacy games, installed at start), KeyboardOnly (Forever without Competition Patch, installed when the device
+    // exists), None (Forever with Competition Patch: nothing hooked).
+    enum class InputBlock { None, KeyboardOnly, Full };
+    virtual InputBlock directInputBlock() const { return InputBlock::Full; }
     virtual std::string status() const { return std::string(); } // one line for the About page
 };
 GameAdapter* makeEswcAdapter();
@@ -218,9 +222,13 @@ uint64_t createTextureRgba(uint32_t w, uint32_t h, const void* rgba); // game th
 void releaseTexture(uint64_t id);
 
 // ------------------------------------------------------------------ input (dinput.cpp)
-void dinputInstall();
-// While true, the game's DirectInput keyboard/mouse reads return nothing.
-void dinputSetBlocked(bool blocked);
+void dinputInstall(bool keyboardOnly); // once; keyboardOnly: the mouse device is never touched
+// Competition Patch is loaded (seen at device creation, or TMCompPatch.dll found later, checked at most once a
+// second): true for good, Horizon then does nothing with the game's keyboard (DirectInput slots put back, no
+// window key message held back or made). The first true call logs it and unhooks. Any thread, cheap.
+bool inputHandsOff();
+// While set, the game's DirectInput keyboard / mouse reads return nothing (releases of held keys still pass).
+void dinputSetBlocked(bool keyboard, bool mouse);
 bool dinputBlocked();
 void dinputHoldUntilReleased(int vk); // keeps one key away from the game until it is released
 

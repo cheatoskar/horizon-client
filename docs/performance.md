@@ -26,7 +26,7 @@ The choice at the top of the page; what the module does as soon as it is switche
 
 | | Smooth (default) | Low latency | Custom |
 |---|---|---|---|
-| Skip repeated states | on (its own checks still apply, off with the Competition Patch) | on | the player's |
+| Skip repeated states | off (needs the Direct3D hooks and saves next to nothing on a mixed-VP device; until 2026-11-13 on) | off | the player's |
 | Power throttling (EcoQoS) | off for the game | off | the player's |
 | Priority | Above normal | Above normal | the player's (High only here: it can starve audio, voice chat and streaming for little gain) |
 | Frame limit | refresh rate of the monitor the game window is on | same | the player's |
@@ -35,6 +35,25 @@ The choice at the top of the page; what the module does as soon as it is switche
 The refresh rate is read from the monitor of the game window (`EnumDisplaySettings`), again when the device is
 created; unknown = no limit. Measuring ("Count Direct3D calls") stays the player's choice. A player who set
 options before 0.3.1 starts on Custom. `perf::presetOptions` (series.h), unit test `testPresets`.
+
+A preset never costs FPS when the game is below the refresh rate: the limiter only waits when a frame is early
+(see "Frame limiter" below), and a preset attaches no Direct3D hooks (counting and the state filter are the
+player's own switches). The page shows the cap in effect ("Cap 144 fps: game below it, no wait" or "waits
+x ms a frame"); with the hooks attached also their cost per frame ("Hooks: n hooked calls, about x ms": the
+number of calls through the detours times the cost of one pass-through call, measured at attach with 3 x 4096
+`SetRenderState` calls through the hook and straight into d3d9). In my test (`run_perf_tests`, mixed-VP device):
+0.003-0.009 us a call, ~4500 hooked calls a frame = 0.01-0.04 ms. The hooks were not what cost the FPS; the limiter was.
+
+### Frame limiter
+
+`perf::Pacer` (perf_core.h): deadlines on a grid of 1/limit seconds, measured after `Present`. An early frame
+waits until its grid point; a late frame never waits: late by up to one period it keeps the grid (the next frame
+may catch up that much), later than that it starts a new grid from now (no burst after a hitch). Until
+2026-11-13 a late frame started the new grid one period after now, so a game slower than the cap waited a full
+period every frame: 144 Hz monitor, Smooth, game at 12.4 ms a frame -> 52 fps instead of 81 (my report:
+"game 8.98 ms, Present 3.42 ms, limiter 6.94 ms"), and with V-Sync on a 143.86 Hz monitor every other blank was
+missed (72 fps). `testPacer` simulates both: 10 ms frames at a 144 cap give 100 fps with no wait, V-Sync at
+143.86 Hz gives 143.86 fps.
 
 ## Benchmark
 
@@ -49,7 +68,7 @@ Summary fields: `version, game, label, request (map/replay/manual), run, started
 
 One game start, no clicking, a table "option -> effect". The plugin runs the same scene several times and switches one option set per window; `tools/bench_report.py` turns the result into the table. Nothing in it has been run in the game yet (offline: the state machine against a fake host, and the real host with the plugin, `tests\run_perf_tests.cmd`).
 
-**Start without the launcher:** `tools/bench_series.ps1 -GamePath <game folder>` writes `bench-request.json` into `<game>\horizon\data\performance\` (ESWC, Sunrise). `tools/bench_series.ps1 -Forever` (TMNF and TMUF via TMLoader) writes the request into the current folder and prints the one command that copies it to where the Forever host reads it (`%LOCALAPPDATA%\TMLoader\database\TmForever\products\Horizon Host\data\performance\`, the same for TMNF and TMUF); `-Forever -Install` copies it itself. Then start the game (about 10 minutes with the defaults: 7 sets x (1 warm-up + 3 runs) x (20 s + 2 s settle)).
+**Start without the launcher:** (`-Smooth` measures the smoothing switches instead of the 7 default sets, `docs/performance-smooth.md`) `tools/bench_series.ps1 -GamePath <game folder>` writes `bench-request.json` into `<game>\horizon\data\performance\` (ESWC, Sunrise). `tools/bench_series.ps1 -Forever` (TMNF and TMUF via TMLoader) writes the request into the current folder and prints the one command that copies it to where the Forever host reads it (`%LOCALAPPDATA%\TMLoader\database\TmForever\products\Horizon Host\data\performance\`, the same for TMNF and TMUF); `-Forever -Install` copies it itself. Then start the game (about 10 minutes with the defaults: 7 sets x (1 warm-up + 3 runs) x (20 s + 2 s settle)).
 
 **The module does not have to be on:** Performance is off by default. When the host finds `data\performance\bench-request.json` at the start, it loads the module for that start only (log: "on for this start only: a benchmark request is waiting", toast "Benchmark wartet"); the switch in the menu stays where it was. With a TM Horizon profile that has the module off, the host does not override it and shows the toast "Benchmark wartet: Performance-Modul in TM Horizon einschalten".
 
@@ -94,12 +113,12 @@ From the exes of my test copies of the games (imports, call sites with capstone,
 | Finding | Meaning |
 |---|---|
 | TMNF/TMUF create a **mixed vertex processing** device (flags 0x80), not pure, not multithreaded (TMVS GOTCHA; my test device uses the same flags). ESWC/Sunrise: the plugin logs the flags at the first start. | The D3D9 runtime keeps the device state for non-pure devices, so a state filter in front of it saves little; the counter shows how many calls repeat. No `MULTITHREADED` lock cost. |
-| The engine compiles its shaders at run time (`d3dx9_30!D3DXCompileShader`, TMNF/TMUF). | A source of hitches when a material is seen first. A shader cache would need an IAT hook of the exe: not built (Competition Patch rule for Forever; unmeasured on ESWC/Sunrise). |
+| The engine compiles its shaders at run time when a material is bound the first time (`d3dx9_30!D3DXCompileShader` on TMNF/TMUF, the D3DX compiler linked into the exe on ESWC/Sunrise/Original). | A source of hitches when a material is seen first. ESWC/Sunrise/Original: the switch "Shader cache" keeps the results on disk (`docs/performance-smooth.md`). TMNF/TMUF: not built (it would need a hook in the exe's imports; Competition Patch rule). |
 | **GPU sync:** `CVisionViewportDx9::SyncGpuWaitQuery` (TMNF 0x98b890) polls an event query with `D3DGETDATA_FLUSH` and `Sleep(0)` until the GPU is done; the game's own setting `GpuSync` / `GpuSyncTimeOut` (CSystemConfigDisplay) controls it. | The CPU waits for the GPU every frame while it is on: lower input delay, fewer FPS. The counter's "GPU wait" shows exactly this time. A second render-ahead limiter of my own would duplicate it: not built. |
-| `MwSystemTimerInit` calls `timeBeginPeriod(<minimum>)` (1 ms) at start (TMNF disassembled; TMUF, ESWC and Sunrise import the same functions). | The usual "timer resolution fix" is already done by the game. Only 0.5 ms (option "Fine timer") is left, and on Windows 11 only matters for waits; expect little. |
+| `MwSystemTimerInit` calls `timeBeginPeriod(<minimum>)` (1 ms) at start on TMNF and Sunrise. **ESWC (`983bd127`) and Original (Online Patch v2) do not**: the call is patched out in both community builds (2026-11-13, `docs/performance-smooth.md`). | TMNF/TMUF/Sunrise: the usual "timer resolution fix" is already done by the game. ESWC/Original: the switch "Timer 1 ms" restores it. |
 | `CSystemEngine::CaptureInfoOsCpu` sets REALTIME priority, thread priority 15 and affinity 1 **only around its CPU speed measurement at start**, then restores the old values. | The game does not pin itself to one core and keeps normal priority while playing. |
 | Adaptive view distance: `CHmsViewport.TargetFps*` / `CSystemConfigDisplay.ZClip`, `ZClipAuto` (the engine cuts the view distance when FPS drop); `Shadows`, `LightMapQuality`, `TexturesQuality`, `VertexProcess`, `MultiThreadEnable` (TMNF) are game settings. | These are better set in the game's own config (the launcher shows them) than overwritten at run time. The page shows the engine's own FPS and the adaptive view distance read-only. |
-| No exe is large address aware (2 GB). | The page shows used address space; I do not patch the exe. |
+| No exe is large address aware (2 GB): ESWC, Sunrise and Original have `Characteristics` 0x030f, TMNF/TMUF 0x0102 (2026-11-13). | The page shows "Large address aware: yes/no" and the used address space; I do not patch the exe. How the launcher could set the flag for the 2006 exes: `docs/performance-smooth.md`. |
 
 ## Options
 
@@ -114,12 +133,17 @@ All off by default. Each one is a switch with a one-line explanation on the page
 | No power throttling | `SetProcessInformation(ProcessPowerThrottling)`: no EcoQoS, and Windows 11 keeps honouring the timer when the window is hidden. | all | yes | yes | Helps laptops/hybrid CPUs that park the game on efficiency cores. | not measured |
 | Priority | Above normal / high (process priority class). | all | yes | yes | Fewer stutters from background load; nothing on an idle PC. | not measured |
 | CPU cores | All but CPU 0, or performance cores only (hybrid CPUs, by EfficiencyClass). | all | yes | yes | Hybrid Intel CPUs: may help 1 % lows. Elsewhere: nothing or worse. | not measured |
+| Pin thread (Smoothing) | Game thread on the performance cores' CPU sets (soft pin); nothing on CPUs with one efficiency class. | all | yes | yes | Hybrid CPUs: steadier frames if the game thread was moved to E-cores. | not measured (test PC not hybrid) |
+| Timer 1 ms (Smoothing) | `timeBeginPeriod(1)` + no power throttling. | all; matters on ESWC/Original | yes | yes | ESWC/Original: what the game meant to do (`docs/performance-smooth.md`). Elsewhere: nothing. | timer reads back 1.00 ms |
+| MMCSS (Smoothing) | MMCSS task "Games" for the game thread. | all | yes | yes | Fewer stutters from background load. | not measured |
+| Shader cache (Smoothing) | Inline hook on the exe's own `D3DXCompileShader` (bytes checked per exe), compiled bytecode on disk keyed by SHA-256 of source, defines, profile and flags; any mismatch falls back to the normal compile. | ESWC, Sunrise, Original | n/a (not offered on Forever) | yes | No compile stutter when a map runs the second time. | unit tests only, not run in the game yet |
+| Cpu/Gpu synchro (Smoothing) | The game's own setting (`GpuSync`): how long the CPU waits for the GPU after a frame. The page shows the value the game runs with (read from the viewport's sync ring) and offers Immediate, Half a frame, 1 Frame. Live: the game's own `CVisionViewportDx9::SyncGpuInit` is called between frames, only when the viewport's method table, its SyncGpuInit slot and that function's bytes are the known ones for the running exe (table in `gpusync_live.cpp`; facts: trackmania-internals `rendering/gpu-sync.md`). ESWC, Sunrise, Original: also the engine's `CSystemConfigDisplay.GpuSync` and the second value of chunk `b013003` in `Default.SystemConfig.Gbx` next to the exe (one character, backup `.horizon-backup` once, refused on any other layout). TMNF/TMUF: this session only, the compressed config in Documents is never written (TM Horizon or TmForeverLauncher > Advanced keep it). | all | TMNF/TMUF: **off** (nothing touched) | yes | Immediate -> 1 Frame: CPU and GPU overlap, about one frame more input delay. | TMNF + TMVS (my test): Immediate 50-70 fps, 1 Frame 90-105 fps (set in the launcher) |
 | Count Direct3D calls | Measurement only (see above). | all | **off** | yes | costs a little | see above |
 | Hang log | See below. | all | yes (reads only, never during a race) | yes | none | caught a 2.5 s stall with the right stack |
 
 Not built, and why:
-- **Shader cache / texture preload:** needs hooks in the exe (D3DX import) or engine calls; not allowed on Forever with Competition Patch, and without a measured hitch on ESWC/Sunrise it would be a guess.
-- **Large Address Aware patch:** changes the exe; I only show the address space.
+- **Shader cache on TMNF/TMUF, texture preload, shader warm-up at map load:** a hook in the exe's D3DX import is not allowed on Forever with the Competition Patch; preloading and warm-up need engine calls with a valid render state (`docs/performance-smooth.md`).
+- **Large Address Aware patch:** changes the exe (and its hash, which Horizon pins); the page only shows the flag and the address space. A launcher plan for ESWC/Sunrise/Original is in `docs/performance-smooth.md`.
 - **Writing engine values (view distance, shadows) at run time:** the game's own settings do it; the launcher shows them. Forever never gets game-memory writes.
 - **Render-ahead limiter:** the engine has its own (`GpuSync`).
 

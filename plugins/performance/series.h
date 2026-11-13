@@ -24,11 +24,14 @@ namespace perf {
 constexpr uint8_t kSkipSeries = kSkipUnfocused | kSkipLost | kSkipSettle | kSkipScene;
 
 // The options a set can switch. All 0 = everything off / "as the game sets it". Names as in the result files.
+// threadCores, timer1ms, mmcss: the smoothing switches (docs/performance-smooth.md), not part of the presets.
 struct SeriesOptions {
     int count = 0, filter = 0, limitFps = 0, vsync = 0, priority = 0, affinity = 0, powerThrottlingOff = 0, fineTimer = 0;
+    int threadCores = 0, timer1ms = 0, mmcss = 0;
     bool operator==(const SeriesOptions& o) const {
         return count == o.count && filter == o.filter && limitFps == o.limitFps && vsync == o.vsync && priority == o.priority &&
-               affinity == o.affinity && powerThrottlingOff == o.powerThrottlingOff && fineTimer == o.fineTimer;
+               affinity == o.affinity && powerThrottlingOff == o.powerThrottlingOff && fineTimer == o.fineTimer &&
+               threadCores == o.threadCores && timer1ms == o.timer1ms && mmcss == o.mmcss;
     }
     bool operator!=(const SeriesOptions& o) const { return !(*this == o); }
     bool allOff() const { return *this == SeriesOptions{}; }
@@ -38,7 +41,8 @@ std::string seriesOptionsJson(const SeriesOptions& o); // {"count": 0, ...}
 // The choice at the top of the page. Smooth and Low latency set the options themselves when the module is on:
 // skip repeated states on (its own safety checks still apply), no power throttling, priority above normal (never
 // High: it can starve audio, voice chat and streaming), frame limit = the monitor's refresh rate. Smooth keeps the
-// game's V-Sync, Low latency turns it off. Custom: the player's own options. count (measuring) stays the player's.
+// game's V-Sync, Low latency turns it off. Custom: the player's own options. count (measuring) and the smoothing
+// switches (threadCores, timer1ms, mmcss) stay the player's in every preset.
 enum Preset { PresetSmooth = 0, PresetLowLatency = 1, PresetCustom = 2 };
 SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& custom);
 

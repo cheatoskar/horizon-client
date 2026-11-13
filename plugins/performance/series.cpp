@@ -12,7 +12,12 @@ SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& cust
     if (preset != PresetSmooth && preset != PresetLowLatency) return custom;
     SeriesOptions o;
     o.count = custom.count;
-    o.filter = 1;
+    o.threadCores = custom.threadCores;
+    o.timer1ms = custom.timer1ms;
+    o.mmcss = custom.mmcss;
+    // Not the state filter: it needs 30 hooked device methods, and on TMNF/TMUF (mixed-VP device) the D3D9 runtime
+    // keeps the state itself, so it saves next to nothing (docs/performance.md). A preset costs no hooks.
+    o.filter = 0;
     o.powerThrottlingOff = 1;
     o.priority = 1;
     o.limitFps = refreshHz >= 30 && refreshHz <= 1000 ? refreshHz : 0; // unknown: no limit
@@ -21,11 +26,12 @@ SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& cust
 }
 
 std::string seriesOptionsJson(const SeriesOptions& o) {
-    char b[300];
+    char b[360];
     snprintf(b, sizeof(b),
              "{\"count\": %d, \"filter\": %d, \"limitFps\": %d, \"vsync\": %d, \"priority\": %d, \"affinity\": %d, "
-             "\"powerThrottlingOff\": %d, \"fineTimer\": %d}",
-             o.count, o.filter, o.limitFps, o.vsync, o.priority, o.affinity, o.powerThrottlingOff, o.fineTimer);
+             "\"powerThrottlingOff\": %d, \"fineTimer\": %d, \"threadCores\": %d, \"timer1ms\": %d, \"mmcss\": %d}",
+             o.count, o.filter, o.limitFps, o.vsync, o.priority, o.affinity, o.powerThrottlingOff, o.fineTimer, o.threadCores,
+             o.timer1ms, o.mmcss);
     return b;
 }
 
@@ -78,6 +84,9 @@ bool parseOptions(const horizon::Json& j, SeriesOptions& o, std::string& why) {
         else if (kv.first == "filter") dst = &o.filter;
         else if (kv.first == "powerThrottlingOff") dst = &o.powerThrottlingOff;
         else if (kv.first == "fineTimer") dst = &o.fineTimer;
+        else if (kv.first == "threadCores") dst = &o.threadCores;
+        else if (kv.first == "timer1ms") dst = &o.timer1ms;
+        else if (kv.first == "mmcss") dst = &o.mmcss;
         else if (kv.first == "vsync") { dst = &o.vsync; hi = 2; }
         else if (kv.first == "priority") { dst = &o.priority; hi = 2; }
         else if (kv.first == "affinity") { dst = &o.affinity; hi = 2; }

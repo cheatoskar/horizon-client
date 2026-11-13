@@ -16,6 +16,10 @@ if not exist build\test\abi12 mkdir build\test\abi12
 %CXX% /Fo"build\test\abi12\\" /Fd"build\test\abi12\p.pdb" tests\abi12\abi12_plugin.cpp || exit /b 1
 link /nologo /DLL /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:build\test\abi12\abi12.dll /IMPLIB:build\test\abi12\abi12.lib build\test\abi12\abi12_plugin.obj user32.lib kernel32.lib || exit /b 1
 copy /y tests\abi12\plugin.json build\test\abi12\plugin.json >nul || exit /b 1
+rem stand-in for Competition Patch (only the module name TMCompPatch.dll matters), loaded late by host_test keys
+if not exist build\test\cp mkdir build\test\cp
+%CXX% /Fo"build\test\cp\\" /Fd"build\test\cp\p.pdb" tests\fake_cp.cpp || exit /b 1
+link /nologo /DLL /MACHINE:X86 /SAFESEH /DYNAMICBASE /NXCOMPAT /OUT:build\test\cp\TMCompPatch.dll /IMPLIB:build\test\cp\TMCompPatch.lib build\test\cp\fake_cp.obj kernel32.lib || exit /b 1
 rem headless menu input test (the dim layer must not take the pointer)
 %CXX% /Fo"build\test\\" /Fd"build\test\t.pdb" /Ithird_party\imgui tests\ui_input_test.cpp src\host\ui\ui_style.cpp src\host\ui\ui_menu.cpp src\host\ui\ui_bar.cpp || exit /b 1
 link /nologo /MACHINE:X86 /OUT:build\test\ui_input_test.exe build\test\ui_input_test.obj build\test\ui_style.obj build\test\ui_menu.obj build\test\ui_bar.obj build\imgui_core.lib user32.lib gdi32.lib kernel32.lib ole32.lib windowscodecs.lib || exit /b 1

@@ -14,7 +14,8 @@ namespace horizon {
 namespace fpoll {
 
 // What an engine object is, decided by the adapter from its class name (reflection) or by the test's fake.
-enum class Kind { Unknown, App, Challenge, RaceSolo, RaceNet, RaceOther, PlayerInfo, EditorReplay, EditorOther };
+// EditorPuzzle: CTrackManiaEditorPuzzle, which TMNF/TMUF keep in the Editor slot under every solo and network race.
+enum class Kind { Unknown, App, Challenge, RaceSolo, RaceNet, RaceOther, PlayerInfo, EditorReplay, EditorOther, EditorPuzzle };
 
 struct Mem {
     virtual ~Mem() {}
@@ -78,7 +79,7 @@ inline bool observe(Mem& m, const Layout& L, uintptr_t app, Obs* o) {
     }
     if (readPtr(m, app, L.appEditor, &p)) {
         const Kind k = m.kindOf(p);
-        if (k == Kind::EditorReplay || k == Kind::EditorOther) {
+        if (k == Kind::EditorReplay || k == Kind::EditorOther || k == Kind::EditorPuzzle) {
             o->editor = p;
             o->editorKind = k;
         }
@@ -117,9 +118,17 @@ inline bool observe(Mem& m, const Layout& L, uintptr_t app, Obs* o) {
     return true;
 }
 
+// The editor slot decides only when it is a real editor: a network race is never an editor test drive, and the
+// puzzle editor the game keeps under a solo race is that race (as legacy.cpp's ESWC rule). Without a race, every
+// editor counts (the puzzle editor's own screen too).
+inline bool editorDecides(const Obs& o) {
+    if (!o.editor || o.raceKind == Kind::RaceNet) return false;
+    return !(o.editorKind == Kind::EditorPuzzle && o.raceKind == Kind::RaceSolo);
+}
+
 inline HorizonGameState stateOf(const Obs& o) {
     if (!o.app) return HORIZON_STATE_LOADING;
-    if (o.editor) return o.editorKind == Kind::EditorReplay ? HORIZON_STATE_REPLAY : HORIZON_STATE_EDITOR;
+    if (editorDecides(o)) return o.editorKind == Kind::EditorReplay ? HORIZON_STATE_REPLAY : HORIZON_STATE_EDITOR;
     if (o.raceKind == Kind::RaceNet) return HORIZON_STATE_NET_RACE;
     if (o.raceKind == Kind::RaceSolo) return o.haveInfo && o.raceState == 2 ? HORIZON_STATE_END_RACE : HORIZON_STATE_SOLO_RACE;
     if (o.raceKind == Kind::RaceOther) return HORIZON_STATE_REPLAY;
@@ -128,7 +137,7 @@ inline HorizonGameState stateOf(const Obs& o) {
 }
 
 inline HorizonPlayMode playModeOf(const Obs& o) {
-    if (o.editor) return o.editorKind == Kind::EditorReplay ? HORIZON_MODE_REPLAY : HORIZON_MODE_EDITOR_TEST;
+    if (editorDecides(o)) return o.editorKind == Kind::EditorReplay ? HORIZON_MODE_REPLAY : HORIZON_MODE_EDITOR_TEST;
     if (o.raceKind == Kind::RaceNet) return HORIZON_MODE_NET;
     if (o.raceKind == Kind::RaceSolo) return HORIZON_MODE_SOLO;
     return HORIZON_MODE_UNKNOWN;
