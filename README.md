@@ -64,7 +64,7 @@ ESWC, Sunrise, Original: double-click `Horizon-Uninstall.cmd` (removes Horizon's
 
 ## Safety rules
 
-- **Forever is read-only.** No game hooks, no memory writes, no input changes; game events come from reading the game's objects once a frame. With Competition Patch loaded, game control and reflection writes stay off during a run.
+- **Forever is read-only.** No game hooks, no memory writes; game events come from reading the game's objects once a frame. The only input change: while the menu (or a text field) has the keyboard, the game's DirectInput keyboard gets no key presses, so Enter or Backspace typed into the menu do not respawn the car; with Competition Patch loaded not even that. With Competition Patch loaded, game control and reflection writes stay off during a run.
 - **No validation changes.** No module touches timing, physics, inputs or the replay of a run. Autosave saves after the run with the game's own save code.
 - **TMX rules** for every module, online or not: no checkpoint or trigger display, no ideal or brake line, no disabling of camera or MediaTracker behaviour.
 - **Online gate.** Modules marked `solo-only` stop while the game is online; game control (start a map) works only from the main menu and never online.

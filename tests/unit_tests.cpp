@@ -453,6 +453,28 @@ static void testForeverObserve() {
     CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_REPLAY && fpoll::playModeOf(poll(m)) == HORIZON_MODE_REPLAY);
     m.k[0x700000] = fpoll::Kind::Unknown; // an object that is not a known editor class is ignored
     CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_LOADING);
+    // TMNF/TMUF keep a CTrackManiaEditorPuzzle in the Editor slot under every race (log 2026-11-13: online showed
+    // "Editor"). A network race is the network race, a solo race under the puzzle editor the solo race.
+    setApp(m, true, kRace, fpoll::Kind::RaceNet);
+    setInfo(m, 1, 100, fpoll::kNoTime);
+    m.w[kApp + 0x414] = 0x700000;
+    m.k[0x700000] = fpoll::Kind::EditorPuzzle;
+    o = poll(m);
+    CHECK(o.editor && fpoll::stateOf(o) == HORIZON_STATE_NET_RACE && fpoll::playModeOf(o) == HORIZON_MODE_NET);
+    m.k[0x700000] = fpoll::Kind::EditorOther; // any editor object under a network race: still the network race
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_NET_RACE);
+    m.k[kRace] = fpoll::Kind::RaceSolo;
+    m.k[0x700000] = fpoll::Kind::EditorPuzzle;
+    o = poll(m);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_SOLO_RACE && fpoll::playModeOf(o) == HORIZON_MODE_SOLO);
+    setInfo(m, 2, 45123, 45123);
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_END_RACE);
+    m.k[0x700000] = fpoll::Kind::EditorOther; // the map editor's test drive stays the editor
+    o = poll(m);
+    CHECK(fpoll::stateOf(o) == HORIZON_STATE_EDITOR && fpoll::playModeOf(o) == HORIZON_MODE_EDITOR_TEST);
+    m.w[kApp + 0x454] = 0; // the puzzle editor without a race: the editor
+    m.k[0x700000] = fpoll::Kind::EditorPuzzle;
+    CHECK(fpoll::stateOf(poll(m)) == HORIZON_STATE_EDITOR);
     // the fallback path: target info missing, player array race+0x28 -> [0] -> +0x1c
     setApp(m, true, kRace, fpoll::Kind::RaceSolo);
     m.w[kRace + 0x98] = 0;
@@ -887,6 +909,53 @@ static void testInputGate() {
         g_physLeftButton = false;
         CHECK(gateRead(g, M, true, {{0 /* X axis */, 5}, {kButton0, 0x00}}) == 1 && g_buf[0].dwOfs == kButton0 && !g.held(M, kButton0));
     }
+    // Typing in the menu (owner 2026-11-13: Enter/Backspace respawned the car): DirectInput, buffered and full state
+    const DWORD kReturn = 0x1C, kBack = 0x0E; // DIK_RETURN, DIK_BACK
+    {
+        InputGate g;
+        // menu open: Enter and Backspace, down and up, reach the game not at all
+        CHECK(gateRead(g, K, true, {{kReturn, 0x80}, {kBack, 0x80}, {kReturn, 0x00}, {kBack, 0x00}}) == 0);
+        CHECK(!g.held(K, kReturn) && !g.held(K, kBack));
+        // menu closed: the game sees its keys
+        CHECK(gateRead(g, K, false, {{kReturn, 0x80}}) == 1 && g_buf[0].dwOfs == kReturn && g.held(K, kReturn));
+        CHECK(gateRead(g, K, false, {{kReturn, 0x00}}) == 1 && !g.held(K, kReturn));
+        // pressed while the menu is open, released after it closed: the release passes (nothing to stick)
+        CHECK(gateRead(g, K, true, {{kBack, 0x80}}) == 0);
+        CHECK(gateRead(g, K, false, {{kBack, 0x00}}) == 1 && g_buf[0].dwOfs == kBack && g_buf[0].dwData == 0);
+    }
+    {
+        InputGate g;
+        BYTE st[256] = {};
+        st[kReturn] = 0x80;
+        st[kBack] = 0x80;
+        g.filterState(K, true, st, sizeof(st)); // menu open: all keys up for the game
+        CHECK(st[kReturn] == 0 && st[kBack] == 0 && !g.held(K, kReturn));
+        st[kReturn] = 0x80;
+        g.filterState(K, false, st, sizeof(st)); // menu closed: the device state as it is
+        CHECK(st[kReturn] == 0x80 && g.held(K, kReturn));
+        g.filterState(K, true, st, sizeof(st)); // menu opens with Enter held: the game sees it released
+        CHECK(st[kReturn] == 0 && !g.held(K, kReturn));
+    }
+}
+
+// The window's key messages while Horizon has the keyboard (overlay.cpp wndProc).
+static void testKeyMsgGate() {
+    KeyMsgGate g;
+    // menu open: Enter and Backspace (down, character, up) reach the game not at all
+    CHECK(!g.pass(WM_KEYDOWN, VK_RETURN, true) && !g.pass(WM_CHAR, '\r', true) && !g.pass(WM_KEYUP, VK_RETURN, true));
+    CHECK(!g.pass(WM_KEYDOWN, VK_BACK, true) && !g.pass(WM_CHAR, '\b', true) && !g.pass(WM_KEYUP, VK_BACK, true));
+    CHECK(!g.pass(WM_SYSKEYDOWN, VK_RETURN, true) && !g.pass(WM_SYSCHAR, 'a', true) && !g.pass(WM_DEADCHAR, '^', true));
+    // menu closed: the game sees its keys
+    CHECK(g.pass(WM_KEYDOWN, VK_RETURN, false) && g.pass(WM_CHAR, '\r', false) && g.pass(WM_KEYUP, VK_RETURN, false));
+    // a key the game holds when the menu opens: repeats are dropped, its release passes while the menu is open
+    CHECK(g.pass(WM_KEYDOWN, VK_LEFT, false) && g.held(VK_LEFT));
+    CHECK(!g.pass(WM_KEYDOWN, VK_LEFT, true));
+    CHECK(g.pass(WM_KEYUP, VK_LEFT, true) && !g.held(VK_LEFT));
+    CHECK(!g.pass(WM_KEYUP, VK_LEFT, true)); // a second release: the game no longer holds it
+    // pressed while the menu is open, released after it closed: forwarded
+    CHECK(!g.pass(WM_KEYDOWN, VK_BACK, true) && g.pass(WM_KEYUP, VK_BACK, false));
+    // other messages are never held back
+    CHECK(g.pass(WM_MOUSEMOVE, 0, true) && g.pass(WM_ACTIVATE, 0, true));
 }
 
 static void testPickNewChallenge() {
@@ -986,6 +1055,7 @@ int main() {
     testExeIdentification();
     testPickNewChallenge();
     testInputGate();
+    testKeyMsgGate();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

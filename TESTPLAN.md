@@ -70,7 +70,7 @@ Automatischer Kurztest (ohne Anmeldung, 30 s, nur Hauptmenü): alle vier Stellen
 
 ## 4. Forever über TMLoader (experimentell, nur wenn Zeit ist)
 
-Nicht installiert (dein TMLoader-Ordner bleibt unberührt). Zum Testen: `dist\tmloader\Horizon Host` (im Repo nach `build.cmd package`) nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren, im TMLoader „Horizon Host“ anhaken, starten. Erwartet: Menü und Leiste, keine Spiel-Hooks, Eingabe wird nie blockiert (Competition Patch). Log: `...\products\Horizon Host\logs\`. Danach wieder abhaken. Mit TMVS + CenterSpeed zusammen: sag mir, ob beide Overlays laufen.
+Nicht installiert (dein TMLoader-Ordner bleibt unberührt). Zum Testen: `dist\tmloader\Horizon Host` (im Repo nach `build.cmd package`) nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren, im TMLoader „Horizon Host“ anhaken, starten. Erwartet: Menü und Leiste, keine Spiel-Hooks. Ab 0.3.2: Tasten im offenen Menü (oder in einem Textfeld) erreichen das Spiel nicht, die Maus bleibt beim Spiel; mit Competition Patch wird DirectInput gar nicht angefasst. Log: `...\products\Horizon Host\logs\`. Danach wieder abhaken. Mit TMVS + CenterSpeed zusammen: sag mir, ob beide Overlays laufen.
 
 ## 5. Forever über TMLoader: Ereignisse (Entwicklerstand)
 
@@ -81,9 +81,10 @@ Im Log (`...\products\Horizon Host\logs\`, neueste Datei) prüfen:
 1. Beim Start: `game: Forever adapter (...): polling only ...`, davor `gamectl: TrackMania Nations Forever (... image base ..., relocated ...)`. Danach `game: reflection offsets: ...` ohne `MISSING`. Steht dort `MISSING` oder `exe not known to gamectl` / `reflection not available`: Log schicken, dann bleiben die Ereignisse aus.
 2. Erste Solo-Strecke starten: Zeilen `game: object class CTrackMania ... = app`, `... = challenge`, `... = solo race`, `... = player info`, dann `game: the local player's info is found through race.TMTargetPlayerInfo` (oder `fallback path`). Steht `a race is running but the local player's info was not found`: keine Start-/Ziel-Ereignisse.
 3. Pro Strecke: `event: map loaded` (Name und Medaillenzeiten prüfen, uid ist leer, wenn die Strecke nicht vom Randomizer gestartet wurde), `event: race start` beim Losfahren und bei jedem Neustart (Entf), `event: finish` mit Zeit (gleich der Zeit im Spiel?) und `(new best)` (erste Fahrt und jede schnellere: ja, langsamere: nein).
-4. Zielbildschirm: Spielzustand `End of race` im Bar/About, danach wieder `Solo race`. Menü: `Main menu`. Editor und Replay-Ansicht: Zustand `Editor` bzw. `Replay`, keine Start-/Ziel-Ereignisse.
-5. Online-Rennen: Zustand `Online race`, Solo-Plugins pausieren. Nichts wird geschrieben oder blockiert.
-6. Mit Competition Patch geladen: gleiches Verhalten erwartet, Log kontrollieren (keine Hooks, keine Eingabesperre).
+4. Zielbildschirm: Spielzustand `End of race` im Bar/About, danach wieder `Solo race`. Menü: `Main menu`. Editor und Replay-Ansicht: Zustand `Editor` bzw. `Replay`, keine Start-/Ziel-Ereignisse. Ab 0.3.2 zeigt eine normale Solo-Strecke `Solo race` (nicht mehr `Editor`, obwohl im Log `= puzzle editor` steht), die Testfahrt im Karteneditor weiter `Editor`.
+5. Online-Rennen: Zustand `Online race` (0.3.1 zeigte dort `Editor`), Solo-Plugins pausieren. Nichts wird geschrieben.
+5a. Tippen im Menü (0.3.2): im Rennen Menü öffnen, in ein Textfeld tippen, Enter und Rücktaste drücken: das Auto darf nicht respawnen. Mit gedrückter Lenktaste das Menü öffnen und loslassen: nach dem Schließen lenkt nichts weiter. Log: `input: the game's DirectInput keyboard is held back while Horizon has it`.
+6. Mit Competition Patch geladen: gleiches Verhalten erwartet, Log kontrollieren (keine Hooks, `input: DirectInput not touched on this game`).
 7. Randomizer: `play_map_file` startet eine Datei aus dem Hauptmenü (zum ersten Mal auf Forever getestet), `return_to_menu` beendet das Solo-Rennen.
 
 ## Horizon Performance (Branch `perf`, Plugin `performance`)

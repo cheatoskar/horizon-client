@@ -95,7 +95,11 @@ public:
         if (why) *why = "not supported for this game";
         return HORIZON_ERR_NOT_SUPPORTED;
     }
-    virtual bool usesDirectInputBlock() const { return true; } // false on Forever (Competition Patch rule)
+    // What of the game's DirectInput the host holds back while it has the input: Full (keyboard and mouse,
+    // legacy games, installed at start), KeyboardOnly (Forever without Competition Patch, installed when the device
+    // exists), None (Forever with Competition Patch: nothing hooked).
+    enum class InputBlock { None, KeyboardOnly, Full };
+    virtual InputBlock directInputBlock() const { return InputBlock::Full; }
     virtual std::string status() const { return std::string(); } // one line for the About page
 };
 GameAdapter* makeEswcAdapter();
@@ -218,9 +222,9 @@ uint64_t createTextureRgba(uint32_t w, uint32_t h, const void* rgba); // game th
 void releaseTexture(uint64_t id);
 
 // ------------------------------------------------------------------ input (dinput.cpp)
-void dinputInstall();
-// While true, the game's DirectInput keyboard/mouse reads return nothing.
-void dinputSetBlocked(bool blocked);
+void dinputInstall(bool keyboardOnly); // once; keyboardOnly: the mouse device is never touched
+// While set, the game's DirectInput keyboard / mouse reads return nothing (releases of held keys still pass).
+void dinputSetBlocked(bool keyboard, bool mouse);
 bool dinputBlocked();
 void dinputHoldUntilReleased(int vk); // keeps one key away from the game until it is released
 

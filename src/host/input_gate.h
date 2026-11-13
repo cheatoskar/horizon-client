@@ -6,6 +6,10 @@
 // Header only, no DirectInput calls: dinput.cpp feeds it the game's GetDeviceData buffers, the unit tests feed
 // it fake ones. Keyboard: dwOfs = DIK code 0..255, dwData bit 7 = down. Mouse buttons: dwOfs 12..19
 // (DIMOFS_BUTTON0..7), the same bit; axes are never touched.
+//
+// KeyMsgGate (below) does the same for the window's key messages (WM_KEYDOWN/WM_CHAR...): while Horizon has the
+// keyboard (menu, layout mode, a focused text field) no press and no character reaches the game, the release of
+// a key the game saw go down always does.
 #pragma once
 
 #include <windows.h>
@@ -87,7 +91,14 @@ public:
         }
     }
 
-    // A full-state read (GetDeviceState): what the game sees is what it holds.
+    // A full-state read (GetDeviceState), after the real call: blocked empties it (no key or button down for the
+    // game, which is also the release of whatever it held), then what the game sees is what it holds.
+    void filterState(int kind, bool blocked, BYTE* state, DWORD size) {
+        if (kind < 0 || kind > 1 || !state) return;
+        if (blocked) memset(state, 0, size);
+        sawState(kind, blocked, state, size);
+    }
+
     void sawState(int kind, bool blocked, const BYTE* state, DWORD size) {
         if (kind < 0 || kind > 1 || !state) return;
         if (kind == kKeyboard && size >= 256)
@@ -126,6 +137,39 @@ private:
     bool pending_[2][256] = {};
     bool wasBlocked_[2] = {};
     bool resync_[2] = {};
+};
+
+// The window's key messages while Horizon has the keyboard (captured): presses (WM_KEYDOWN, WM_SYSKEYDOWN) and
+// characters (WM_CHAR, WM_SYSCHAR, WM_DEADCHAR, WM_SYSDEADCHAR) stay away from the game; a key-up passes when the
+// game saw that key go down (else it would stay down in the game), and every key-up passes while not captured.
+// pass() answers whether the game's window procedure gets the message. Game thread (window procedure) only.
+class KeyMsgGate {
+public:
+    static bool isKeyMsg(UINT m) {
+        return m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP || m == WM_CHAR || m == WM_SYSCHAR ||
+               m == WM_DEADCHAR || m == WM_SYSDEADCHAR;
+    }
+
+    bool pass(UINT msg, WPARAM vk, bool captured) {
+        const unsigned k = static_cast<unsigned>(vk & 0xff);
+        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+            if (captured) return false;
+            down_[k] = true;
+            return true;
+        }
+        if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+            const bool held = down_[k];
+            down_[k] = false;
+            return !captured || held;
+        }
+        if (isKeyMsg(msg)) return !captured; // characters
+        return true;
+    }
+
+    bool held(WPARAM vk) const { return down_[vk & 0xff]; }
+
+private:
+    bool down_[256] = {};
 };
 
 } // namespace horizon

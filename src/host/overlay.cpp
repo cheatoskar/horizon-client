@@ -14,6 +14,7 @@
 #include "common/hotkeys.h"
 #include "common/util.h"
 #include "host/bridge.h"
+#include "host/input_gate.h"
 #include "host/stats.h"
 #include "host/panels.h"
 #include "host/toasts.h"
@@ -139,9 +140,15 @@ void fillStyle() {
     g_style.font_mono = ui::fonts().mono;
 }
 
-bool isKeyMsg(UINT m) {
-    return m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP || m == WM_CHAR || m == WM_SYSCHAR || m == WM_DEADCHAR;
-}
+bool isKeyMsg(UINT m) { return KeyMsgGate::isKeyMsg(m); }
+
+// Horizon has the keyboard: the menu or layout mode is on, or a text field of a free plugin window (menu closed)
+// is focused. Then no key press reaches the game, neither as a window message nor through DirectInput (Enter and
+// Backspace typed into a field would restart or respawn the car). The ImGui context must be current.
+bool keyboardCaptured() { return g_menu || g_layout || (g_pluginWinShown && ImGui::GetIO().WantTextInput); }
+
+KeyMsgGate g_keyGate; // the game's view of the window key messages (input_gate.h)
+
 bool isMouseMsg(UINT m) { return m >= WM_MOUSEFIRST && m <= WM_MOUSELAST; }
 int buttonOf(UINT m, bool& up) {
     up = m == WM_LBUTTONUP || m == WM_RBUTTONUP || m == WM_MBUTTONUP;
@@ -161,6 +168,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         hostConfigSave(true);
     }
     if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) hotkeysKeyMessage(msg, w, l);
+    bool keysCaptured = false;
     if (g_backends && g_ctx && !g_uiOff && !captureActive()) {
         ImGui::SetCurrentContext(g_ctx);
         bool take = false;
@@ -169,38 +177,20 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             InterlockedExchangeAdd(&g_wheelSteps, GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1);
             return 0;
         }
+        keysCaptured = keyboardCaptured();
+        // the game never turns keys into characters: make the WM_CHAR for a focused text field
+        if (keysCaptured && msg == WM_KEYDOWN && ImGui::GetIO().WantTextInput) {
+            MSG queued;
+            if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
+                MSG key{h, msg, w, l, 0, {}};
+                TranslateMessage(&key);
+            }
+        }
+        ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
         if (g_menu || g_layout) {
-            if (isKeyMsg(msg)) {
-                // the game never turns keys into characters: make the WM_CHAR for a focused text field
-                if (msg == WM_KEYDOWN && ImGui::GetIO().WantTextInput) {
-                    MSG queued;
-                    if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
-                        MSG key{h, msg, w, l, 0, {}};
-                        TranslateMessage(&key);
-                    }
-                }
-                ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
-                take = true;
-            } else if (isMouseMsg(msg)) {
-                ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
-                take = true;
-            } else {
-                ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
-            }
-        } else {
-            ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
-            if (isMouseMsg(msg) && msg != WM_MOUSEMOVE && (ui::barHovered() || ImGui::GetIO().WantCaptureMouse)) take = true;
-            // a text field in a free plugin window has the keyboard (the menu is closed, the game must not see the keys)
-            if (g_pluginWinShown && isKeyMsg(msg) && ImGui::GetIO().WantTextInput) {
-                if (msg == WM_KEYDOWN) {
-                    MSG queued;
-                    if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
-                        MSG key{h, msg, w, l, 0, {}};
-                        TranslateMessage(&key);
-                    }
-                }
-                take = true;
-            }
+            if (isMouseMsg(msg)) take = true;
+        } else if (isMouseMsg(msg) && msg != WM_MOUSEMOVE && (ui::barHovered() || ImGui::GetIO().WantCaptureMouse)) {
+            take = true;
         }
         bool up = false;
         const int b = buttonOf(msg, up);
@@ -214,6 +204,9 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         }
         if (take) return 0;
     }
+    // key messages: presses and characters stay away from the game while Horizon has the keyboard, the release of
+    // a key the game saw go down always reaches it (tracked also while Horizon takes nothing, so nothing sticks)
+    if (isKeyMsg(msg) && !g_keyGate.pass(msg, w, keysCaptured)) return 0;
     return CallWindowProcW(g_origProc, h, msg, w, l);
 }
 
@@ -725,6 +718,10 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
         ImGui_ImplWin32_Init(window);
         g_origProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&wndProc)));
         hotkeysDetectExternal();
+        // Forever: the keyboard hold-back only now, when Competition Patch is known (with it: nothing is hooked)
+        const GameAdapter::InputBlock block = game().directInputBlock();
+        if (block == GameAdapter::InputBlock::KeyboardOnly) dinputInstall(true);
+        else if (block == GameAdapter::InputBlock::None) HLOG("input: DirectInput not touched on this game (Competition Patch rule)");
         HLOG("overlay: ready on window %p (%ldx%ld, UI scale %.2f of %.2f x %d%%, menu %d%% of the screen); menu key %s, layout key %s",
              static_cast<void*>(window), rc.right - rc.left, rc.bottom - rc.top, scale, g_baseScale, g_contentPct, menuSizePct(),
              hotkeyText(g_menuHotkey).c_str(), hotkeyText(g_layoutHotkey).c_str());
@@ -766,7 +763,7 @@ void overlayFrame(void* device) {
     if (!g_backends || g_lost || !g_ctx) return;
     if (g_uiOff) {
         // the UI is off after repeated errors; game work and plugin events above keep running
-        if (game().usesDirectInputBlock()) dinputSetBlocked(false);
+        dinputSetBlocked(false, false);
         return;
     }
     ImGui::SetCurrentContext(g_ctx);
@@ -786,7 +783,7 @@ void overlayFrame(void* device) {
         texturesReloadPluginIcons();
     }
     const bool fg = foreground();
-    hotkeysPoll(fg, (g_menu || g_layout) && ImGui::GetIO().WantTextInput, g_menu);
+    hotkeysPoll(fg, keyboardCaptured() && ImGui::GetIO().WantTextInput, g_menu);
     static bool s_escPrev = false;
     const bool esc = down(VK_ESCAPE);
     if (g_menu && fg && esc && !s_escPrev && !keyCaptureActive()) {
@@ -800,9 +797,10 @@ void overlayFrame(void* device) {
     pluginsPrePresent(dev);
 
     if (captureActive()) {
-        if (game().usesDirectInputBlock()) dinputSetBlocked(false);
+        dinputSetBlocked(false, false);
         g_barShown = false;
         g_panelsShown = false;
+        g_pluginWinShown = false;
         hostConfigSave(false);
         pluginsSaveSettings(false);
         return;
@@ -814,7 +812,11 @@ void overlayFrame(void* device) {
         if (up->running && up->enabled && up->drawOverlay) anyOverlay = true;
     const bool toasts = !pluginCapture && toastsVisible();
     const bool need = g_menu || g_layout || g_barShown || top || anyOverlay || toasts;
-    if (game().usesDirectInputBlock()) dinputSetBlocked(g_menu || g_layout);
+    // the game's DirectInput: keyboard while Horizon has it, mouse while the menu or layout mode is on (what the
+    // game allows: legacy both, Forever the keyboard only, nothing with Competition Patch)
+    const GameAdapter::InputBlock block = game().directInputBlock();
+    if (!need) g_pluginWinShown = false; // no window drawn this frame: none of them has the keyboard
+    dinputSetBlocked(block != GameAdapter::InputBlock::None && keyboardCaptured(), block == GameAdapter::InputBlock::Full && (g_menu || g_layout));
     if (!need) {
         panelsBeginFrame();
         g_panelsShown = false;
@@ -902,7 +904,7 @@ void overlayAfterFault(bool giveUp) {
     g_layout = false;
     g_barShown = g_panelsShown = g_pluginWinShown = false;
     for (bool& s : g_swallowed) s = false;
-    dinputSetBlocked(false);
+    dinputSetBlocked(false, false);
     if (giveUp) g_uiOff = true;
     if (g_ctx) {
         ImGui::SetCurrentContext(g_ctx);

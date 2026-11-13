@@ -1,5 +1,7 @@
-// Keeps the game's DirectInput keyboard and mouse reads empty while the Horizon menu is open
-// (legacy games only; never on Forever, where Competition Patch owns the input).
+// Keeps the game's DirectInput keyboard and mouse reads empty while the Horizon menu is open, and the keyboard
+// also while a text field of a free plugin window has it (Enter and Backspace there must not respawn the car).
+// Legacy games: keyboard and mouse, installed at start. Forever (host 0.3.2): keyboard only, installed when the
+// game's device exists and only if Competition Patch is not loaded (it owns the input then: nothing is hooked).
 //
 // How: our own DirectInput8 object (system dinput8.dll by full path) makes a keyboard and a mouse
 // device; their method tables (shared with the game's devices of the same interface) get our
@@ -36,7 +38,10 @@ struct Table {
 };
 Table g_tables[4];
 LONG g_tableCount = 0;
-volatile LONG g_blocked = 0;
+volatile LONG g_blockedKeys = 0;  // keyboard reads held back
+volatile LONG g_blockedMouse = 0; // mouse reads held back (never in keyboard-only mode)
+bool g_keyboardOnly = false;      // Forever: the mouse device is passed through untouched
+bool g_installed = false;
 volatile LONG g_holdDik = -1;
 
 struct Kind {
@@ -93,13 +98,10 @@ HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, 
     const HRESULT hr = t->state(dev, size, data);
     if (FAILED(hr) || !data) return hr;
     const int kind = kindOf(dev, t);
-    if (kind == 3) return hr;
-    if (g_blocked) {
-        memset(data, 0, size);
-    } else if (kind == 1 && g_holdDik >= 0 && size == 256) {
-        static_cast<BYTE*>(data)[g_holdDik] = 0;
-    }
-    g_gate.sawState(kind == 1 ? InputGate::kKeyboard : InputGate::kMouse, g_blocked != 0, static_cast<const BYTE*>(data), size);
+    if (kind == 3 || (kind == 2 && g_keyboardOnly)) return hr;
+    const bool blocked = (kind == 1 ? g_blockedKeys : g_blockedMouse) != 0;
+    if (!blocked && kind == 1 && g_holdDik >= 0 && size == 256) static_cast<BYTE*>(data)[g_holdDik] = 0;
+    g_gate.filterState(kind == 1 ? InputGate::kKeyboard : InputGate::kMouse, blocked, static_cast<BYTE*>(data), size);
     return hr;
 }
 
@@ -109,14 +111,15 @@ HRESULT STDMETHODCALLTYPE getDataDetour(IDirectInputDevice8W* dev, DWORD objSize
     const HRESULT hr = t->data(dev, objSize, data, inOut, flags);
     if (FAILED(hr) || !inOut) return hr;
     const int kind = kindOf(dev, t);
-    if (kind == 3) return hr;
+    if (kind == 3 || (kind == 2 && g_keyboardOnly)) return hr;
     const int gateKind = kind == 1 ? InputGate::kKeyboard : InputGate::kMouse;
+    const bool blocked = (kind == 1 ? g_blockedKeys : g_blockedMouse) != 0;
     if (!data || (flags & DIGDD_PEEK)) {
         // a flush (no buffer) or a peek: nothing for the game while blocked, no change to what it holds
-        if (g_blocked) *inOut = 0;
+        if (blocked) *inOut = 0;
         return hr;
     }
-    if (g_blocked) {
+    if (blocked) {
         // read and dropped (nothing piles up for after the menu), except the key-up of a key the game holds:
         // without it the key stays down in the game (a car steering on after the menu closed)
         g_gate.filter(gateKind, true, data, objSize, inOut, capacity, &physDown);
@@ -169,7 +172,10 @@ DWORD WINAPI releaseWatch(LPVOID) {
 
 } // namespace
 
-void dinputInstall() {
+void dinputInstall(bool keyboardOnly) {
+    if (g_installed) return;
+    g_installed = true;
+    g_keyboardOnly = keyboardOnly;
     wchar_t path[MAX_PATH];
     const UINT n = GetSystemDirectoryW(path, MAX_PATH);
     if (n == 0 || n > MAX_PATH - 16) return;
@@ -194,16 +200,24 @@ void dinputInstall() {
         }
         di->Release();
     }
+    HLOG("input: the game's DirectInput %s is held back while Horizon has it", keyboardOnly ? "keyboard" : "keyboard and mouse");
     HANDLE th = CreateThread(nullptr, 0, &releaseWatch, nullptr, 0, nullptr);
     if (th) CloseHandle(th);
 }
 
-void dinputSetBlocked(bool blocked) {
-    const LONG v = blocked ? 1 : 0;
-    if (InterlockedExchange(&g_blocked, v) != v) HLOG("input: game keyboard/mouse %s", blocked ? "held back (menu open)" : "back to the game");
+void dinputSetBlocked(bool keyboard, bool mouse) {
+    if (g_keyboardOnly) mouse = false;
+    const LONG k = keyboard ? 1 : 0, m = mouse ? 1 : 0;
+    const LONG oldK = InterlockedExchange(&g_blockedKeys, k);
+    const LONG oldM = InterlockedExchange(&g_blockedMouse, m);
+    if (oldK == k && oldM == m) return;
+    if (k && m) HLOG("input: game keyboard and mouse held back");
+    else if (k) HLOG("input: game keyboard held back");
+    else if (m) HLOG("input: game mouse held back");
+    else HLOG("input: game keyboard/mouse back to the game");
 }
 
-bool dinputBlocked() { return g_blocked != 0; }
+bool dinputBlocked() { return g_blockedKeys != 0 || g_blockedMouse != 0; }
 
 void dinputHoldUntilReleased(int vk) {
     const UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);

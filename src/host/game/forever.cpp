@@ -2,8 +2,11 @@
 // and the null adapter (test program).
 //
 // Competition Patch 2.0 validates runs on its server and may treat changed code bytes as tampering, so this
-// adapter never hooks anything: no inline hook, no vtable or import patch, no input blocking (DirectInput is not
-// touched, CP replaces the game's input). The game's events come from polling the game's objects once a frame
+// adapter never hooks the game: no inline hook, no vtable or import patch in the game's code. The one exception is
+// the keyboard while Horizon has it (host 0.3.2, dinput.cpp): without Competition Patch the method table of the
+// system dinput8.dll devices gets the host's keyboard hold-back, so Enter/Backspace typed into the menu do not
+// respawn the car; with Competition Patch loaded (it replaces the game's input) DirectInput is not touched at all.
+// The game's events come from polling the game's objects once a frame
 // (frame(), game thread): reads only, every read SEH-guarded, no write into game memory, no call into game code.
 // What is read: CTrackMania (the app global of gamectl) -> Challenge, Editor, current race -> the local player's
 // CTrackManiaPlayerInfo (RaceState, RaceTime, RaceBestTime), by reflection member names, TMNF/TMUF defaults when a
@@ -57,6 +60,8 @@ fpoll::Kind classify(const reflect::ClassInfo* c) {
         return Kind::RaceOther;
     }
     if (n && (strstr(n, "Replay"))) return Kind::EditorReplay;
+    // TMNF/TMUF keep one in the Editor slot through every solo and network race (logs 2026-11-11..13), as ESWC does
+    if (reflect::isKindOf(c, "CTrackManiaEditorPuzzle") || (n && strcmp(n, "CTrackManiaEditorPuzzle") == 0)) return Kind::EditorPuzzle;
     if (reflect::isKindOf(c, "CGameCtnEditor") || (n && (strstr(n, "Editor") || strstr(n, "MediaTracker")))) return Kind::EditorOther;
     return Kind::Unknown;
 }
@@ -71,6 +76,7 @@ const char* kindText(fpoll::Kind k) {
     case fpoll::Kind::PlayerInfo: return "player info";
     case fpoll::Kind::EditorReplay: return "replay editor";
     case fpoll::Kind::EditorOther: return "editor";
+    case fpoll::Kind::EditorPuzzle: return "puzzle editor";
     default: return "not classified";
     }
 }
@@ -113,8 +119,7 @@ public:
                  reflect::ready() ? "exe not known to gamectl" : "reflection not available");
             return;
         }
-        HLOG("game: Forever adapter (%s): polling only (guarded reads once a frame), no game hooks, no memory writes, no input blocking",
-             gamectl::gameName());
+        HLOG("game: Forever adapter (%s): polling only (guarded reads once a frame), no game hooks, no memory writes", gamectl::gameName());
         loadLayout();
     }
 
@@ -173,7 +178,9 @@ public:
         if (!known_) return HORIZON_ERR_NOT_SUPPORTED;
         return fromGamectl(gamectl::returnToMenu());
     }
-    bool usesDirectInputBlock() const override { return false; }
+    // keyboard only (the mouse stays the game's as before), nothing with Competition Patch (hostcfg.cpp finds it
+    // when the device is made, before dinputInstall runs)
+    InputBlock directInputBlock() const override { return state().competitionPatch ? InputBlock::None : InputBlock::KeyboardOnly; }
     // The objects this frame's poll found (read only; plugins read them by reflection names).
     void* engine(uint32_t which) override {
         if (!known_) return nullptr;

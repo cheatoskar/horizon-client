@@ -29,7 +29,7 @@ mkdir %T%\horizon\settings
 > %T%\horizon\settings\host.json echo {"bridge.enabled": 0}
 build\test\host_test.exe loader "%CD%\%T%" || set FAIL=1
 
-echo === host + sample plugin (no profile.json: every plugin loads) + D3D9 device + menu
+echo === host + sample plugin (no profile.json: every plugin loads) + D3D9 device + menu + keys typed into the menu
 set "T=build\test\run-host"
 if exist %T% rmdir /s /q %T%
 mkdir %T%\horizon\plugins\sample
@@ -45,7 +45,7 @@ rem ABI layout: a plugin built against the 1.2 header loads in this 1.4 host
 mkdir %T%\horizon\plugins\abi12
 copy /y build\test\abi12\abi12.dll %T%\horizon\plugins\abi12\ >nul
 copy /y build\test\abi12\plugin.json %T%\horizon\plugins\abi12\ >nul
-build\test\host_test.exe host "%CD%\%T%" expect-plugin expect-abi12 "%CD%\screens\host-test-menu.png" || set FAIL=1
+build\test\host_test.exe host "%CD%\%T%" expect-plugin expect-abi12 keys "%CD%\screens\host-test-menu.png" || set FAIL=1
 
 echo === modules switched on while the game runs (sample: loaded late, off/on cycles, Reset; abi12: startup_only)
 set "T=build\test\run-late"

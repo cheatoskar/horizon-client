@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -266,6 +267,80 @@ static void testWidgets(HMODULE host, IDirect3DDevice9* dev, D3DPRESENT_PARAMETE
     frames(4);
 }
 
+// The "game's" window procedure (under the host's): counts the key messages that reach it.
+static int g_gameDown[256], g_gameUp[256], g_gameChar[256];
+static LRESULT CALLBACK gameWndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+    if (w < 256) {
+        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) g_gameDown[w]++;
+        if (msg == WM_KEYUP || msg == WM_SYSKEYUP) g_gameUp[w]++;
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) g_gameChar[w]++;
+    }
+    return DefWindowProcW(h, msg, w, l);
+}
+
+// keys: typing in the open menu must not reach the game (Enter/Backspace respawn the car in TrackMania), the game's
+// keys with the menu closed must, and a release always must when the game saw the press. Window messages through
+// the host's real window procedure; the DirectInput side by the host's "input held back" bit (the filtering itself
+// is in the unit tests, input_gate.h).
+static bool g_keys = false;
+static void testKeys(HMODULE host, HWND hwnd, const std::function<void(int)>& frames) {
+    using FaultFn = int(__cdecl*)(int);
+    auto overlay = reinterpret_cast<FaultFn>(GetProcAddress(host, "HorizonHost_TestOverlayFault"));
+    check(overlay != nullptr, "keys: test export HorizonHost_TestOverlayFault");
+    if (!overlay) return;
+    auto reset = [] {
+        memset(g_gameDown, 0, sizeof(g_gameDown));
+        memset(g_gameUp, 0, sizeof(g_gameUp));
+        memset(g_gameChar, 0, sizeof(g_gameChar));
+    };
+    auto press = [&](WPARAM vk, wchar_t ch) {
+        SendMessageW(hwnd, WM_KEYDOWN, vk, 1);
+        if (ch) SendMessageW(hwnd, WM_CHAR, ch, 1);
+    };
+    auto release = [&](WPARAM vk) { SendMessageW(hwnd, WM_KEYUP, vk, 0xC0000001); };
+    overlay(2);
+    frames(3);
+    check((overlay(0) & 5) == 5, "keys: menu open, game input held back");
+    reset();
+    press(VK_RETURN, L'\r');
+    release(VK_RETURN);
+    press(VK_BACK, L'\b');
+    release(VK_BACK);
+    press('A', L'a');
+    release('A');
+    check(g_gameDown[VK_RETURN] + g_gameUp[VK_RETURN] + g_gameChar['\r'] == 0, "keys: menu open, Enter does not reach the game");
+    check(g_gameDown[VK_BACK] + g_gameUp[VK_BACK] + g_gameChar['\b'] == 0, "keys: menu open, Backspace does not reach the game");
+    check(g_gameDown['A'] + g_gameUp['A'] + g_gameChar['a'] == 0, "keys: menu open, letters do not reach the game");
+    // menu closed: the game gets its keys
+    overlay(3);
+    frames(3);
+    check((overlay(0) & 5) == 0, "keys: menu closed, game input not held");
+    reset();
+    press(VK_RETURN, L'\r');
+    release(VK_RETURN);
+    press(VK_BACK, 0);
+    release(VK_BACK);
+    check(g_gameDown[VK_RETURN] == 1 && g_gameChar['\r'] == 1 && g_gameUp[VK_RETURN] == 1, "keys: menu closed, Enter reaches the game");
+    check(g_gameDown[VK_BACK] == 1 && g_gameUp[VK_BACK] == 1, "keys: menu closed, Backspace reaches the game");
+    // a key the game holds when the menu opens: its release reaches the game while the menu is open
+    reset();
+    press(VK_LEFT, 0);
+    overlay(2);
+    frames(3);
+    SendMessageW(hwnd, WM_KEYDOWN, VK_LEFT, 0x40000001); // auto-repeat while the menu is open: held back
+    release(VK_LEFT);
+    check(g_gameDown[VK_LEFT] == 1 && g_gameUp[VK_LEFT] == 1, "keys: release of a key held into the menu is forwarded");
+    // pressed while the menu is open, released after it closed: the release is forwarded
+    reset();
+    press(VK_UP, 0);
+    overlay(3);
+    frames(3);
+    release(VK_UP);
+    check(g_gameDown[VK_UP] == 0 && g_gameUp[VK_UP] == 1, "keys: release after the menu closed is forwarded");
+    overlay(2); // as the other runs: the menu open for what follows
+    frames(3);
+}
+
 static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
     struct Info {
         unsigned api, size, flags;
@@ -288,7 +363,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
 
     // a D3D9 device on a hidden window, created the way the game does it
     WNDCLASSW wc = {};
-    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpfnWndProc = gameWndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"HorizonHostTest";
     RegisterClassW(&wc);
@@ -362,6 +437,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         }
     }
     if (g_widgets) testWidgets(host, dev, pp, hwnd, dir);
+    if (g_keys) testKeys(host, hwnd, frames);
     // Reset as the game does on a resolution change: the overlay must survive it
     const HRESULT rr = dev->Reset(&pp);
     check(SUCCEEDED(rr), "Reset through the hook");
@@ -484,6 +560,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"expect-abi12") abi12 = true;
         else if (a == L"runtime-load") g_runtimeLoad = true;
         else if (a == L"crash") g_crash = true;
+        else if (a == L"keys") g_keys = true;
         else if (a == L"widgets") g_widgets = true;
         else if (a == L"widgets-anchored") g_widgets = g_anchored = true;
         else if (a == L"layout") SetEnvironmentVariableW(L"HORIZON_TEST_LAYOUT", L"1"); // screens of layout mode
