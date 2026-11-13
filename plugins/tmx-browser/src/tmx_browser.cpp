@@ -40,7 +40,7 @@ using tmx::Track;
 
 namespace {
 
-constexpr char kVersion[] = "0.2.1";
+constexpr char kVersion[] = "0.2.2";
 constexpr size_t kMaxTextures = 48;
 constexpr int kMaxThumbsInFlight = 6;
 constexpr size_t kThumbCacheFiles = 600;
@@ -102,6 +102,8 @@ std::vector<tmx::FavEntry> g_favs; // newest first
 struct Later {
     bool active = false;
     bool ready = false; // legacy: the file is saved; Forever: always (the link is asked for when it starts)
+    bool leave = false; // Play in a solo race (legacy): leave the race once the file is saved, then start it
+    bool left = false;  // return_to_menu was called
     Track t;
     std::string file;
 } g_later;
@@ -152,6 +154,18 @@ std::string playBlock() {
     if (st != HORIZON_STATE_MAIN_MENU) return "Main menu only";
     return "";
 }
+
+// Play while a solo race runs (ESWC, Sunrise, Original): the host leaves the race and the map starts in the menu.
+// Forever keeps "Play later" (its tmtp link is handed to the game, not tried mid-race).
+bool canLeaveRace() {
+    if (!g_host || g_forever || !g_host->return_to_menu) return false;
+    if (g_host->is_online && g_host->is_online()) return false;
+    const int st = g_host->get_game_state ? g_host->get_game_state() : HORIZON_STATE_UNKNOWN;
+    if (st != HORIZON_STATE_SOLO_RACE && st != HORIZON_STATE_END_RACE) return false;
+    return !g_host->actions_allowed || g_host->actions_allowed(g_host->plugin);
+}
+
+void doPlayLater(const Track& t);
 
 void releaseTex(uint64_t tex) {
     if (tex && g_host && g_host->release_texture) {
@@ -318,6 +332,12 @@ void askPlayLink(const Track& t) {
 void doMap(const Track& t, bool play) {
     if (play) {
         const std::string block = playBlock();
+        if (!block.empty() && canLeaveRace()) {
+            doPlayLater(t);
+            g_later.leave = g_later.active;
+            if (g_later.leave) setMsg("Downloading...", 0);
+            return;
+        }
         if (!block.empty()) {
             setMsg(block, 2);
             return;
@@ -571,6 +591,13 @@ void pumpNet() {
         }
     }
     if (g_start.frames > 0 && --g_start.frames == 0) runStart();
+    if (g_later.active && g_later.ready && g_later.leave && !g_later.left && canLeaveRace()) {
+        g_later.left = true;
+        const HorizonResult r = g_host->return_to_menu(g_host->plugin);
+        logf(HORIZON_LOG_INFO, "play %d: leaving the race first -> %d", g_later.t.id, r);
+        if (r == HORIZON_OK) setMsg("Leaving the race...", 0);
+        else setMsg("Leave the race first", 2); // stays queued: starts once the player is in the menu
+    }
     if (g_later.active && g_later.ready && !g_mapBusy && g_start.frames == 0 && playBlock().empty()) {
         const Later l = g_later;
         g_later = Later();
@@ -902,6 +929,7 @@ void drawDetail(const ck::Palette& pal, View& v) {
 
     ImGui::Dummy(ImVec2(0, 8.0f * s));
     const std::string playOff = playBlock();
+    const bool leaveRace = !playOff.empty() && canLeaveRace();
     const bool busy = g_mapBusy;
     const bool waiting = g_later.active && g_later.t.id == t.id;
     const HorizonStyle* hs = g_host->style ? g_host->style() : nullptr;
@@ -916,14 +944,17 @@ void drawDetail(const ck::Palette& pal, View& v) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.accent2);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, pal.accent3);
         ImGui::PushStyleColor(ImGuiCol_Text, ink);
-        if (playOff.empty()) {
+        if (playOff.empty() || leaveRace) {
             if (ImGui::Button("Play", ImVec2(pw, 0))) doMap(t, true);
         } else {
             if (ImGui::Button("Play later", ImVec2(pw, 0))) doPlayLater(t);
         }
         ImGui::PopStyleColor(4);
         ImGui::EndDisabled();
-        if (!playOff.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Starts in the main menu.");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (leaveRace) ImGui::SetTooltip("Leaves the race.");
+            else if (!playOff.empty()) ImGui::SetTooltip("Starts in the main menu.");
+        }
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(busy);
@@ -944,7 +975,7 @@ void drawDetail(const ck::Palette& pal, View& v) {
     }
     if (waiting) {
         ImGui::PushStyleColor(ImGuiCol_Text, pal.muted);
-        ImGui::TextWrapped("Plays in the main menu");
+        ImGui::TextWrapped(g_later.leave ? "Starting..." : "Plays in the main menu");
         ImGui::PopStyleColor();
     } else if (!playOff.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, pal.warn);

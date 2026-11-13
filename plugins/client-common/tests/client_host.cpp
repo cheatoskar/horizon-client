@@ -18,6 +18,7 @@ std::vector<Panel> panels;
 std::vector<Toast> toasts;
 std::vector<BridgeCall> bridgeCalls;
 std::vector<std::string> playedMaps;
+int menuReturns = 0;
 std::string logs;
 bool online = false;
 int gameState = HORIZON_STATE_MAIN_MENU;
@@ -242,7 +243,11 @@ HorizonResult HORIZON_CALL f_play_map_file(HorizonPluginHandle, const char* path
     playedMaps.push_back(path ? path : "");
     return HORIZON_OK;
 }
-HorizonResult HORIZON_CALL f_return_to_menu(HorizonPluginHandle) { return online ? HORIZON_ERR_BLOCKED_ONLINE : HORIZON_OK; }
+HorizonResult HORIZON_CALL f_return_to_menu(HorizonPluginHandle) {
+    if (online) return HORIZON_ERR_BLOCKED_ONLINE;
+    menuReturns++;
+    return HORIZON_OK;
+}
 int32_t HORIZON_CALL f_get_game_state(void) { return gameState; }
 int32_t HORIZON_CALL f_is_online(void) { return online ? 1 : 0; }
 int32_t HORIZON_CALL f_actions_allowed(HorizonPluginHandle) { return online ? 0 : 1; }
