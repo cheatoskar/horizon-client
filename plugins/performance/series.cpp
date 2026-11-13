@@ -15,7 +15,9 @@ SeriesOptions presetOptions(int preset, int refreshHz, const SeriesOptions& cust
     o.threadCores = custom.threadCores;
     o.timer1ms = custom.timer1ms;
     o.mmcss = custom.mmcss;
-    o.filter = 1;
+    // Not the state filter: it needs 30 hooked device methods, and on TMNF/TMUF (mixed-VP device) the D3D9 runtime
+    // keeps the state itself, so it saves next to nothing (docs/performance.md). A preset costs no hooks.
+    o.filter = 0;
     o.powerThrottlingOff = 1;
     o.priority = 1;
     o.limitFps = refreshHz >= 30 && refreshHz <= 1000 ? refreshHz : 0; // unknown: no limit

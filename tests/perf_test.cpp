@@ -99,22 +99,74 @@ static void testRing() {
     CHECK(r.last(10).size() == 4);
 }
 
+// The limiter loop as the plugin runs it: the game works `work(i)` seconds, Present returns (with V-Sync: at the
+// next vertical blank of a `vblank`-second display), the pacer says until when to wait. Returns the average fps
+// and the average wait per frame.
+struct PaceRun {
+    double fps = 0, waitMs = 0;
+};
+template <class Work>
+static PaceRun simulatePacer(double limitFps, int frames, Work work, double vblank = 0) {
+    perf::Pacer p;
+    p.setFps(limitFps);
+    double t = 1.0, wait = 0, first = 0;
+    for (int i = 0; i < frames; i++) {
+        t += work(i);
+        if (vblank > 0) t = std::ceil(t / vblank - 1e-9) * vblank + 0.00005; // Present returns just after the blank
+        if (i == 10) first = t;                                                 // the first frames only settle
+        const double until = p.next(t);
+        if (until > t) {
+            if (i >= 10) wait += until - t;
+            t = until;
+        }
+    }
+    PaceRun r;
+    r.fps = (frames - 10) / (t - first);
+    r.waitMs = wait * 1000.0 / (frames - 10);
+    return r;
+}
+
 static void testPacer() {
     perf::Pacer p;
     CHECK(p.next(5.0) == 5.0); // off: no wait
     p.setFps(100);             // 10 ms
-    double t = 0.0;
-    const double d1 = p.next(t);
-    CHECK(approx(d1, 0.010, 1e-12));
+    CHECK(approx(p.next(0.0), 0.0, 1e-12)); // the first frame never waits: the grid starts there
     // a frame that took 4 ms waits until the next grid point
-    CHECK(approx(p.next(0.014), 0.020, 1e-12));
-    // slightly late (2 ms): the grid stays, the next deadline is the next grid point
-    CHECK(approx(p.next(0.022), 0.030, 1e-12));
-    // a hitch of 50 ms: no burst of catch-up frames, a new grid from now
-    CHECK(approx(p.next(0.080), 0.090, 1e-12));
+    CHECK(approx(p.next(0.004), 0.010, 1e-12));
+    // 2 ms of work: waits until the next grid point
+    CHECK(approx(p.next(0.012), 0.020, 1e-12));
+    // late by 3 ms: no wait at all, the grid stays (deadline 0.030 in the past)
+    CHECK(p.next(0.033) <= 0.033);
+    // the next frame may catch up those 3 ms: its slot is 0.040
+    CHECK(approx(p.next(0.035), 0.040, 1e-12));
+    // a hitch of 50 ms: no wait, no burst of catch-up frames, a new grid from now
+    CHECK(p.next(0.090) <= 0.090);
     CHECK(approx(p.next(0.0905), 0.100, 1e-12));
     p.reset();
-    CHECK(approx(p.next(1.0), 1.010, 1e-12));
+    CHECK(approx(p.next(1.0), 1.0, 1e-12));
+    CHECK(approx(p.next(1.001), 1.010, 1e-12));
+
+    // The report of 2026-11-13: 144 Hz monitor, limit 144, the game at ~10 ms a frame (100 fps). The limiter
+    // must not take anything away: ~100 fps, no wait. (Before the fix: a whole period every frame, ~59 fps.)
+    PaceRun r = simulatePacer(144, 2000, [](int) { return 0.010; });
+    CHECK(approx(r.fps, 100, 1.0) && r.waitMs < 0.01);
+    // the same with the logged frame (game 8.98 ms + Present 3.42 ms): 81 fps, not 52
+    r = simulatePacer(144, 2000, [](int) { return 0.01240; });
+    CHECK(approx(r.fps, 80.6, 1.0) && r.waitMs < 0.01);
+    // a game that is sometimes faster, sometimes slower than the limit (5 / 9 ms): never below what it does alone
+    r = simulatePacer(144, 2000, [](int i) { return i % 2 ? 0.009 : 0.005; });
+    CHECK(r.fps >= 1000.0 / 7.0 - 1.0 && r.fps <= 144.5);
+    // faster than the limit: exactly the limit
+    r = simulatePacer(144, 2000, [](int) { return 0.003; });
+    CHECK(approx(r.fps, 144, 0.5) && r.waitMs > 3.5);
+    // V-Sync on at 143.86 Hz (the monitor's real rate) with the limit at 144: each Present returns at a blank a hair
+    // later than the limiter's grid. The limiter must never wait (a wait of a period would miss the next blank and
+    // halve the rate to 72 fps).
+    r = simulatePacer(144, 3000, [](int) { return 0.004; }, 1.0 / 143.86);
+    CHECK(approx(r.fps, 143.86, 0.5) && r.waitMs < 0.01);
+    // V-Sync at 144 Hz, the game at 10 ms: V-Sync alone makes it 72 fps (every second blank); the limiter adds nothing
+    r = simulatePacer(144, 3000, [](int) { return 0.010; }, 1.0 / 144.0);
+    CHECK(approx(r.fps, 72, 0.5) && r.waitMs < 0.01);
 }
 
 static void testStateCache() {
@@ -893,10 +945,11 @@ static void testPresets() {
     mine.limitFps = 90;
     mine.affinity = 1;
     const perf::SeriesOptions smooth = perf::presetOptions(perf::PresetSmooth, 144, mine);
-    CHECK(smooth.filter == 1 && smooth.powerThrottlingOff == 1 && smooth.priority == 1 && smooth.limitFps == 144 && smooth.vsync == 0);
+    CHECK(smooth.filter == 0 && smooth.powerThrottlingOff == 1 && smooth.priority == 1 && smooth.limitFps == 144 && smooth.vsync == 0);
     CHECK(smooth.affinity == 0 && smooth.fineTimer == 0 && smooth.count == 1);
     const perf::SeriesOptions low = perf::presetOptions(perf::PresetLowLatency, 240, mine);
     CHECK(low.vsync == 1 && low.limitFps == 240 && low.priority == 1);
+    CHECK(low.filter == 0); // a preset never needs the Direct3D hooks (the state filter is Custom only)
     CHECK(perf::presetOptions(perf::PresetSmooth, 0, mine).limitFps == 0); // refresh rate unknown: no limit
     CHECK(perf::presetOptions(perf::PresetSmooth, 1, mine).limitFps == 0);
     CHECK(perf::presetOptions(perf::PresetCustom, 144, mine) == mine);

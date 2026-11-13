@@ -109,6 +109,7 @@ double g_tPre = 0, g_tPrevPre = 0, g_tPost = 0, g_sleepMs = 0, g_presentMs = 0;
 perf::Pacer g_pacer;
 uint64_t g_frameNo = 0;
 perf::Summary g_live;   // last 10 s, refreshed twice a second
+double g_liveHookCalls = -1; // calls through my Direct3D hooks per frame in those 10 s (-1: no hooks)
 double g_liveAt = 0;
 HWND g_window = nullptr;
 
@@ -871,6 +872,8 @@ bool windowInFront() {
     return f && (f == g_window || GetAncestor(f, GA_ROOTOWNER) == GetAncestor(g_window, GA_ROOTOWNER));
 }
 
+std::string hookCostText(double callsPerFrame); // below, with the page's live numbers
+
 void finishFrame(double tPre) {
     if (g_tPrevPre <= 0) {
         g_tPrevPre = tPre;
@@ -907,10 +910,11 @@ void finishFrame(double tPre) {
         s_nextLog = tPre + 30000;
         perf::CallCounts sum;
         size_t n = 0, withCalls = 0;
-        double total = 0;
+        double total = 0, hookCalls = 0;
         for (size_t i = g_ring.size(); i > 0 && total < 30000; i--, n++) {
             const perf::FrameSample& x = g_ring.at(i - 1);
             total += x.frameMs;
+            hookCalls += x.calls.hookCalls;
             if (!x.hasCalls) continue;
             withCalls++;
             sum.draws += x.calls.draws + x.calls.drawsUP;
@@ -922,16 +926,21 @@ void finishFrame(double tPre) {
             sum.drawsSoftwareVP += x.calls.drawsSoftwareVP;
         }
         const perf::Summary s = perf::summarize(g_ring.last(n));
-        char left[96] = "";
+        char left[200] = "";
+        const std::string hooks = hookCostText(n ? hookCalls / static_cast<double>(n) : -1);
         if (s.skipped)
             snprintf(left, sizeof(left), "; %u frames left out (background, loading, after a Reset)", static_cast<unsigned>(s.skipped));
+        if (!hooks.empty()) {
+            const size_t used = strlen(left);
+            snprintf(left + used, sizeof(left) - used, "; hooks: %s", hooks.c_str());
+        }
         if (withCalls) {
             const double k = 1.0 / static_cast<double>(withCalls);
             logf(HORIZON_LOG_INFO,
                  "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms; per frame: %.0f draws (%.0f software VP), "
-                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f%s",
+                 "%.0f states (%.0f same), %.1f locks, GPU wait %.2f ms, filtered %.0f, limiter %.2f ms%s",
                  s.avgFps, s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, sum.draws * k, sum.drawsSoftwareVP * k,
-                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k, left);
+                 sum.renderStates * k, sum.renderStatesSame * k, sum.locks * k, sum.queryWaitMs * k, sum.filtered * k, s.sleepMsAvg, left);
         } else {
             logf(HORIZON_LOG_INFO, "stats: %.0f fps, 1%% low %.0f, %u stutters, game %.2f ms, Present %.2f ms, limiter %.2f ms%s", s.avgFps,
                  s.low1Fps, static_cast<unsigned>(s.stutters), s.cpuMsAvg, s.presentMsAvg, s.sleepMsAvg, left);
@@ -1015,8 +1024,23 @@ void refreshLive(double now) {
     // the last ~10 s
     size_t n = 0;
     double sum = 0;
-    for (size_t i = g_ring.size(); i > 0 && sum < 10000; i--, n++) sum += g_ring.at(i - 1).frameMs;
+    double hooks = 0;
+    for (size_t i = g_ring.size(); i > 0 && sum < 10000; i--, n++) {
+        sum += g_ring.at(i - 1).frameMs;
+        hooks += g_ring.at(i - 1).calls.hookCalls;
+    }
     g_live = perf::summarize(g_ring.last(n));
+    g_liveHookCalls = perf::d3d::attached() && n ? hooks / static_cast<double>(n) : -1;
+}
+
+// What my Direct3D hooks cost a frame: "4210 hooked calls, about 0.08 ms" ("" without hooks).
+std::string hookCostText(double callsPerFrame) {
+    if (callsPerFrame < 0 || !perf::d3d::attached()) return "";
+    char b[96];
+    const double us = perf::d3d::perCallUs();
+    if (us >= 0) snprintf(b, sizeof(b), "%.0f hooked calls, about %.2f ms", callsPerFrame, callsPerFrame * us / 1000.0);
+    else snprintf(b, sizeof(b), "%.0f hooked calls", callsPerFrame);
+    return b;
 }
 
 void drawGraph(float width, float height) {
@@ -1284,6 +1308,11 @@ void drawMenu() {
             else dimWrapped("No limit (refresh rate unknown)   V-Sync %s   Above normal", S.vsync == 1 ? "off" : "game");
         }
         if (g_vsyncPending) dimWrapped("V-Sync: next start or Alt+Enter");
+        // the cap in effect now, and whether it takes anything away (it only waits when the game is faster)
+        if (S.limitFps > 0 && g_live.frames) {
+            if (g_live.sleepMsAvg >= 0.05) dimWrapped("Cap %d fps: waits %.2f ms a frame", S.limitFps, g_live.sleepMsAvg);
+            else dimWrapped("Cap %d fps: game below it, no wait", S.limitFps);
+        }
     }
 
     // smoothing switches: independent of the choice above, all off by default (docs/performance-smooth.md)
@@ -1328,6 +1357,10 @@ void drawMenu() {
     ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
                        static_cast<unsigned>(g_live.stutters));
     dimWrapped("Game %.2f   Present %.2f   Wait %.2f ms", g_live.cpuMsAvg, g_live.presentMsAvg, g_live.sleepMsAvg);
+    {
+        const std::string hooks = hookCostText(g_liveHookCalls);
+        if (!hooks.empty()) dimWrapped("Hooks: %s", hooks.c_str());
+    }
     if (checkbox("Frame-time window", &S.overlay, "overlay")) registerOverlay();
     hint("FPS, lows and a frame graph on screen.");
     ImGui::BeginDisabled(!callsAllowed());

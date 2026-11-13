@@ -26,7 +26,7 @@ The choice at the top of the page; what the module does as soon as it is switche
 
 | | Smooth (default) | Low latency | Custom |
 |---|---|---|---|
-| Skip repeated states | on (its own checks still apply, off with the Competition Patch) | on | the player's |
+| Skip repeated states | off (needs the Direct3D hooks and saves next to nothing on a mixed-VP device; until 2026-11-13 on) | off | the player's |
 | Power throttling (EcoQoS) | off for the game | off | the player's |
 | Priority | Above normal | Above normal | the player's (High only here: it can starve audio, voice chat and streaming for little gain) |
 | Frame limit | refresh rate of the monitor the game window is on | same | the player's |
@@ -35,6 +35,25 @@ The choice at the top of the page; what the module does as soon as it is switche
 The refresh rate is read from the monitor of the game window (`EnumDisplaySettings`), again when the device is
 created; unknown = no limit. Measuring ("Count Direct3D calls") stays the player's choice. A player who set
 options before 0.3.1 starts on Custom. `perf::presetOptions` (series.h), unit test `testPresets`.
+
+A preset never costs FPS when the game is below the refresh rate: the limiter only waits when a frame is early
+(see "Frame limiter" below), and a preset attaches no Direct3D hooks (counting and the state filter are the
+player's own switches). The page shows the cap in effect ("Cap 144 fps: game below it, no wait" or "waits
+x ms a frame"); with the hooks attached also their cost per frame ("Hooks: n hooked calls, about x ms": the
+number of calls through the detours times the cost of one pass-through call, measured at attach with 3 x 4096
+`SetRenderState` calls through the hook and straight into d3d9). In my test (`run_perf_tests`, mixed-VP device):
+0.003-0.009 us a call, ~4500 hooked calls a frame = 0.01-0.04 ms. The hooks were not what cost the FPS; the limiter was.
+
+### Frame limiter
+
+`perf::Pacer` (perf_core.h): deadlines on a grid of 1/limit seconds, measured after `Present`. An early frame
+waits until its grid point; a late frame never waits: late by up to one period it keeps the grid (the next frame
+may catch up that much), later than that it starts a new grid from now (no burst after a hitch). Until
+2026-11-13 a late frame started the new grid one period after now, so a game slower than the cap waited a full
+period every frame: 144 Hz monitor, Smooth, game at 12.4 ms a frame -> 52 fps instead of 81 (my report:
+"game 8.98 ms, Present 3.42 ms, limiter 6.94 ms"), and with V-Sync on a 143.86 Hz monitor every other blank was
+missed (72 fps). `testPacer` simulates both: 10 ms frames at a 144 cap give 100 fps with no wait, V-Sync at
+143.86 Hz gives 143.86 fps.
 
 ## Benchmark
 

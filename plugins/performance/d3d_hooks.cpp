@@ -84,6 +84,8 @@ DeviceFacts g_facts;
 CallCounts g_c;
 StateCache g_cache;
 thread_local int t_depth[64];
+uint32_t g_hookCalls = 0;  // every call through a detour (the counter's cost, also with counting off)
+double g_perCallUs = -1;   // measured cost of one pass-through detour (-1: not measured)
 
 TableHook* findHook(int hook, void* self) {
     void** table = nullptr;
@@ -141,7 +143,10 @@ void hookObject(Kind kind, T* obj) {
 
 struct Depth {
     int i;
-    explicit Depth(int idx) : i(idx) { t_depth[i]++; }
+    explicit Depth(int idx) : i(idx) {
+        t_depth[i]++;
+        g_hookCalls++;
+    }
     ~Depth() { t_depth[i]--; }
 };
 
@@ -615,6 +620,42 @@ void probeResourceTables(IDirect3DDevice9* dev) {
     }
 }
 
+// What one call through a detour costs on its own: the same SetRenderState (the value already set) through the
+// hooked slot and straight into what the slot held before. Counting and filtering are off for the loop (the
+// filter would skip the repeats), so this is the pass-through cost every hooked call pays. A warm loop: real
+// calls in a frame pay a little more (cold caches), so the stats line says "about".
+void calibrate(IDirect3DDevice9* dev) {
+    g_perCallUs = -1;
+    using Fn = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DRENDERSTATETYPE, DWORD);
+    TableHook* th = findHook(H_SetRenderState, dev);
+    DWORD v = 0;
+    if (!th || FAILED(dev->GetRenderState(D3DRS_ZENABLE, &v))) return;
+    const bool count = g_count, filter = g_filterWanted;
+    g_count = g_filterWanted = false;
+    struct Restore {
+        bool c, f;
+        ~Restore() {
+            g_count = c;
+            g_filterWanted = f;
+        }
+    } restore{count, filter};
+    const Fn direct = reinterpret_cast<Fn>(th->next);
+    constexpr int kN = 4096;
+    double best = 1e9;
+    for (int round = 0; round < 3; round++) {
+        const double t0 = nowMs();
+        for (int i = 0; i < kN; i++) dev->SetRenderState(D3DRS_ZENABLE, v);
+        const double t1 = nowMs();
+        for (int i = 0; i < kN; i++) direct(dev, D3DRS_ZENABLE, v);
+        const double t2 = nowMs();
+        const double us = ((t1 - t0) - (t2 - t1)) * 1000.0 / kN;
+        if (us < best) best = us;
+    }
+    g_perCallUs = best > 0 ? best : 0;
+    g_hookCalls = 0;
+    DLOG(1, "d3d: one hooked call costs about %.3f us", g_perCallUs);
+}
+
 void decideFilter() {
     g_filterWhy = "";
     if (g_facts.foreignHooks) g_filterWhy = "another mod hooks Direct3D before Horizon (it may bypass the filter)";
@@ -662,6 +703,7 @@ bool attach(IDirect3DDevice9* dev, LogFn log) {
     g_softwareVP = g_facts.software || (g_facts.mixed && dev->GetSoftwareVertexProcessing());
     hookTable(kDevice, table);
     probeResourceTables(dev);
+    calibrate(dev);
     g_attached = true;
     g_cache.invalidate();
     decideFilter();
@@ -699,6 +741,8 @@ const char* filterBlockedWhy() { return g_filterWhy; }
 
 void endFrame(CallCounts& out) {
     out = g_c;
+    out.hookCalls = g_hookCalls;
+    g_hookCalls = 0;
     g_c = CallCounts{};
     g_cache.forgetPointers();
     g_busyQuery = nullptr;
@@ -731,6 +775,8 @@ void onReset() {
 }
 
 const DeviceFacts& facts() { return g_facts; }
+
+double perCallUs() { return g_perCallUs; }
 
 } // namespace d3d
 } // namespace perf

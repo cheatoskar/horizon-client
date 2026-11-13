@@ -32,6 +32,7 @@ struct CallCounts {
     uint32_t readbacks = 0;                 // GetRenderTargetData / GetFrontBufferData
     uint32_t queryPolls = 0, queryBusy = 0; // IDirect3DQuery9::GetData calls, of them S_FALSE (GPU not done)
     uint32_t filtered = 0;                  // calls the state cache did not pass on
+    uint32_t hookCalls = 0;                 // every call through a hooked slot (also with counting off)
     double lockMs = 0, readbackMs = 0, queryWaitMs = 0;
 };
 
@@ -96,8 +97,11 @@ Summary summarize(const std::vector<FrameSample>& frames, uint8_t skipMask = kSk
 bool isStutter(double frameMs, double medianMs);
 
 // ------------------------------------------------------------------ frame limiter maths
-// Deadlines on a fixed grid of `period` seconds. A frame that comes late by more than one period
-// starts a new grid instead of rushing several frames to catch up (no burst after a hitch).
+// Deadlines on a fixed grid of `period` seconds. A frame that is late never waits: it goes at once. Late by
+// up to one period it keeps the grid (the next frame may catch up that little); later than that it starts a
+// new grid from now instead of rushing several frames to catch up (no burst after a hitch).
+// Before 2026-11-13 a late frame started the new grid one period AFTER now: whenever the game was slower than
+// the limit, every frame waited a whole period (144 Hz limit, 12.4 ms frames: 52 fps instead of 81).
 class Pacer {
 public:
     void setFps(double fps) { period_ = fps > 0 ? 1.0 / fps : 0; }
@@ -105,14 +109,24 @@ public:
     // now: time after Present. Returns the time to wait until (<= now: no wait) and moves the deadline on.
     double next(double now) {
         if (period_ <= 0) return now;
-        if (deadline_ <= 0 || now - deadline_ > period_) deadline_ = now; // first frame or late: resync
-        deadline_ += period_;
-        return deadline_;
+        if (!started_) { // first frame: nothing to wait for, the grid starts here
+            started_ = true;
+            deadline_ = now;
+            return now;
+        }
+        const double target = deadline_ + period_;
+        if (now - target > period_) { // more than a period late: a new grid from now, no wait
+            deadline_ = now;
+            return now;
+        }
+        deadline_ = target; // early: wait until it; slightly late: no wait, the grid stays
+        return target;
     }
-    void reset() { deadline_ = 0; }
+    void reset() { started_ = false; }
 
 private:
-    double period_ = 0, deadline_ = 0;
+    double period_ = 0, deadline_ = 0; // deadline_: when the last frame was let go (on the grid)
+    bool started_ = false;
 };
 
 // ------------------------------------------------------------------ redundant state filter
