@@ -16,6 +16,13 @@ constexpr uint32_t kHeaderReplay = 0x03093000;    // version, map ident (UID, en
 constexpr uint32_t kHeaderXml = 0x03093001;       // the replay's XML (<challenge uid=...>)
 constexpr uint32_t kGhostRaceTime = 0x03092005;   // u32 race time (ms)
 constexpr uint32_t kGhostCheckpoints = 0x0309200B; // u32 count, count x (u32 time, u32 stunt score)
+// ESWC, Sunrise and Original write the same chunks under the old class ids (replay 0x2403F, ghost 0x2401B), with the
+// same layout: every TMX record of nations.tm-exchange.com (Nadeo and community maps, checked 2026-11-13) has header
+// chunks 0x2403F000 / 0x2403F001, and the ghost's body chunks are 0x2401B005 / 0x2401B00B (tm-re eswc ghosts.py).
+constexpr uint32_t kHeaderReplayOld = 0x2403F000;
+constexpr uint32_t kHeaderXmlOld = 0x2403F001;
+constexpr uint32_t kGhostRaceTimeOld = 0x2401B005;
+constexpr uint32_t kGhostCheckpointsOld = 0x2401B00B;
 constexpr uint32_t kSkip = 0x534B4950;            // "PIKS": a skippable chunk (its size follows)
 constexpr size_t kMaxBody = 64u << 20;            // a replay with an embedded map is a few MB at most
 
@@ -132,7 +139,7 @@ bool parseHeaderChunks(const unsigned char* data, size_t size, Replay& out, std:
             return false;
         }
         Reader c(data + r.at, e.size);
-        if (e.id == kHeaderReplay) {
+        if (e.id == kHeaderReplay || e.id == kHeaderReplayOld) {
             const uint32_t version = c.u32();
             if (version >= 2) {
                 Lookback ids;
@@ -141,9 +148,10 @@ bool parseHeaderChunks(const unsigned char* data, size_t size, Replay& out, std:
                 const uint32_t time = c.u32();
                 if (c.ok && out.raceTime < 0 && time != 0xFFFFFFFFu) out.raceTime = static_cast<int>(time);
                 std::string nickname = c.string();
+                if (nickname.compare(0, 3, "\xEF\xBB\xBF") == 0) nickname.erase(0, 3); // some TMX records start with a BOM
                 if (c.ok) out.driver = nickname;
             }
-        } else if (e.id == kHeaderXml) {
+        } else if (e.id == kHeaderXml || e.id == kHeaderXmlOld) {
             const std::string xml = c.string();
             if (c.ok && out.mapUid.empty()) out.mapUid = xmlAttribute(xml, "challenge", "uid");
         }
@@ -234,8 +242,9 @@ bool parseReplay(const std::vector<unsigned char>& file, bool body, Replay& out,
         data.assign(file.begin() + r.at, file.end());
     }
     size_t at = 0, n = 0;
-    if (findSkippable(data, kGhostRaceTime, at, n) && n >= 4) out.raceTime = static_cast<int>(at32(data, at));
-    if (findSkippable(data, kGhostCheckpoints, at, n) && n >= 4) {
+    if ((findSkippable(data, kGhostRaceTime, at, n) || findSkippable(data, kGhostRaceTimeOld, at, n)) && n >= 4)
+        out.raceTime = static_cast<int>(at32(data, at));
+    if ((findSkippable(data, kGhostCheckpoints, at, n) || findSkippable(data, kGhostCheckpointsOld, at, n)) && n >= 4) {
         const uint32_t count = at32(data, at);
         if (count <= 1024 && 4 + static_cast<size_t>(count) * 8 <= n) {
             for (uint32_t i = 0; i < count; i++) out.checkpoints.push_back(static_cast<int>(at32(data, at + 4 + i * 8)));

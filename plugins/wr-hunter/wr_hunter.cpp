@@ -527,13 +527,15 @@ void drawDetailed(const ck::Palette& p, const std::vector<wrh::Row>& rows) {
             for (size_t k = 0; k < crossed; k++) {
                 const wrh::Row& r = rows[k];
                 ImGui::TableNextRow();
-                if (k + 1 == crossed && g_runState == 1) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ck::u32(p.accent, 0.18f));
+                // the latest row: checkpoints blue, the finish red (TrackMania's split colours, not the menu accent)
+                if (k + 1 == crossed && (g_runState == 1 || (g_runState == 2 && r.finish)))
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ck::u32(r.finish ? p.bad : p.aheadGain, 0.22f));
                 if (k + 1 == crossed && crossed != g_rowsFollowed) {
                     ImGui::SetScrollHereY(1.0f); // the latest split stays in view
                     g_rowsFollowed = crossed;
                 }
                 ImGui::TableNextColumn();
-                ImGui::PushStyleColor(ImGuiCol_Text, p.text2);
+                ImGui::PushStyleColor(ImGuiCol_Text, r.finish ? p.bad : p.aheadGain);
                 if (r.finish) ImGui::TextUnformatted("Fin");
                 else ImGui::Text("%d", r.index + 1);
                 ImGui::PopStyleColor();
@@ -774,7 +776,7 @@ HORIZON_EXPORT const HorizonPluginInfo* HORIZON_CALL HorizonPlugin_Info(void) {
     static const HorizonPluginInfo info = {HORIZON_ABI,
                                            "wr-hunter",
                                            "WR Hunter",
-                                           "0.1.1",
+                                           "0.1.2",
                                            HORIZON_GAME_ALL,
                                            HORIZON_CAP_MENU | HORIZON_CAP_OVERLAY | HORIZON_CAP_GAME_EVENTS,
                                            HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,

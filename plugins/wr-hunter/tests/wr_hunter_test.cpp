@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -291,6 +292,39 @@ void testReplay() {
           "replay parsed");
     bytes[bytes.size() - 8] = 0x10; // finish time != race time
     check(!ck::parseReplay(bytes, true, r, err), "unfinished run refused");
+    // ESWC/Sunrise/Original: the same chunks under the old ids (class 0x2407E000, header 0x2403F000, ghost 0x2401B0xx),
+    // as every record of nations.tm-exchange.com has them ("Record unreadable (no map UID in the header)" before)
+    {
+        std::string userOld = u32s(1) + u32s(0x2403F000) + u32s(static_cast<uint32_t>(h.size())) + h;
+        std::string bodyOld = u32s(0x2401B005) + u32s(0x534B4950) + u32s(4) + u32s(9000) + u32s(0x2401B00B) + u32s(0x534B4950) + u32s(4 + 2 * 8) +
+                              u32s(2) + u32s(4000) + u32s(0) + u32s(9000) + u32s(0);
+        std::string fo = std::string("GBX\x06\x00", 5) + "BUUR" + u32s(0x2407E000) + u32s(static_cast<uint32_t>(userOld.size())) + userOld + u32s(3) +
+                         u32s(0) + bodyOld;
+        std::vector<unsigned char> old(fo.begin(), fo.end());
+        ck::Replay ro;
+        check(ck::parseReplay(old, true, ro, err) && ro.mapUid == "UIDx" && ro.raceTime == 9000 && ro.checkpoints.size() == 2,
+              ("ESWC replay (old chunk ids) parsed " + err).c_str());
+    }
+    // real TMX records, when a folder is given (WRH_REPLAYS=<folder with *.gbx>; not in the repo)
+    if (const char* dir = getenv("WRH_REPLAYS")) {
+        WIN32_FIND_DATAA fd;
+        HANDLE fh = FindFirstFileA((std::string(dir) + "\\*.gbx").c_str(), &fd);
+        int n = 0;
+        if (fh != INVALID_HANDLE_VALUE) {
+            do {
+                ck::Replay rr;
+                std::string e2;
+                const std::string full = std::string(dir) + "\\" + fd.cFileName;
+                const bool ok = ck::readReplay(std::wstring(full.begin(), full.end()), rr, e2);
+                printf("  %s: %s uid %s, %d ms, %d checkpoints, driver %s\n", fd.cFileName, ok ? "ok" : e2.c_str(), rr.mapUid.c_str(), rr.raceTime,
+                       static_cast<int>(rr.checkpoints.size()), rr.driver.c_str());
+                check(ok, (std::string("real replay ") + fd.cFileName).c_str());
+                n++;
+            } while (FindNextFileA(fh, &fd));
+            FindClose(fh);
+        }
+        check(n > 0, "WRH_REPLAYS has replays");
+    }
     std::vector<unsigned char> junk = {'G', 'B', 'X', 6, 0, 'B', 'U', 'U', 'R', 1, 2, 3, 4};
     check(!ck::parseReplay(junk, true, r, err), "not a replay refused");
     // LZO: a literal-only stream
