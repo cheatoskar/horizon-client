@@ -185,3 +185,54 @@ The launcher already has an experimental per-game DXVK switch (`tm-hub-mono` `ap
    until measured.
 5. TMNF/TMUF: put the files next to the exe TMLoader starts, and show "Competition Patch: unknown" next to the
    switch.
+
+## 4. Measurement plan (for my tests)
+
+Nothing above is worth keeping without numbers. One scene per game, same camera, 60 s windows, every switch
+against the same baseline in the same game start.
+
+**Scene:** a replay of one lap, watched with the same camera (replays give the same route every time; in map mode
+the car only stands at the start). One map per game:
+
+| Game | Map | Replay |
+|---|---|---|
+| TMNF | A01-Race | my own driving, at least 120 s (the series needs twice the window length) |
+| TMUF | StarStadiumB3 | same |
+| ESWC | A01 | same |
+| Sunrise | first Island map | same |
+| Original | first Desert map | same |
+
+**Smoothing switches:** the module's benchmark series (one game start, no clicking):
+`tools/bench_series.ps1 -GamePath <game> -Smooth -Seconds 60` (ESWC, Sunrise, Original) or
+`tools/bench_series.ps1 -Forever -Smooth -Seconds 60` (TMNF/TMUF), then open the replay; press Ctrl+Shift+B if it
+does not start by itself. Sets: `baseline`, `pin-thread`, `timer-1ms`, `mmcss`, `all-three`, 1 warm-up + 3 runs,
+interleaved order (about 21 min). Result: `python tools/bench_report.py <stamp>_series.json`.
+
+**DXVK** cannot switch at run time: two kinds of start, same replay, each a manual 60 s benchmark (Ctrl+Shift+B,
+label `native` / `dxvk`), three starts each, alternating (native, dxvk, native, ...). Optional: PresentMon (not
+installed here; official console build from GameTechDev/PresentMon) for the present-to-display view the module
+cannot see: `PresentMon --process_name <exe> --timed 60 --output_file <label>.csv`.
+
+**First-lap hitches** (decides whether the shader cache plan is worth building): baseline, fresh game start, play
+the replay and "Save last 60 s" after the first 60 s and again after the second pass of the same 60 s. Spikes only
+in the first file = first-use compiles/uploads.
+
+**Before each series:** game window in front, same resolution and game settings, nothing else running (a browser
+asks for a 1 ms timer itself and hides the timer effect), laptop on mains power. Note CPU (hybrid or not), GPU,
+driver.
+
+**Table** (one per game; FPS, lows and stutters from `bench_report.py` with the difference to baseline in brackets;
+"Present ms" and "game ms" are `presentMsAvg` and `cpuMsAvg` of the run files, mean of the runs):
+
+| Set | avg FPS | median ms | 1 % low | 0.1 % low | stutters/min | Present ms | game ms | note |
+|---|---|---|---|---|---|---|---|---|
+| baseline | | | | | | | | |
+| pin-thread | | | | | | | | hybrid CPU? |
+| timer-1ms | | | | | | | | timer before: |
+| mmcss | | | | | | | | |
+| all-three | | | | | | | | |
+| native (manual) | | | | | | | | |
+| dxvk (manual) | | | | | | | | DXVK version |
+
+A switch counts as a win only if its difference is larger than the baseline's own spread (the report's hint
+column) in 1 % low or stutters/min, on two different days.
