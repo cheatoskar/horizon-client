@@ -99,7 +99,7 @@ From the exes of my test copies of the games (imports, call sites with capstone,
 | `MwSystemTimerInit` calls `timeBeginPeriod(<minimum>)` (1 ms) at start on TMNF and Sunrise. **ESWC (`983bd127`) and Original (Online Patch v2) do not**: the call is patched out in both community builds (2026-11-13, `docs/performance-smooth.md`). | TMNF/TMUF/Sunrise: the usual "timer resolution fix" is already done by the game. ESWC/Original: the switch "Timer 1 ms" restores it. |
 | `CSystemEngine::CaptureInfoOsCpu` sets REALTIME priority, thread priority 15 and affinity 1 **only around its CPU speed measurement at start**, then restores the old values. | The game does not pin itself to one core and keeps normal priority while playing. |
 | Adaptive view distance: `CHmsViewport.TargetFps*` / `CSystemConfigDisplay.ZClip`, `ZClipAuto` (the engine cuts the view distance when FPS drop); `Shadows`, `LightMapQuality`, `TexturesQuality`, `VertexProcess`, `MultiThreadEnable` (TMNF) are game settings. | These are better set in the game's own config (the launcher shows them) than overwritten at run time. The page shows the engine's own FPS and the adaptive view distance read-only. |
-| No exe is large address aware (2 GB). | The page shows used address space; I do not patch the exe. |
+| No exe is large address aware (2 GB): ESWC, Sunrise and Original have `Characteristics` 0x030f, TMNF/TMUF 0x0102 (2026-11-13). | The page shows "Large address aware: yes/no" and the used address space; I do not patch the exe. How the launcher could set the flag for the 2006 exes: `docs/performance-smooth.md`. |
 
 ## Options
 
@@ -123,7 +123,7 @@ All off by default. Each one is a switch with a one-line explanation on the page
 
 Not built, and why:
 - **Shader cache on TMNF/TMUF, texture preload, shader warm-up at map load:** a hook in the exe's D3DX import is not allowed on Forever with the Competition Patch; preloading and warm-up need engine calls with a valid render state (`docs/performance-smooth.md`).
-- **Large Address Aware patch:** changes the exe; I only show the address space.
+- **Large Address Aware patch:** changes the exe (and its hash, which Horizon pins); the page only shows the flag and the address space. A launcher plan for ESWC/Sunrise/Original is in `docs/performance-smooth.md`.
 - **Writing engine values (view distance, shadows) at run time:** the game's own settings do it; the launcher shows them. Forever never gets game-memory writes.
 - **Render-ahead limiter:** the engine has its own (`GpuSync`).
 

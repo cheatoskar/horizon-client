@@ -173,6 +173,53 @@ engine's bind path with a valid render state; a wrong state can crash the device
 has nothing left to warm up, so the risk buys only the first run of a new map. TMNF/TMUF: nothing of this while the
 Competition Patch rules apply (no hooks in the exe or its imports).
 
+### Large address aware (status line, launcher plan)
+
+The games are 32-bit. With the flag `IMAGE_FILE_LARGE_ADDRESS_AWARE` (0x0020 in the PE file header) a 32-bit
+process gets 4 GB of address space on 64-bit Windows instead of 2 GB, which avoids out-of-memory crashes with big
+texture packs or TMVS. The module page shows **"Large address aware: yes/no"** under "Engine and memory" for the
+running exe (read from its PE header in memory), with a one-line tooltip; the address space line next to it shows
+how close the game is to the limit (total 2048 MB without the flag, 4096 MB with it). **The plugin never patches the
+exe** (it is running, and its hash is what Horizon pins).
+
+The exes (PE headers read 2026-11-13):
+
+| Exe | SHA-256 (start) | `Characteristics` | LAA | PE checksum |
+|---|---|---|---|---|
+| Nations ESWC | `983bd127` | 0x030f | **no** | 0 (not set) |
+| Sunrise | `e59dfc7e` | 0x030f | **no** | 0 (not set) |
+| Original | `75e129d7` | 0x030f | **no** | 0 (not set) |
+| TMNF / TMUF | `3847cf9f` / `4b6a7b31` | 0x0102 | no | set (0x009f4a9e / 0x009f5c5c) |
+
+0x030f includes `RELOCS_STRIPPED`: the 2006 exes always load at 0x00400000, with or without the flag.
+
+**How the launcher could offer "Enable large address aware"** (ESWC, Sunrise, Original only; per game, off by
+default):
+
+1. Only for an exe whose SHA-256 is one of the three above, and only while the game is not running (no process with
+   that exe, the file opens for exclusive writing).
+2. Backup: copy the exe to `<exe>.horizon-backup` (only if none exists yet) and write a journal entry with both
+   hashes, like the launcher's DXVK journal.
+3. Patch one bit: `Characteristics |= 0x0020` (in all three exes file offset 0x56, byte 0x0f becomes 0x2f; take the
+   offset from `e_lfanew` + 0x16, not from this table). The PE checksum of these exes is 0, which the Windows loader
+   does not check for an exe (it checks drivers and a few system DLLs only), so it stays 0. If an exe ever has a
+   non-zero checksum, recompute it with `CheckSumMappedFile` (imagehlp) and write it at optional header + 0x40.
+4. Verify: read the file back; its SHA-256 must be the patched hash, computed from the known exes:
+   ESWC `f73bb0444bca8f72517a4be5a9e0fcf235266c3306ad05e58f223c93e60068b4`, Sunrise
+   `9318380da7120c9eea55bb05ddae3c7125b1e554edade75c903f304d791484f5`, Original
+   `cf494e57bf5c3db43075e0edb4322c12c86e78a0a5c1e2d5cb1213d5ec3ac068`. Otherwise restore the backup.
+5. Undo: put the backup back (its hash must be the original one) and drop the journal entry. Clearing the bit again
+   gives the identical original file too (only that byte changed).
+
+Needed before this ships: Horizon's host pins exes by SHA-256 (`src/host/exe_known.h`), so a patched exe would be an
+"unknown exe" and Horizon would stay off. The three patched hashes go into that table (same PE timestamp, size and
+code). gamectl and the shader cache pick their addresses by PE timestamp and need nothing. Not checked yet: that the
+community builds do not verify their own file (no such check seen, not searched for in depth), and a real session
+with the flag set.
+
+**TMNF/TMUF are excluded**: TMLoader starts its own `TmForever.exe` copies and the Competition Patch expects known
+exes; Horizon does not change those files.
+
 ## 3. DXVK (feasibility, doc only)
 
 DXVK's 32-bit `d3d9.dll` (from the official release archive, `x32\d3d9.dll`) translates Direct3D 9 to Vulkan. The

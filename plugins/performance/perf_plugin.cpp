@@ -1396,8 +1396,10 @@ void drawMenu() {
         dimWrapped("Engine: no data");
     }
     const perf::sys::Memory m = perf::sys::memory();
-    dimWrapped("Memory %.0f MB   Address space %.0f / %.0f MB   %s", m.privateMB, m.addressSpaceUsedMB, m.addressSpaceTotalMB,
-               m.largeAddressAware ? "LAA" : "no LAA (2 GB)");
+    dimWrapped("Memory %.0f MB   Address space %.0f / %.0f MB", m.privateMB, m.addressSpaceUsedMB, m.addressSpaceTotalMB);
+    ImGui::TextDisabled("Large address aware: %s", m.largeAddressAware ? "yes" : "no");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", m.largeAddressAware ? "The game can use up to 4 GB of memory." : "The game can use only 2 GB of memory.");
     char folder[300];
     WideCharToMultiByte(CP_UTF8, 0, g_data.c_str(), -1, folder, sizeof(folder), nullptr, nullptr);
     dimWrapped("Files: %s", folder);
