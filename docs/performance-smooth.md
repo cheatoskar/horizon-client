@@ -130,3 +130,58 @@ a hook in the compile path:
 
 First step instead: measure. The hang log and the frame-time CSV show first-lap spikes; the plan in section 4
 compares lap 1 with lap 2 of the same route. If lap 2 is clean and lap 1 is not, (1) is worth building.
+
+## 3. DXVK (feasibility, doc only)
+
+DXVK's 32-bit `d3d9.dll` (from the official release archive, `x32\d3d9.dll`) translates Direct3D 9 to Vulkan. The
+games import `d3d9.dll` by name and it is not a KnownDLL, so a `d3d9.dll` next to the exe is loaded instead of the
+system one. Horizon's host hooks the factory of whatever `d3d9.dll` the game uses (`src/host/d3dhook.cpp`), so
+Horizon and this module work on top of DXVK (offline test with DXVK 3.1.1, `docs/performance.md`, "DXVK"). Latest
+release when I checked: v3.1.1 (2026-09-15). DXVK 2.x and newer need Vulkan 1.3; older GPUs would need DXVK 1.10.3.
+
+### Load order per game
+
+| Game | Today's chain | With DXVK, no TMVS | With DXVK and TMVS standalone (`d3d9.dll`) | With TMVS via TMLoader |
+|---|---|---|---|---|
+| ESWC | exe -> system `d3d9.dll` (my test folder has no wrapper) | DXVK as `d3d9.dll` in the game folder | TMVS as `d3d9.dll`, DXVK renamed to **`d3d9.chain.dll`**: TMVS loads `d3d9.chain.dll` from its own folder when it exports `Direct3DCreate9` and is not a TMVS copy (TMVS `src/proxy.cpp` `loadChain`, branch `feat/legacy-games`) | — |
+| Sunrise (repack) | exe -> the repack's own `d3d9.dll` proxy | DXVK **replaces** the repack's proxy (kept as a backup; whatever it fixes is lost) | TMVS `d3d9.dll` -> `d3d9.chain.dll`: today the repack's proxy sits there; DXVK would take its place | — |
+| Original (Online Patch v2) | exe -> dgVoodoo 2.8.2 `d3d9.dll` (+ `DDraw.dll`, `dgVoodoo.conf`) | DXVK replaces dgVoodoo's `d3d9.dll`; `DDraw.dll` stays dgVoodoo | as Sunrise: DXVK as `d3d9.chain.dll` instead of dgVoodoo | — |
+| TMNF / TMUF | exe -> system `d3d9.dll` | DXVK as `d3d9.dll` next to the `TmForever.exe` that actually starts (with TMLoader its own copy, not the game install) | TMVS standalone `d3d9.dll` + DXVK `d3d9.chain.dll` | TMVS hooks whatever `d3d9.dll` the game loads: DXVK as `d3d9.dll`, TMVS as a TMLoader mod |
+
+Horizon is the same in every row: the host's factory hook sits in front of the first `d3d9.dll` (game -> Horizon
+hooks -> TMVS -> DXVK). Keep `d3dx9_30.dll` (TMNF/TMUF): it is a separate helper DLL the game needs for its shader
+compiler.
+
+### Known issues (DXVK tracker, read 2026-11-13; no TrackMania entry in DXVK's built-in app profiles)
+
+| Issue | Game | What it says |
+|---|---|---|
+| doitsujin/dxvk#5500 (closed 2026-04) | Nations ESWC | Broken menu UI and a crash at the start of the race with DXVK. The maintainer replayed the trace on the native NVIDIA D3D9 driver and saw the same picture, so the `d3d9.dll` bundled with that ESWC build contains a workaround DXVK does not have. Expect the same where a community build ships a wrapper (Sunrise repack, Original's dgVoodoo). |
+| doitsujin/dxvk#5985 (closed 2026-10) | TMNF | Black menu/tracks with Shader Quality PC3High: caused by deleting `d3dx9_30.dll` (Wine's fallback compiler), not by DXVK. |
+| doitsujin/dxvk#1910 (closed 2021) | TMNF | Very low FPS under Wine: the game creates a **mixed vertex processing** device and DXVK emulates software vertex processing; the `d3d9.swvp*Count` workaround then broke ghost colours. This module's call counter shows "software VP draws" per frame. |
+| doitsujin/dxvk#3283 (closed 2023) | TMUF | Performance regression, fixed. #1278, #1375, #1376, #1377, #1640, #1642 (2019-2020, TMUF/TMNF crashes and rendering bugs) are closed. |
+
+Assessment: on Windows with a good NVIDIA/AMD D3D9 driver expect little or nothing; possible gains on Intel Arc
+(D3D9 runs through D3D9On12) and for frame pacing, against first-time pipeline-compile stutter. For Sunrise and
+Original the fair comparison is DXVK vs. dgVoodoo/the repack proxy, and dgVoodoo's own settings (output API,
+frame latency in `dgVoodoo.conf`) are a cheaper first knob than swapping it out. Competition Patch acceptance of
+DXVK on TMNF/TMUF is unknown (CP 2.0 checks runs server-side; nothing public about renderers): test offline first.
+
+### What the launcher needs
+
+The launcher already has an experimental per-game DXVK switch (`tm-hub-mono` `apps/launcher/docs/optimize.md`,
+"DXVK (Vulkan)": DXVK 3.1.1 pinned, archive SHA-256 checked, only `x32/d3d9.dll` extracted, `dxvk.conf` with
+`d3d9.maxFrameLatency = 1`, a journal, exact removal). What changes with this analysis:
+
+1. **Chaining instead of refusing.** It refuses when a `d3d9.dll` is already there because "TMVS loads the system
+   d3d9 by full path". TMVS now loads `d3d9.chain.dll` first, so: TMVS standalone present -> write DXVK as
+   `d3d9.chain.dll` (if that name is free). Sunrise/Original: the slot is taken by the repack proxy/dgVoodoo ->
+   offer "replace" with the old file kept under another name in the journal, never deleted.
+2. **Per game, default off**, labelled experimental; ESWC with a warning (issue #5500).
+3. **Download only from the official GitHub release** (`https://github.com/doitsujin/dxvk/releases/download/v<ver>/dxvk-<ver>.tar.gz`),
+   version and archive SHA-256 pinned in the launcher, no mirrors or file hosters; nothing written when the hash
+   differs.
+4. `dxvk.conf` next to the exe: `d3d9.maxFrameLatency = 1` keeps the engine's own GPU sync meaningful; nothing else
+   until measured.
+5. TMNF/TMUF: put the files next to the exe TMLoader starts, and show "Competition Patch: unknown" next to the
+   switch.
