@@ -283,7 +283,8 @@ static LRESULT CALLBACK gameWndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
 // the host's real window procedure; the DirectInput side by the host's "input held back" bit (the filtering itself
 // is in the unit tests, input_gate.h).
 static bool g_keys = false;
-static void testKeys(HMODULE host, HWND hwnd, const std::function<void(int)>& frames) {
+static std::wstring g_cpPath; // cp=<path>: then Competition Patch appears late (end of testKeys)
+static void testKeys(HMODULE host, HWND hwnd, const std::wstring& dir, const std::function<void(int)>& frames) {
     using FaultFn = int(__cdecl*)(int);
     auto overlay = reinterpret_cast<FaultFn>(GetProcAddress(host, "HorizonHost_TestOverlayFault"));
     check(overlay != nullptr, "keys: test export HorizonHost_TestOverlayFault");
@@ -339,6 +340,49 @@ static void testKeys(HMODULE host, HWND hwnd, const std::function<void(int)>& fr
     check(g_gameDown[VK_UP] == 0 && g_gameUp[VK_UP] == 1, "keys: release after the menu closed is forwarded");
     overlay(2); // as the other runs: the menu open for what follows
     frames(3);
+    if (g_cpPath.empty()) return;
+
+    // cp=<path>: Competition Patch (a stand-in DLL named TMCompPatch.dll) appears after the host hooked DirectInput.
+    // Within a second the host must hand everything back: DirectInput slots point into dinput8.dll again, nothing
+    // is held back, and every key message reaches the game although the menu is open.
+    wchar_t sys[MAX_PATH];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    wcscat_s(sys, L"\\dinput8.dll");
+    HMODULE dinput = LoadLibraryW(sys);
+    using Create8Fn = HRESULT(WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
+    auto create8 = dinput ? reinterpret_cast<Create8Fn>(GetProcAddress(dinput, "DirectInput8Create")) : nullptr;
+    IDirectInput8W* di = nullptr;
+    IDirectInputDevice8W* kb = nullptr;
+    if (create8 && SUCCEEDED(create8(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8W, reinterpret_cast<void**>(&di), nullptr)) && di)
+        di->CreateDevice(GUID_SysKeyboard, &kb, nullptr);
+    check(kb != nullptr, "cp late: a DirectInput keyboard device to look at its method table");
+    if (!kb) return;
+    auto slotModule = [&](int slot) {
+        void** table = *reinterpret_cast<void***>(kb);
+        HMODULE m = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(table[slot]), &m);
+        return m;
+    };
+    check(slotModule(9) == host && slotModule(10) == host, "cp late: before, GetDeviceState/GetDeviceData go through host.dll");
+    check((overlay(0) & 4) == 4, "cp late: before, the menu holds the game input back");
+    HMODULE cp = LoadLibraryW(g_cpPath.c_str());
+    check(cp != nullptr, "cp late: stand-in TMCompPatch.dll loaded after the host");
+    Sleep(1100); // the host looks at most once a second
+    frames(2);
+    check(slotModule(9) == dinput && slotModule(10) == dinput, "cp late: DirectInput slots restored to dinput8.dll");
+    check((overlay(0) & 5) == 1, "cp late: menu still open, nothing held back");
+    const std::string l = hostLog(dir);
+    check(countOf(l, "input: Competition Patch is loaded: Horizon leaves the game's input alone, DirectInput slots restored") == 1,
+          "cp late: logged once");
+    reset();
+    press(VK_RETURN, L'\r');
+    release(VK_RETURN);
+    press(VK_BACK, L'\b');
+    release(VK_BACK);
+    check(g_gameDown[VK_RETURN] == 1 && g_gameChar['\r'] == 1 && g_gameUp[VK_RETURN] == 1 && g_gameDown[VK_BACK] == 1 && g_gameUp[VK_BACK] == 1,
+          "cp late: menu open, every key message reaches the game untouched");
+    kb->Release();
+    di->Release();
 }
 
 static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool expectAbi12, const std::wstring& shot) {
@@ -437,7 +481,7 @@ static int testHost(const std::wstring& dir, bool safe, int expectPlugin, bool e
         }
     }
     if (g_widgets) testWidgets(host, dev, pp, hwnd, dir);
-    if (g_keys) testKeys(host, hwnd, frames);
+    if (g_keys) testKeys(host, hwnd, dir, frames);
     // Reset as the game does on a resolution change: the overlay must survive it
     const HRESULT rr = dev->Reset(&pp);
     check(SUCCEEDED(rr), "Reset through the hook");
@@ -561,6 +605,7 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"runtime-load") g_runtimeLoad = true;
         else if (a == L"crash") g_crash = true;
         else if (a == L"keys") g_keys = true;
+        else if (a.rfind(L"cp=", 0) == 0) g_cpPath = a.substr(3);
         else if (a == L"widgets") g_widgets = true;
         else if (a == L"widgets-anchored") g_widgets = g_anchored = true;
         else if (a == L"layout") SetEnvironmentVariableW(L"HORIZON_TEST_LAYOUT", L"1"); // screens of layout mode

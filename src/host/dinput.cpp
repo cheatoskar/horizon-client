@@ -93,8 +93,42 @@ bool physDown(int kind, DWORD ofs) {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
+// Competition Patch loaded, also later than the host (owner's rule): from then on nothing here touches the game's
+// input. The first caller that sees it puts the original GetDeviceState/GetDeviceData back into every table whose
+// slot still holds our detour (an aligned pointer write; a call already inside a detour finishes as a plain call,
+// host.dll is never unloaded). A slot another hook has taken over since stays ours underneath it, and the detour
+// is a pure pass-through from then on.
+CpWatch g_cp;
+bool cpProbe() { return GetModuleHandleW(L"TMCompPatch.dll") != nullptr; } // the name hostcfg.cpp looks for
+HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, LPVOID data);
+HRESULT STDMETHODCALLTYPE getDataDetour(IDirectInputDevice8W* dev, DWORD objSize, LPDIDEVICEOBJECTDATA data, LPDWORD inOut, DWORD flags);
+
+void handOver() {
+    InterlockedExchange(&g_blockedKeys, 0);
+    InterlockedExchange(&g_blockedMouse, 0);
+    InterlockedExchange(&g_holdDik, -1);
+    int restored = 0, kept = 0;
+    for (LONG i = 0; i < g_tableCount; i++) {
+        Table& t = g_tables[i];
+        if (t.table[kGetState] == reinterpret_cast<void*>(&getStateDetour) && writePointer(&t.table[kGetState], reinterpret_cast<void*>(t.state))) restored++;
+        else kept++;
+        if (t.table[kGetData] == reinterpret_cast<void*>(&getDataDetour) && writePointer(&t.table[kGetData], reinterpret_cast<void*>(t.data))) restored++;
+        else kept++;
+    }
+    if (g_tableCount == 0) HLOG("input: Competition Patch is loaded: Horizon does nothing with the game's keyboard");
+    else if (kept == 0) HLOG("input: Competition Patch is loaded: Horizon leaves the game's input alone, DirectInput slots restored (%d)", restored);
+    else HLOG("input: Competition Patch is loaded: Horizon leaves the game's input alone, %d DirectInput slot(s) restored, %d under another hook stay a plain pass-through", restored, kept);
+}
+
+bool handsOff() {
+    if (!g_cp.present(GetTickCount(), &cpProbe)) return false;
+    if (g_cp.takeFirst()) handOver();
+    return true;
+}
+
 HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, LPVOID data) {
     Table* t = tableOf(dev);
+    if (handsOff()) return t->state(dev, size, data);
     const HRESULT hr = t->state(dev, size, data);
     if (FAILED(hr) || !data) return hr;
     const int kind = kindOf(dev, t);
@@ -107,6 +141,7 @@ HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, 
 
 HRESULT STDMETHODCALLTYPE getDataDetour(IDirectInputDevice8W* dev, DWORD objSize, LPDIDEVICEOBJECTDATA data, LPDWORD inOut, DWORD flags) {
     Table* t = tableOf(dev);
+    if (handsOff()) return t->data(dev, objSize, data, inOut, flags);
     const DWORD capacity = inOut ? *inOut : 0;
     const HRESULT hr = t->data(dev, objSize, data, inOut, flags);
     if (FAILED(hr) || !inOut) return hr;
@@ -173,7 +208,7 @@ DWORD WINAPI releaseWatch(LPVOID) {
 } // namespace
 
 void dinputInstall(bool keyboardOnly) {
-    if (g_installed) return;
+    if (g_installed || inputHandsOff()) return;
     g_installed = true;
     g_keyboardOnly = keyboardOnly;
     wchar_t path[MAX_PATH];
@@ -205,8 +240,14 @@ void dinputInstall(bool keyboardOnly) {
     if (th) CloseHandle(th);
 }
 
+bool inputHandsOff() {
+    if (state().competitionPatch) g_cp.markPresent(); // found by the module scan at device creation
+    return handsOff();
+}
+
 void dinputSetBlocked(bool keyboard, bool mouse) {
     if (g_keyboardOnly) mouse = false;
+    if (g_cp.seen()) keyboard = mouse = false;
     const LONG k = keyboard ? 1 : 0, m = mouse ? 1 : 0;
     const LONG oldK = InterlockedExchange(&g_blockedKeys, k);
     const LONG oldM = InterlockedExchange(&g_blockedMouse, m);
@@ -220,6 +261,7 @@ void dinputSetBlocked(bool keyboard, bool mouse) {
 bool dinputBlocked() { return g_blockedKeys != 0 || g_blockedMouse != 0; }
 
 void dinputHoldUntilReleased(int vk) {
+    if (g_cp.seen()) return;
     const UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
     if (!sc) return;
     const LONG dik = static_cast<LONG>((sc & 0xff) | ((sc & 0xff00) ? 0x80 : 0));

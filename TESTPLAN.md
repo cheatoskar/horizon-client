@@ -84,7 +84,7 @@ Im Log (`...\products\Horizon Host\logs\`, neueste Datei) prüfen:
 4. Zielbildschirm: Spielzustand `End of race` im Bar/About, danach wieder `Solo race`. Menü: `Main menu`. Editor und Replay-Ansicht: Zustand `Editor` bzw. `Replay`, keine Start-/Ziel-Ereignisse. Ab 0.3.2 zeigt eine normale Solo-Strecke `Solo race` (nicht mehr `Editor`, obwohl im Log `= puzzle editor` steht), die Testfahrt im Karteneditor weiter `Editor`.
 5. Online-Rennen: Zustand `Online race` (0.3.1 zeigte dort `Editor`), Solo-Plugins pausieren. Nichts wird geschrieben.
 5a. Tippen im Menü (0.3.2): im Rennen Menü öffnen, in ein Textfeld tippen, Enter und Rücktaste drücken: das Auto darf nicht respawnen. Mit gedrückter Lenktaste das Menü öffnen und loslassen: nach dem Schließen lenkt nichts weiter. Log: `input: the game's DirectInput keyboard is held back while Horizon has it`.
-6. Mit Competition Patch geladen: gleiches Verhalten erwartet, Log kontrollieren (keine Hooks, `input: DirectInput not touched on this game`).
+6. Mit Competition Patch geladen: gleiches Verhalten erwartet, Log kontrollieren (keine Hooks, `input: DirectInput not touched on this game`, danach `input: Competition Patch is loaded: Horizon does nothing with the game's keyboard`). Im offenen Menü erreichen dann alle Tasten das Spiel, Tippen in Horizon-Felder geht trotzdem.
 7. Randomizer: `play_map_file` startet eine Datei aus dem Hauptmenü (zum ersten Mal auf Forever getestet), `return_to_menu` beendet das Solo-Rennen.
 
 ## Horizon Performance (Branch `perf`, Plugin `performance`)

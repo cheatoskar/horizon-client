@@ -177,13 +177,24 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             InterlockedExchangeAdd(&g_wheelSteps, GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1);
             return 0;
         }
-        keysCaptured = keyboardCaptured();
-        // the game never turns keys into characters: make the WM_CHAR for a focused text field
-        if (keysCaptured && msg == WM_KEYDOWN && ImGui::GetIO().WantTextInput) {
-            MSG queued;
-            if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
-                MSG key{h, msg, w, l, 0, {}};
-                TranslateMessage(&key);
+        // Competition Patch loaded (also later): the game gets every key message as without Horizon
+        const bool handsOff = isKeyMsg(msg) && inputHandsOff();
+        const bool typing = keyboardCaptured();
+        keysCaptured = typing && !handsOff;
+        if (typing && msg == WM_KEYDOWN && ImGui::GetIO().WantTextInput) {
+            if (handsOff) {
+                // no WM_CHAR made for the game: the field gets its characters directly
+                BYTE keys[256];
+                wchar_t chars[8];
+                const int n = GetKeyboardState(keys) ? ToUnicode(static_cast<UINT>(w), static_cast<UINT>((l >> 16) & 0xff), keys, chars, 8, 0) : 0;
+                for (int i = 0; i < n; i++) ImGui::GetIO().AddInputCharacterUTF16(chars[i]);
+            } else {
+                // the game never turns keys into characters: make the WM_CHAR for a focused text field
+                MSG queued;
+                if (!PeekMessageW(&queued, h, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
+                    MSG key{h, msg, w, l, 0, {}};
+                    TranslateMessage(&key);
+                }
             }
         }
         ImGui_ImplWin32_WndProcHandler(h, msg, w, l);
@@ -760,6 +771,9 @@ void overlayFrame(void* device) {
     bridgeDeliver();
     const bool pluginCaptureNow = (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0;
     toastsStep(captureActive() || pluginCaptureNow);
+    // Competition Patch loaded after the start (checked at most once a second): from now on the host treats it as
+    // loaded (no input touched, solo-only plugins pause while a run goes)
+    if (inputHandsOff() && !state().competitionPatch) state().competitionPatch = true;
     if (!g_backends || g_lost || !g_ctx) return;
     if (g_uiOff) {
         // the UI is off after repeated errors; game work and plugin events above keep running

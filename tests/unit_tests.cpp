@@ -938,6 +938,28 @@ static void testInputGate() {
     }
 }
 
+// Competition Patch loaded after the host started: found within a second, then for good (dinput.cpp handsOff).
+static bool g_cpLoaded = false;
+static int g_cpProbes = 0;
+static bool fakeCpProbe() {
+    g_cpProbes++;
+    return g_cpLoaded;
+}
+static void testCpWatch() {
+    CpWatch w;
+    const DWORD t0 = 0xFFFFFE00u; // across the GetTickCount wrap
+    CHECK(!w.present(t0, &fakeCpProbe) && g_cpProbes == 1 && !w.seen() && !w.takeFirst());
+    g_cpLoaded = true; // CP appears after install
+    CHECK(!w.present(t0 + 500, &fakeCpProbe) && g_cpProbes == 1); // not asked again within the second
+    CHECK(w.present(t0 + 1000, &fakeCpProbe) && g_cpProbes == 2 && w.seen());
+    CHECK(w.takeFirst() && !w.takeFirst()); // logged and unhooked once
+    g_cpLoaded = false;
+    CHECK(w.present(t0 + 5000, &fakeCpProbe) && g_cpProbes == 2); // for good, no more lookups
+    CpWatch m;
+    m.markPresent(); // found by the module scan at device creation
+    CHECK(m.present(0, nullptr) && m.takeFirst());
+}
+
 // The window's key messages while Horizon has the keyboard (overlay.cpp wndProc).
 static void testKeyMsgGate() {
     KeyMsgGate g;
@@ -1056,6 +1078,7 @@ int main() {
     testPickNewChallenge();
     testInputGate();
     testKeyMsgGate();
+    testCpWatch();
     printf("unit tests: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed ? 1 : 0;
 }

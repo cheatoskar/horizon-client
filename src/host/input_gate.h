@@ -139,6 +139,35 @@ private:
     bool resync_[2] = {};
 };
 
+// Competition Patch watch (owner's rule, 0.3.2): once its module is in the process, Horizon does nothing with the
+// game's keyboard any more, also when it was loaded after the host started. present() asks probe (a module lookup,
+// cheap but not free) at most once per kIntervalMs and stays true for good once it said yes. takeFirst() is true for
+// exactly one caller, the one that logs and unhooks. Any thread.
+class CpWatch {
+public:
+    using ProbeFn = bool (*)();
+    static constexpr DWORD kIntervalMs = 1000;
+
+    bool present(DWORD now, ProbeFn probe) {
+        if (seen_) return true;
+        if (checked_ && static_cast<LONG>(now - next_) < 0) return false;
+        checked_ = true;
+        next_ = now + kIntervalMs;
+        if (!probe || !probe()) return false;
+        InterlockedExchange(&seen_, 1);
+        return true;
+    }
+    void markPresent() { InterlockedExchange(&seen_, 1); } // found another way (the module scan at device creation)
+    bool seen() const { return seen_ != 0; }
+    bool takeFirst() { return seen_ && InterlockedExchange(&announced_, 1) == 0; }
+
+private:
+    volatile LONG seen_ = 0;
+    volatile LONG announced_ = 0;
+    volatile DWORD next_ = 0;
+    volatile bool checked_ = false;
+};
+
 // The window's key messages while Horizon has the keyboard (captured): presses (WM_KEYDOWN, WM_SYSKEYDOWN) and
 // characters (WM_CHAR, WM_SYSCHAR, WM_DEADCHAR, WM_SYSDEADCHAR) stay away from the game; a key-up passes when the
 // game saw that key go down (else it would stay down in the game), and every key-up passes while not captured.

@@ -223,6 +223,10 @@ void releaseTexture(uint64_t id);
 
 // ------------------------------------------------------------------ input (dinput.cpp)
 void dinputInstall(bool keyboardOnly); // once; keyboardOnly: the mouse device is never touched
+// Competition Patch is loaded (seen at device creation, or TMCompPatch.dll found later, checked at most once a
+// second): true for good, Horizon then does nothing with the game's keyboard (DirectInput slots put back, no
+// window key message held back or made). The first true call logs it and unhooks. Any thread, cheap.
+bool inputHandsOff();
 // While set, the game's DirectInput keyboard / mouse reads return nothing (releases of held keys still pass).
 void dinputSetBlocked(bool keyboard, bool mouse);
 bool dinputBlocked();
