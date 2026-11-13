@@ -188,13 +188,20 @@ void tick(const std::function<void()>& fn) {
     chost::endFrame();
 }
 
-// A HUD panel the way the host draws it with the menu closed.
-void hudWindow(const char* id, ImVec2 pos, const std::function<void()>& body) {
+// A HUD panel the way the host draws it with the menu closed. bare: HORIZON_PANEL_NO_BACKGROUND (no window
+// background or border, 6 px padding); framed: the same widget with the menu open (frame shown, same padding).
+void hudWindow(const char* id, ImVec2 pos, const std::function<void()>& body, int bare = 0) {
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w * 0.9f);
-    ImGui::Begin(id, nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGuiWindowFlags f = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing;
+    if (bare) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 6.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, bare == 1 ? 0.0f : ImGui::GetStyle().WindowBorderSize);
+        if (bare == 1) f |= ImGuiWindowFlags_NoBackground;
+    }
+    ImGui::Begin(id, nullptr, f);
+    if (bare) ImGui::PopStyleVar(2);
     body();
     ImGui::End();
 }
@@ -515,20 +522,28 @@ void inputDisplay(const std::string& dir) {
     }
     chost::gameState = HORIZON_STATE_SOLO_RACE;
     chost::setRun(1, 12000, {});
-    const char* names[4] = {"Bars", "Keys", "Wheel", "Minimal"};
-    const ImVec2 at[4] = {ImVec2(60, 520), ImVec2(470, 560), ImVec2(820, 520), ImVec2(1220, 640)};
+    // top row: each style bare as in a race (HORIZON_PANEL_NO_BACKGROUND, menu closed); bottom row: with the frame
+    // the host shows while the menu is open (to move it)
+    const char* names[5] = {"Bars", "Arrows", "Wheel", "Minimal", "Controller"};
+    const ImVec2 at[5] = {ImVec2(60, 120), ImVec2(400, 120), ImVec2(640, 120), ImVec2(900, 120), ImVec2(1300, 120)};
     shot("input-display", 200, [&](int f) {
         const float t = f / 30.0f;
         const float steer = std::sin(t * 1.7f) * (f > 150 ? 0.62f : 1.0f);
         const bool braking = f > 185;
         chost::setCar(steer, braking ? 0.0f : 1.0f, braking ? 1.0f : 0.0f, 180 + static_cast<int>(40 * std::sin(t * 0.6f)), 5, 7900.0f + 600.0f * std::sin(t));
         p.overlay();
-        for (int s = 0; s < 4; s++) {
-            char c[16];
-            snprintf(c, sizeof(c), "style %d", s);
-            p.cmd(c);
-            hudWindow(names[s], at[s], [] { drawPanel("inputs"); });
-            ImGui::GetForegroundDrawList()->AddText(ImVec2(at[s].x, at[s].y - 22), IM_COL32(255, 255, 255, 200), names[s]);
+        for (int row = 0; row < 2; row++) {
+            for (int s = 0; s < 5; s++) {
+                char c[16];
+                snprintf(c, sizeof(c), "style %d", s);
+                p.cmd(c);
+                const ImVec2 pos(at[s].x, at[s].y + row * 380.0f);
+                char id[32];
+                snprintf(id, sizeof(id), "%s##%d", names[s], row);
+                hudWindow(id, pos, [] { drawPanel("inputs"); }, row == 0 ? 1 : 2);
+                ImGui::GetForegroundDrawList()->AddText(ImVec2(pos.x, pos.y - 22), IM_COL32(255, 255, 255, 200),
+                                                        row == 0 ? names[s] : "menu open");
+            }
         }
     }, false);
     p.cmd("style 0");
@@ -536,7 +551,13 @@ void inputDisplay(const std::string& dir) {
         PluginView pv = view("input-display", "Input Display", "Steering, gas, brake and speed on screen.");
         pv.hasMenu = true;
         pv.panels = {tab("inputs", "Inputs", true)};
+        pv.panels[0].hud = true; // the widget switch in the page header
+        pv.panels[0].onScreen = true;
         Actions a = actionsFor(p);
+        Model m = baseModel("TrackMania United Forever");
+        m.gameState = "Solo race";
+        m.plugins.push_back(pv);
+        menuShot("input-display-settings", m, a, "plugin:input-display", 8, nullptr);
         popoutShots("input-display", pv, a, "TrackMania United Forever");
     }
     p.shutdown();

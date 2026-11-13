@@ -132,6 +132,7 @@ struct Scene {
     const char* selected;
     bool menu;
     bool layout; // the widgets with layout mode's frames (drawn like src/host/panels.cpp does)
+    int menuPct = 85; // the menu's share of the screen (60: a small menu, buttons and fields must wrap, not clip)
 };
 
 // The script widgets (host panels the scripts plugin registered) where the host puts new widgets: the slot at
@@ -283,7 +284,17 @@ int main(int argc, char** argv) {
     optionsTab.title = "Options";
     optionsTab.icon = HZ_ICON_SLIDERS_HORIZONTAL;
     optionsTab.label = HZ_ICON_SLIDERS_HORIZONTAL_U8 " Options";
-    pv.panels = {scriptsTab, optionsTab};
+    // the script widgets (HUD panels): their switches in the page header
+    PanelView clockW;
+    clockW.key = "w-clock-clock-000000";
+    clockW.title = clockW.label = "Clock";
+    clockW.hud = true;
+    clockW.onScreen = true;
+    PanelView mapW;
+    mapW.key = "w-map-info-map-info-000000";
+    mapW.title = mapW.label = "Map Info";
+    mapW.hud = true;
+    pv.panels = {scriptsTab, optionsTab, clockW, mapW};
     model.plugins.push_back(pv);
     PluginView ne;
     ne.id = "node-explorer";
@@ -306,6 +317,7 @@ int main(int argc, char** argv) {
         {"errors", "split-demo", true, false},
         {"overlays", "clock", false, false},
         {"layout", "map-info", false, true},
+        {"tab-small", "clock", true, false, 60},
     };
     int failed = 0;
     for (const Scene& sc : scenes) {
@@ -351,6 +363,7 @@ int main(int argc, char** argv) {
             testhost::menuOpen = sc.menu || sc.layout;
             overlay();
             drawWidgets(sc.layout);
+            model.menuSizePct = model.menuSizeSetting = sc.menuPct;
             if (sc.menu) drawMenu(model, actions, &menuOpen);
             ImGui::EndFrame();
             ImGui::Render();

@@ -240,6 +240,22 @@ static void testWidgets(HMODULE host, IDirect3DDevice9* dev, D3DPRESENT_PARAMETE
     g_h = bigH;
     resize(g_w, g_h);
     onScreenAtPlace("back to the first size");
+    // suspend_widgets (ABI 1.5): hidden while the request stands, back at its place when it is taken back
+    using SuspendFn = int(__cdecl*)(const char*, const char*, const char*, int);
+    if (auto suspend = reinterpret_cast<SuspendFn>(GetProcAddress(host, "HorizonHost_TestSuspend"))) {
+        check(suspend("sample", "sample", "clo", 1) == 0, "suspend_widgets: request taken");
+        frames(4);
+        check(panel("sample", "clock", r) == 0, "suspend_widgets: Clock hidden (key prefix \"clo\")");
+        suspend("sample", "sample", "x-", 1); // another prefix: nothing else changes
+        suspend("sample", "sample", "clo", 0);
+        frames(4);
+        onScreenAtPlace("suspend_widgets: request taken back");
+        suspend("sample", "sample", "x-", 0);
+        check(has(hostLog(dir), "widgets of sample clo hidden for now") && has(hostLog(dir), "widgets of sample clo shown again"),
+              "suspend_widgets: logged");
+    } else {
+        check(false, "suspend_widgets: test export HorizonHost_TestSuspend");
+    }
     std::string l = hostLog(dir);
     check(!has(l, "crashed"), "widgets: no plugin crashed");
     if (g_anchored) {

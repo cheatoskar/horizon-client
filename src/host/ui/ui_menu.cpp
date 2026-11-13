@@ -31,6 +31,7 @@ struct MenuState {
     bool narrowPage = false;  // narrow menu (small window): the page is shown instead of the list
     bool narrow = false;      // the last frame used the narrow layout
     bool rowClicked = false;  // a sidebar row was clicked in this frame
+    float menuAlpha = 1.0f;   // menu background opacity (General) relative to the default 94 %: sidebar and dim layer
 };
 MenuState g;
 MenuMetrics g_metrics;
@@ -400,7 +401,7 @@ void drawSidebar(const Model& model, const Actions& actions, float width, float 
     const float s = scale();
     const Fonts& f = fonts();
     const Tokens& t = tokens();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, toVec(t.bg2));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, toVec(t.bg2, t.bg2.a * g.menuAlpha));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, t.radius * s);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * s, 6.0f * s));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
@@ -485,14 +486,16 @@ void endCard() {
 }
 
 // Big page header: icon, title, chip, meta line. Returns nothing; advances the cursor.
+// rightReserve: room kept free at the right end (the widget switches of a plugin page).
 void pageHeader(const std::string& id, const std::string& name, bool greyIcon, const char* chipText, const Rgba* chipColour,
-                const std::string& meta) {
+                const std::string& meta, float rightReserve = 0.0f) {
     const float s = scale();
     const Fonts& f = fonts();
     const Tokens& t = tokens();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float width = ImGui::GetContentRegionAvail().x;
+    const float fullWidth = ImGui::GetContentRegionAvail().x;
+    const float width = std::max(0.0f, fullWidth - rightReserve);
     const float iconR = 26.0f * s;
     const ImVec2 c(p.x + iconR, p.y + iconR);
     if (greyIcon) {
@@ -518,7 +521,49 @@ void pageHeader(const std::string& id, const std::string& name, bool greyIcon, c
     }
     drawText(dl, f.small, ImVec2(tx + 1.0f * s, top + titleH + 2.0f * s), U(t.muted), ellipsize(f.small, meta, textW));
     ImGui::SetCursorScreenPos(p);
-    ImGui::Dummy(ImVec2(width, iconR * 2.0f + 14.0f * s));
+    ImGui::Dummy(ImVec2(fullWidth, iconR * 2.0f + 14.0f * s));
+}
+
+// The widgets of a plugin page (HUD panels), at most three: a switch each at the right end of the header, so a
+// widget can be shown or hidden without opening its tab. Width 0 when there are none or no room.
+std::vector<const PanelView*> headerWidgets(const PluginView& plugin) {
+    std::vector<const PanelView*> out;
+    for (const PanelView& pv : plugin.panels)
+        if (pv.hud && out.size() < 3) out.push_back(&pv);
+    return out;
+}
+float headerWidgetsWidth(const std::vector<const PanelView*>& ws) {
+    const float s = scale();
+    float w = 0.0f;
+    for (const PanelView* pv : ws) w += textSize(fonts().small, pv->title).x + 8.0f * s + 36.0f * s + 18.0f * s;
+    return w;
+}
+void drawHeaderWidgets(const PluginView& plugin, const std::vector<const PanelView*>& ws, ImVec2 headerPos, float headerW,
+                       const Actions& actions) {
+    if (ws.empty()) return;
+    const float s = scale();
+    const Fonts& f = fonts();
+    const Tokens& t = tokens();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 back = ImGui::GetCursorScreenPos();
+    const float cy = headerPos.y + 26.0f * s; // the icon's centre line
+    float x = headerPos.x + headerW - headerWidgetsWidth(ws) + 18.0f * s;
+    ImGui::PushID("##hdrwidgets");
+    for (const PanelView* pv : ws) {
+        const float lw = textSize(f.small, pv->title).x;
+        drawText(dl, f.small, ImVec2(x, cy - F(f.small)->FontSize * 0.5f), U(pv->usable ? t.text2 : t.muted), pv->title);
+        x += lw + 8.0f * s;
+        const ImVec2 swSize(36.0f * s, 20.0f * s);
+        bool hov = false;
+        ImGui::PushID(pv->key.c_str());
+        if (inlineSwitch("##wsw", ImVec2(x, cy - swSize.y * 0.5f), swSize, pv->onScreen, pv->usable, &hov) && actions.setWidgetShown)
+            actions.setWidgetShown(plugin.id, pv->key, !pv->onScreen);
+        ImGui::PopID();
+        if (hov) ImGui::SetTooltip(pv->usable ? (pv->onScreen ? "Hide the widget." : "Show the widget on screen.") : "The mod is off.");
+        x += swSize.x + 18.0f * s;
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(back);
 }
 
 void drawPluginBody(const PluginView& plugin, const Actions& actions);
@@ -531,7 +576,13 @@ void drawPluginPage(const PluginView& plugin, const Actions& actions) {
     if (!plugin.author.empty()) meta += (meta.empty() ? "" : "  \xC2\xB7  ") + plugin.author;
     if (!plugin.statusText.empty()) meta += (meta.empty() ? "" : "  \xC2\xB7  ") + plugin.statusText;
     const Rgba sc = statusColour(plugin.status);
-    pageHeader(plugin.id, plugin.name, false, statusLabel(plugin.status, false), &sc, meta);
+    // the widget switches, when the header has room for them next to a readable title
+    std::vector<const PanelView*> widgets = headerWidgets(plugin);
+    const ImVec2 headerPos = ImGui::GetCursorScreenPos();
+    const float headerW = ImGui::GetContentRegionAvail().x;
+    while (!widgets.empty() && headerWidgetsWidth(widgets) > headerW - 220.0f * s) widgets.pop_back();
+    pageHeader(plugin.id, plugin.name, false, statusLabel(plugin.status, false), &sc, meta, headerWidgetsWidth(widgets));
+    drawHeaderWidgets(plugin, widgets, headerPos, headerW, actions);
     if (!plugin.description.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, toVec(t.text2));
         ImGui::PushTextWrapPos(0.0f);
@@ -825,6 +876,17 @@ void drawGeneral(const Model& model, const Actions& actions) {
             const int picked = segmented("iconstyle", styles, 2, model.iconStyle, 34.0f * s, F(f.body));
             ImGui::PopFont();
             if (picked != model.iconStyle && actions.setIconStyle) actions.setIconStyle(picked);
+        }
+        {
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            drawText(dl, f.bodyBold, p, U(t.text), "Menu background");
+            drawText(dl, f.small, ImVec2(p.x, p.y + F(f.bodyBold)->FontSize + 2.0f * s), U(t.muted), "Opacity");
+            ImGui::Dummy(ImVec2(1.0f, 44.0f * s));
+            int op = std::max(50, std::min(100, model.menuOpacity));
+            ImGui::SetNextItemWidth(std::min(320.0f * s, ImGui::GetContentRegionAvail().x));
+            if (ImGui::SliderInt("##menuopacity", &op, 50, 100, "%d%%") && actions.setMenuOpacity) actions.setMenuOpacity(op);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower shows more of the game.");
         }
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
         ImGui::Separator();
@@ -1268,8 +1330,11 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     // dim layer: only the game behind. It goes into the background draw list, which is under every window
     // (a window for it ended up above the panel and darkened the menu itself). The style alpha does not
     // reach a draw list, so the fade-in is applied by hand.
+    // A lower menu opacity (General) also lightens the sidebar and the dim layer, else the game would still be hidden.
+    const int menuOpacity = std::max(50, std::min(100, model.menuOpacity));
+    g.menuAlpha = std::min(1.0f, static_cast<float>(menuOpacity) / 94.0f);
     const ImVec2 disp = io.DisplaySize;
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f * eased));
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, U(Rgba{0.0f, 0.0f, 0.0f, 1.0f}, 0.55f * g.menuAlpha * eased));
 
     // panel
     // the player's menu size: a share of the screen (General -> Display)
@@ -1282,7 +1347,7 @@ void drawMenu(const Model& model, const Actions& actions, bool* open) {
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(pw, ph));
     ImVec4 panelBg = toVec(t.bg);
-    panelBg.w = 0.94f; // very slightly translucent; text and controls stay opaque
+    panelBg.w = static_cast<float>(menuOpacity) / 100.0f; // default 94 %: very slightly translucent; text and controls stay opaque
     ImGui::PushStyleColor(ImGuiCol_WindowBg, panelBg);
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.08f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.radiusLg * s);
@@ -1524,7 +1589,7 @@ bool drawPluginWindows(const Model& model, const Actions& actions) {
             ImGui::SetNextWindowSize(ImVec2(fit.w, fit.h), ImGuiCond_Always);
         }
         ImVec4 bg = toVec(tokens().bg);
-        bg.w = 0.94f;
+        bg.w = static_cast<float>(std::max(50, std::min(100, model.menuOpacity))) / 100.0f; // General: menu background
         ImGui::PushStyleColor(ImGuiCol_WindowBg, bg);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, tokens().radius * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * s, 14.0f * s));

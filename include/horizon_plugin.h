@@ -29,11 +29,13 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 4 /* 1: create_texture_rgba, release_texture, save_replay
+#define HORIZON_ABI_MINOR 5 /* 1: create_texture_rgba, release_texture, save_replay
                                2: panels (register_panel ...), host flags (capture)
                                3: open_page, toasts (notify), the TM Horizon bridge (bridge_request,
                                   bridge_state), HorizonDeviceCallbacks.post_present
-                               4: ui_metrics (menu size, content scale, room for a plugin page) */
+                               4: ui_metrics (menu size, content scale, room for a plugin page)
+                               5: suspend_widgets (hide other plugins' widgets for a while),
+                                  HORIZON_PANEL_NO_BACKGROUND */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -129,6 +131,11 @@ typedef enum HorizonEventType {
                                          (e.g. a timer); the player can still bring it into the menu */
 #define HORIZON_PANEL_START_HIDDEN 0x04u /* with HUD: a widget that is off until the player shows it (layout mode
                                             bar, or "Show" on its tab). Host 0.3.0; older hosts show it at once */
+#define HORIZON_PANEL_NO_BACKGROUND 0x08u /* with HUD: no window background or border while the menu is closed,
+                                             only what the panel draws (e.g. an input display bare in a corner).
+                                             With the menu open and in layout mode the window shows its frame
+                                             so it can be found and moved. Host 0.3.1 (ABI minor 5); older
+                                             hosts ignore it */
 
 typedef void (HORIZON_CALL* HorizonPanelDrawFn)(void* user);
 
@@ -435,6 +442,16 @@ typedef struct HorizonHostApi {
     /* Menu size, content scale and the room a plugin page has, so a wide page can pick fewer columns
      * instead of clipping. The pointer stays valid for the whole start. Game thread. */
     const HorizonUiMetrics* (HORIZON_CALL* ui_metrics)(void);
+
+    /* ---- ABI minor 5 (check host->abi_minor >= 5 before use) ------------------------------------ */
+    /* Hides other plugins' widgets while this plugin needs the screen (e.g. a randomizer run shows its own
+     * map card, so the Clock and Map Info script widgets would only cover it). on = 1 hides, on = 0 shows
+     * them again. plugin_id: whose widgets ("scripts"); key_prefix: panel keys that start with it ("" or
+     * NULL = every widget of that plugin). Nothing is saved: the widgets come back when this plugin calls
+     * it with on = 0, is switched off, crashes or unloads, and at the next game start. Calls of several
+     * plugins add up. Game thread. HORIZON_ERR_INVALID_ARG: no plugin_id, or this plugin's own id. */
+    HorizonResult (HORIZON_CALL* suspend_widgets)(HorizonPluginHandle plugin, const char* plugin_id, const char* key_prefix,
+                                                  int32_t on);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

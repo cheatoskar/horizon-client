@@ -4,14 +4,15 @@ Plugin id `input-display`. ESWC, Sunrise, Original, TMNF and TMUF, online-ok, li
 
 ## What it does
 
-One panel, **Inputs** (HUD: starts popped out and kept open, see `plugin-abi.md`, Panels). While you drive it reads the local player's car once a frame and draws it in one of four styles:
+One panel, **Inputs** (HUD: starts popped out and kept open, see `plugin-abi.md`, Panels). The widget has no window background (`HORIZON_PANEL_NO_BACKGROUND`): with the menu closed only the widget itself is on screen, so it can sit bare in a corner; with the menu open or in layout mode its frame shows so it can be moved. The window is exactly as large as the style draws. The page header has a switch to show or hide it. While you drive it reads the local player's car once a frame and draws it in one of five styles:
 
+- **Arrows** (default): four keys (up, left, down, right) that light up when the input passes the "Key at" threshold, with the speed below.
+- **Controller**: the classic input display. Two steering triangles left and right, filled from the middle by the steering; gas above and brake below between them.
 - **Bars**: a steering bar, brake and gas as vertical bars, the speed in the middle, and (with "Graph") a three-second trace of steer, gas and brake.
-- **Keys**: four keys (up, left, down, right) that light up when the input passes the "Key at" threshold, with the speed below.
-- **Wheel**: a steering wheel that turns with the steering, brake and gas bars at the sides, an RPM arc around it (with "RPM") and the speed below.
+- **Wheel**: a steering wheel that turns with the steering, an RPM arc around it (with "RPM") and the speed below. Brake and gas bars at the sides only for analog pedals.
 - **Minimal**: one line with the speed and three small bars.
 
-Analog values are shown as they are (a pad stick or a pedal shows in between). Outside a race the panel says "Waiting for race". If the car's values cannot be read it says "No data".
+Analog values are shown as they are (a pad stick or a pedal shows in between). An input counts as analog once it held a value in between for six frames in a row; until then it is on/off (keyboard, pad buttons) and is drawn steady: it stays on for 100 ms after it went off, so a value that drops to 0 for a frame does not make it flash. Outside a race nothing is drawn while the menu is closed; with the menu open the widget shows its shape dimmed with "Waiting for race". If the car's values cannot be read it says "No data".
 
 ## Settings
 
@@ -19,16 +20,18 @@ On the plugin's page, before the tabs:
 
 | Label | Key | Default | What it does |
 |---|---|---|---|
-| Style: Bars / Keys / Wheel / Minimal | `Style` (0-3) | Bars | The look |
+| Style: Arrows / Controller / Bars / Wheel / Minimal | `Style` (0 Bars, 1 Arrows, 2 Wheel, 3 Minimal, 4 Controller) | Arrows (0.1 settings: Bars) | The look |
 | Size | `Size` | 1.0x (0.6x to 2.0x) | Scales the panel |
-| Key at | `Threshold` | 0.20 (0.05 to 0.90) | Keys style only: stick or pedal travel that lights a key |
+| Key at | `Threshold` | 0.20 (0.05 to 0.90) | Arrows style only: stick or pedal travel that lights a key |
 | Speed | `ShowSpeed` | on | Shows the speed |
 | mph | `Mph` | off | Speed in mph instead of km/h |
-| Graph | `Graph` | on | Bars style only: the three-second trace |
+| Graph | `Graph` | off (0.1 settings: on) | Bars style only: the three-second trace |
 | Gear | `Gear` | on | Shows "gear N" under the speed where the game gives it |
 | RPM | `Rpm` | on | Wheel style only: the RPM arc where the game gives it |
 
-Below the settings, "Now" lists the live values (Steer, Gas, Brake, Speed, Gear, RPM; "-" for a value the game does not give).
+Below the settings, "Now" lists the live values (Steer, Gas, Brake, Speed, Gear, RPM; "-" for a value the game does not give) and whether the pedals count as analog.
+
+Settings saved by 0.1 (any of the keys above set): the old defaults Bars and Graph are written once for the keys never changed, so the look stays (`DefaultsV` = 2 marks that this ran).
 
 ## What is read per game
 

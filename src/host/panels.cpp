@@ -57,6 +57,13 @@ struct HostPanel {
 std::vector<std::unique_ptr<HostPanel>> g_panels;
 ImVec2 g_screen(0, 0);
 
+// suspend_widgets (ABI minor 5): widgets another plugin hides for a while. Per start only, never saved.
+struct Suspension {
+    Plugin* by = nullptr;
+    std::string pluginId, prefix;
+};
+std::vector<Suspension> g_suspensions;
+
 float uiScale() {
     const HorizonStyle* st = hostStyle();
     return st && st->scale > 0.0f ? st->scale : 1.0f;
@@ -147,6 +154,15 @@ bool sehDraw(HorizonPanelDrawFn fn, void* user) {
 }
 
 bool usable(const HostPanel& q) { return q.plugin->running && q.plugin->enabled && !pluginGated(q.plugin); }
+// The plugin that hides this widget right now (suspend_widgets), nullptr none. A request counts only while
+// its plugin runs and is on: switched off or crashed, the widgets are back at once.
+const Plugin* suspendedBy(const HostPanel& q) {
+    for (const Suspension& s : g_suspensions)
+        if (s.by->running && s.by->enabled && s.pluginId == q.plugin->id && q.key.compare(0, s.prefix.size(), s.prefix) == 0) return s.by;
+    return nullptr;
+}
+bool suspended(const HostPanel& q) { return !g_suspensions.empty() && suspendedBy(q) != nullptr; }
+bool bare(const HostPanel& q) { return (q.flags & HORIZON_PANEL_HUD) && (q.flags & HORIZON_PANEL_NO_BACKGROUND); }
 bool autoSized(const HostPanel& q) { return q.w <= 0.0f && q.dw <= 0.0f; }
 bool isWidget(const HostPanel& q) { return q.detached && q.keepOpen; }   // on screen with the menu closed
 bool capturing() { return (hostFlagsAll() & HORIZON_HOST_FLAG_CAPTURE) != 0; }
@@ -253,7 +269,7 @@ std::vector<Rect> otherWidgets(const HostPanel* self) {
     std::vector<Rect> out;
     for (auto& up : g_panels) {
         const HostPanel& o = *up;
-        if (&o == self || !isWidget(o) || o.minimized || !usable(o) || o.x < 0.0f || !o.shownLast || o.lastW <= 0.0f) continue;
+        if (&o == self || !isWidget(o) || o.minimized || !usable(o) || suspended(o) || o.x < 0.0f || !o.shownLast || o.lastW <= 0.0f) continue;
         if (o.slotFrames > 0) continue;
         out.push_back(Rect{o.x, o.y, o.lastW, o.lastH});
     }
@@ -370,7 +386,7 @@ bool drawMinimisedIcons(bool clickable) {
     size_t index = 0;
     for (auto& up : g_panels) {
         HostPanel& q = *up;
-        if (!isWidget(q) || !q.minimized || !usable(q)) continue;
+        if (!isWidget(q) || !q.minimized || !usable(q) || suspended(q)) continue;
         if (capturing() && q.hideInCapture) continue;
         const float d = iconSize();
         const ImVec2 p = iconPlace(q, index++);
@@ -452,6 +468,24 @@ void panelUnregister(Plugin* p, const char* key) {
 void panelsRemovePlugin(Plugin* p) {
     for (size_t i = g_panels.size(); i-- > 0;)
         if (g_panels[i]->plugin == p) g_panels.erase(g_panels.begin() + static_cast<std::ptrdiff_t>(i));
+    for (size_t i = g_suspensions.size(); i-- > 0;)
+        if (g_suspensions[i].by == p) g_suspensions.erase(g_suspensions.begin() + static_cast<std::ptrdiff_t>(i));
+}
+
+void panelsSuspend(Plugin* by, const std::string& pluginId, const std::string& keyPrefix, bool on) {
+    for (size_t i = 0; i < g_suspensions.size(); i++) {
+        const Suspension& s = g_suspensions[i];
+        if (s.by != by || s.pluginId != pluginId || s.prefix != keyPrefix) continue;
+        if (!on) {
+            g_suspensions.erase(g_suspensions.begin() + static_cast<std::ptrdiff_t>(i));
+            logLine(HORIZON_LOG_INFO, by->id.c_str(), "widgets of %s%s%s shown again", pluginId.c_str(), keyPrefix.empty() ? "" : " ",
+                    keyPrefix.c_str());
+        }
+        return;
+    }
+    if (!on) return;
+    g_suspensions.push_back(Suspension{by, pluginId, keyPrefix});
+    logLine(HORIZON_LOG_INFO, by->id.c_str(), "widgets of %s%s%s hidden for now", pluginId.c_str(), keyPrefix.empty() ? "" : " ", keyPrefix.c_str());
 }
 
 int32_t panelVisible(Plugin* p, const char* key) {
@@ -475,9 +509,21 @@ std::vector<ui::PanelView> panelViews(const std::string& pluginId) {
         v.title = q->title;
         v.icon = q->icon;
         v.detached = q->detached;
+        v.hud = (q->flags & HORIZON_PANEL_HUD) != 0;
+        v.onScreen = isWidget(*q);
+        v.usable = usable(*q);
         out.push_back(v);
     }
     return out;
+}
+
+void panelSetWidgetShown(const std::string& pluginId, const std::string& key, bool show) {
+    Plugin* p = findPlugin(pluginId);
+    HostPanel* q = p ? find(p, key) : nullptr;
+    if (!q || !usable(*q)) return;
+    if (show) showWidget(*q);
+    else attach(*q);
+    logLine(HORIZON_LOG_INFO, pluginId.c_str(), "widget \"%s\" %s (page header)", key.c_str(), show ? "shown" : "hidden");
 }
 
 void panelsBeginFrame() {
@@ -490,7 +536,7 @@ void panelsBeginFrame() {
 bool panelsWantFrame(bool menuOpen) {
     const bool capture = capturing();
     for (auto& q : g_panels)
-        if (q->detached && usable(*q) && (menuOpen || q->keepOpen) && !(capture && q->hideInCapture)) return true;
+        if (q->detached && usable(*q) && !suspended(*q) && (menuOpen || q->keepOpen) && !(capture && q->hideInCapture)) return true;
     return false;
 }
 
@@ -512,7 +558,9 @@ void panelDrawTab(const std::string& pluginId, const std::string& key) {
         return;
     }
     if (q->detached) {
-        if (q->minimized && q->keepOpen) {
+        if (const Plugin* by = suspendedBy(*q)) {
+            ImGui::TextWrapped("Hidden while %s runs.", by->name.empty() ? by->id.c_str() : by->name.c_str());
+        } else if (q->minimized && q->keepOpen) {
             ImGui::TextWrapped("%s is minimised to an icon at the screen edge.", q->title.c_str());
             if (ImGui::Button("Show")) {
                 q->minimized = false;
@@ -567,7 +615,7 @@ bool panelsDrawWindows(const PanelsFrame& f) {
     bool any = false;
     for (size_t i = 0; i < g_panels.size(); i++) {
         HostPanel& q = *g_panels[i];
-        if (!q.detached || !usable(q)) continue;
+        if (!q.detached || !usable(q) || suspended(q)) continue;
         if (!menuOpen && !q.keepOpen) continue;
         if (capture && q.hideInCapture) continue;
         if (q.keepOpen && q.minimized) continue; // drawn as an edge icon
@@ -577,11 +625,15 @@ bool panelsDrawWindows(const PanelsFrame& f) {
         // height and its content jumped down when the menu opened. With the menu open it moves by dragging
         // its body and resizes at its edges; the right-click menu has "Back to the menu".
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
+        // a widget without background (HORIZON_PANEL_NO_BACKGROUND): only its own drawing while the menu is closed;
+        // the frame comes back with the menu open and in layout mode, so it can be found and moved
+        const bool noFrame = hud && bare(q) && !menuOpen && !f.layout;
         if (!menuOpen) {
             flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_NoBringToFrontOnFocus;
-            if (q.clickThrough || f.layout) flags |= ImGuiWindowFlags_NoInputs; // layout mode: the frames take the mouse
+            if (q.clickThrough || f.layout || noFrame) flags |= ImGuiWindowFlags_NoInputs; // layout mode: the frames take the mouse
         }
+        if (noFrame) flags |= ImGuiWindowFlags_NoBackground;
         if (q.locked) flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
         const bool autoSize = autoSized(q);
         if (autoSize) flags |= ImGuiWindowFlags_AlwaysAutoResize;
@@ -659,7 +711,14 @@ bool panelsDrawWindows(const PanelsFrame& f) {
         ImGui::SetNextWindowBgAlpha(ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w * widgetBg * (static_cast<float>(q.opacity) / 100.0f));
         const std::string name = q.title + "###hzpanel." + q.plugin->id + "." + q.key;
         bool open = true;
-        if (ImGui::Begin(name.c_str(), menuOpen ? &open : nullptr, flags)) {
+        // a bare widget keeps a small padding in every state (its content must not jump when the frame shows)
+        if (hud && bare(q)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f * uiScale(), 6.0f * uiScale()));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, noFrame ? 0.0f : ImGui::GetStyle().WindowBorderSize);
+        }
+        const bool begun = ImGui::Begin(name.c_str(), menuOpen ? &open : nullptr, flags);
+        if (hud && bare(q)) ImGui::PopStyleVar(2);
+        if (begun) {
             drawBody(q, autoSize);
             if (menuOpen && ImGui::BeginPopupContextWindow("##panel_options")) {
                 drawOptions(q);
@@ -831,7 +890,7 @@ void panelsDrawLayout() {
     }
     for (auto& up : g_panels) {
         HostPanel& q = *up;
-        if (!isWidget(q) || q.minimized || !usable(q) || q.x < 0.0f || q.lastW <= 0.0f || q.slotFrames > 0) continue;
+        if (!isWidget(q) || q.minimized || !usable(q) || suspended(q) || q.x < 0.0f || q.lastW <= 0.0f || q.slotFrames > 0) continue;
         ImGui::PushID(&q);
         const ImVec2 a(q.x, q.y), b(q.x + q.lastW, q.y + q.lastH);
         // move: the whole widget
@@ -970,4 +1029,15 @@ extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestPanel(const char* p
         return q.shown ? 1 : 0;
     }
     return -1;
+}
+
+// Test program only: suspend_widgets as plugin byId would call it (without the API's own-id check, so the single
+// test module can hide its own widget). Returns 0, -1 unknown plugin or in a game.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestSuspend(const char* byId, const char* pluginId, const char* prefix, int on) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test || !byId || !pluginId) return -1;
+    Plugin* by = findPlugin(byId);
+    if (!by) return -1;
+    panelsSuspend(by, pluginId, prefix ? prefix : "", on != 0);
+    return 0;
 }

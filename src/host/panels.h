@@ -17,7 +17,13 @@ void panelsRemovePlugin(Plugin* p);
 int32_t panelVisible(Plugin* p, const char* key);
 uint32_t hostFlagsAll();                       // OR of every running plugin's set_host_flag bits
 
+// ABI minor 5: by hides the widgets of plugin pluginId whose keys start with keyPrefix ("" all) while by runs
+// and is on; on = false takes its request back. Not saved.
+void panelsSuspend(Plugin* by, const std::string& pluginId, const std::string& keyPrefix, bool on);
+
 std::vector<ui::PanelView> panelViews(const std::string& pluginId);
+// The widget switch in a plugin page's header: shows the widget at its place or hides it (back to a tab).
+void panelSetWidgetShown(const std::string& pluginId, const std::string& key, bool show);
 std::string panelTabLabel(const ui::PanelView& v); // icon (if the font has it) + title
 void panelDrawTab(const std::string& pluginId, const std::string& key);
 
