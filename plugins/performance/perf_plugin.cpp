@@ -23,6 +23,8 @@
 #include "horizon_plugin.h"
 
 #include "d3d_hooks.h"
+#include "gpusync.h"
+#include "gpusync_live.h"
 #include "perf_core.h"
 #include "series.h"
 #include "shadercache.h"
@@ -948,10 +950,20 @@ void finishFrame(double tPre) {
     }
 }
 
+int g_gsPending = -1; // Cpu/Gpu synchro picked on the page, applied in the next pre_present (game thread, between frames)
+void applyGpuSync(int value);
+void logGpuSync();
+
 void HORIZON_CALL cbPrePresent(void*, void* device) {
     const double t = perf::sys::nowMs();
     if (!g_gameThread) g_gameThread = GetCurrentThreadId();
     if (g_threadDirty && GetCurrentThreadId() == g_gameThread) applyThreadOptions();
+    if (g_gsPending >= 0 && GetCurrentThreadId() == g_gameThread) {
+        const int v = g_gsPending;
+        g_gsPending = -1;
+        applyGpuSync(v);
+    }
+    if (g_frameNo == 300) logGpuSync(); // once, when the game's viewport is up
     perf::stall::frame(g_window);
     ensureHooks(device);
     finishFrame(t);
@@ -1013,6 +1025,96 @@ EngineView readEngine() {
         v.ok = false;
     }
     return v;
+}
+
+// ---- Cpu/Gpu synchro (gpusync.h, gpusync_live.h): the game's wait for the GPU after each frame
+void* pointerAt(void* base, int32_t off) {
+    if (!base || off < 0) return nullptr;
+    __try {
+        return *reinterpret_cast<void**>(static_cast<unsigned char*>(base) + off);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+void* gameViewport() {
+    if (!g_host->reflect_offset) return nullptr;
+    return pointerAt(g_host->engine_pointer(HORIZON_ENGINE_APP), g_host->reflect_offset("CGameApp", "Viewport"));
+}
+// CGameApp.Viewport -> CHmsViewport.Config -> CSystemConfig.Display (CSystemConfigDisplay); *off: its GpuSync member
+void* gameDisplayConfig(int32_t* off) {
+    *off = g_host->reflect_offset ? g_host->reflect_offset("CSystemConfigDisplay", "GpuSync") : -1;
+    if (*off < 0) return nullptr;
+    void* config = pointerAt(gameViewport(), g_host->reflect_offset("CHmsViewport", "Config"));
+    return pointerAt(config, g_host->reflect_offset("CSystemConfig", "Display"));
+}
+std::wstring systemConfigFile() {
+    wchar_t exe[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return std::wstring();
+    std::wstring dir(exe);
+    return dir.substr(0, dir.find_last_of(L"\\/") + 1) + L"Default.SystemConfig.Gbx";
+}
+int g_gsFile = -1;      // ESWC/Sunrise/Original: the value in Default.SystemConfig.Gbx (-1 unknown)
+std::string g_gsNote;    // the last change's result, one short line on the page
+bool foreverGame() { return (g_game & (HORIZON_GAME_TMNF | HORIZON_GAME_TMUF)) != 0; }
+// with Competition Patch loaded Horizon touches nothing beyond its overlay on TMNF/TMUF (owner's rule)
+bool gsLiveAllowed() { return !(foreverGame() && g_competitionPatch); }
+
+void readSystemConfigFile() {
+    g_gsFile = -1;
+    if (foreverGame()) return;
+    FILE* f = _wfopen(systemConfigFile().c_str(), L"rb");
+    if (!f) return;
+    std::string in;
+    char buf[4096];
+    size_t got = 0;
+    while ((got = fread(buf, 1, sizeof(buf), f)) > 0 && in.size() < (1u << 20)) in.append(buf, got);
+    fclose(f);
+    g_gsFile = perf::gpusync::readFromConfig(in);
+}
+
+void logGpuSync() {
+    const perf::gpusync::Live l = perf::gpusync::readLive(gameViewport(), g_game);
+    if (l.verified)
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: %s (live switch %s)%s%s", perf::gpusync::name(l.value),
+             gsLiveAllowed() ? "available" : "off: Competition Patch", g_gsFile >= 0 ? ", file: " : "", g_gsFile >= 0 ? perf::gpusync::name(g_gsFile) : "");
+    else
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: no live switch (%s)%s%s", l.why.c_str(), g_gsFile >= 0 ? ", file: " : "",
+             g_gsFile >= 0 ? perf::gpusync::name(g_gsFile) : "");
+}
+
+void applyGpuSync(int value) {
+    const perf::gpusync::Live before = perf::gpusync::readLive(gameViewport(), g_game);
+    const char* was = before.verified ? perf::gpusync::name(before.value) : "?";
+    std::string why;
+    bool live = false;
+    if (gsLiveAllowed()) live = perf::gpusync::setLive(gameViewport(), g_game, value, &why);
+    else why = "Competition Patch loaded";
+    if (live) logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: %s -> %s (live)", was, perf::gpusync::name(value));
+    else logf(HORIZON_LOG_WARN, "Cpu/Gpu synchro: not switched live (%s)", why.c_str());
+    if (foreverGame()) {
+        // the binary, compressed Documents config is never written; the launcher keeps the setting
+        g_gsNote = live ? "This session only." : "Not changed: " + why + ".";
+        return;
+    }
+    // the engine's own config value too, so a later ApplySystemConfig or config save keeps the choice
+    int32_t off = -1;
+    void* display = gameDisplayConfig(&off);
+    const int oldDisplay = perf::gpusync::readDisplayValue(display, off);
+    // only when that field holds what the file or the viewport says (else it is not the field I think it is)
+    const bool plausible = oldDisplay >= 0 && (oldDisplay == g_gsFile || (before.verified && oldDisplay == before.value));
+    if (plausible && perf::gpusync::setDisplayValue(display, off, value))
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: the game's display config %s -> %s", perf::gpusync::name(oldDisplay), perf::gpusync::name(value));
+    else
+        logf(HORIZON_LOG_INFO, "Cpu/Gpu synchro: the game's display config left as it is (%s)", oldDisplay < 0 ? "not found" : "does not match");
+    int old = -1;
+    std::string msg;
+    const bool saved = perf::gpusync::persist(systemConfigFile(), value, &old, &msg);
+    logf(saved ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "Cpu/Gpu synchro: Default.SystemConfig.Gbx %s -> %s: %s", perf::gpusync::name(old),
+         perf::gpusync::name(value), msg.c_str());
+    readSystemConfigFile();
+    if (saved) g_gsNote = live ? "Now and at the next start." : "At the next start.";
+    else g_gsNote = std::string(live ? "Now only. " : "Not changed. ") + "File: " + msg + ".";
 }
 
 // ---- drawing
@@ -1227,6 +1329,37 @@ void exportLast60() {
     g_lastResult = ok ? "Saved (CSV)" : "CSV not written";
 }
 
+// Cpu/Gpu synchro: the game waits for the GPU after each frame (Immediate by default in all five games). The choice
+// shows what the game runs with now; ESWC/Sunrise/Original also keep it for the next start (their text config file),
+// TMNF/TMUF only for this session (their config is a compressed binary file: the launcher sets it).
+void drawGpuSync(float fieldW) {
+    using namespace perf::gpusync;
+    static const int kChoices[3] = {kImmediate, kHalfFrame, kOneFrame};
+    const Live live = readLive(gameViewport(), g_game);
+    const bool forever = foreverGame();
+    const bool canLive = live.verified && gsLiveAllowed();
+    const bool canPick = forever ? canLive : true; // ESWC/Sunrise/Original: the file at least
+    const int shown = live.verified && live.value >= 0 ? live.value : (!forever ? g_gsFile : -1);
+    ImGui::BeginDisabled(!canPick || g_gsPending >= 0);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::BeginCombo("Cpu/Gpu synchro", shown >= 0 ? name(shown) : "Unknown")) {
+        for (int v : kChoices)
+            if (ImGui::Selectable(name(v), v == shown) && v != shown) g_gsPending = v;
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    hint("More FPS, about one frame more input delay.");
+    if (forever) {
+        if (!gsLiveAllowed()) dimWrapped("Competition Patch: not changed here. Set it in TM Horizon or TmForeverLauncher > Advanced.");
+        else if (!live.verified) dimWrapped("Not on this exe (%s). Set it in TM Horizon or TmForeverLauncher > Advanced.", live.why.c_str());
+        else dimWrapped("This session only. To keep it: TM Horizon or TmForeverLauncher > Advanced.");
+    } else {
+        if (!live.verified) dimWrapped("Next start only (%s).", live.why.c_str());
+        else if (g_gsFile >= 0 && g_gsFile != live.value) dimWrapped("Next start: %s", name(g_gsFile));
+    }
+    if (!g_gsNote.empty()) dimWrapped("%s", g_gsNote.c_str());
+}
+
 // The options one by one (Custom). Every change is also the new Custom set.
 void drawCustomOptions(float fieldW) {
     const perf::SeriesOptions before = currentOptions();
@@ -1352,6 +1485,7 @@ void drawMenu() {
             dimWrapped("Now: %u from cache, %u compiled", cs.hits, cs.misses);
         }
     }
+    drawGpuSync(fieldW);
 
     ImGui::SeparatorText("Measure");
     ImGui::TextWrapped("10 s: %.0f fps   1%% %.0f   0.1%% %.0f   Stutters %u", g_live.avgFps, g_live.low1Fps, g_live.low01Fps,
@@ -1474,6 +1608,7 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
         perf::stall::setAssumeFront(g_assumeFront);
     }
     loadSettings();
+    readSystemConfigFile();
     g_custom = currentOptions();
     applyPreset();
     perf::sys::captureOriginals();

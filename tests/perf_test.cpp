@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "../plugins/performance/gpusync.h"
 #include "../plugins/performance/perf_core.h"
 #include "../plugins/performance/series.h"
 #include "../plugins/performance/shadercache.h"
@@ -965,7 +966,65 @@ static void testPresets() {
     perf::SeriesOptions none;
     CHECK(perf::presetOptions(perf::PresetSmooth, 60, none).threadCores == 0 && perf::presetOptions(perf::PresetSmooth, 60, none).mmcss == 0);
 }
+// Cpu/Gpu synchro: names, ring <-> value, and the edit of the 2006 games' text Default.SystemConfig.Gbx.
+static void testGpuSync() {
+    namespace gs = perf::gpusync;
+    // every value survives value -> SyncGpuInit arguments -> ring the engine builds -> value
+    for (int v = 0; v <= 7; v++) {
+        uint32_t count = 0, half = 0;
+        gs::initArgs(v, &count, &half);
+        const uint32_t entries = count >= 256 ? 0 : count + 1;
+        CHECK(gs::fromRing(entries, half != 0) == v);
+    }
+    CHECK(!strcmp(gs::name(gs::kImmediate), "Immediate") && !strcmp(gs::name(gs::kHalfFrame), "Half a frame") &&
+          !strcmp(gs::name(gs::kOneFrame), "1 Frame") && !strcmp(gs::name(9), "?"));
+    CHECK(gs::fromRing(9, false) == -1 && gs::fromRing(0, true) == -1);
+
+    // a text config as ESWC/Sunrise/Original write it (values made up, layout as in the games' files)
+    const std::string head = std::string("GBX\x06\0TUUE", 9) + "b005000\r\n0\r\n1\r\n0\r\nb005008\r\n1397442896\r\n4\r\nen\r\n";
+    const std::string tail = "b013004\r\n1397442896\r\n3\r\n0\r\nfacade01\r\n";
+    auto file = [&](const char* gpu, const char* bytes) {
+        return head + "b013001\r\n1397442896\r\n6\r\n1\r\n7\r\n" + "b013003\r\n1397442896\r\n" + bytes + "\r\nFalse\r\n" + gpu +
+               "\r\nFalse\r\n0\r\nFalse\r\nTrue\r\n" + tail;
+    };
+    const std::string in = file("7", "33");
+    std::string out;
+    int old = -2;
+    // 7 -> 5: only that character changes, the byte count stays right
+    CHECK(gs::setInConfig(in, gs::kOneFrame, &out, &old) == gs::Edit::Ok && old == 7);
+    CHECK(out.size() == in.size() && out == file("5", "33"));
+    size_t diffs = 0;
+    for (size_t i = 0; i < in.size(); i++) diffs += in[i] != out[i];
+    CHECK(diffs == 1);
+    CHECK(gs::readFromConfig(out) == gs::kOneFrame);
+    // round trip back to Immediate gives the original bytes
+    std::string back;
+    CHECK(gs::setInConfig(out, gs::kImmediate, &back, &old) == gs::Edit::Ok && old == 5 && back == in);
+    // Half a frame, and the same value again: nothing to do
+    CHECK(gs::setInConfig(in, gs::kHalfFrame, &out, &old) == gs::Edit::Ok && gs::readFromConfig(out) == gs::kHalfFrame);
+    CHECK(gs::setInConfig(in, gs::kImmediate, &out, &old) == gs::Edit::Unchanged && out == in);
+    // refused, file untouched (out not written)
+    std::string untouched = "x";
+    CHECK(gs::setInConfig(in, 8, &untouched, &old) == gs::Edit::BadValue && untouched == "x");
+    CHECK(gs::setInConfig(std::string("GBX\x06\0BUCR", 9) + "binary", 5, &untouched, &old) == gs::Edit::NotText && untouched == "x");
+    CHECK(gs::setInConfig(head + tail, 5, &untouched, &old) == gs::Edit::NoChunk && untouched == "x");
+    CHECK(gs::setInConfig(file("7", "34"), 5, &untouched, &old) == gs::Edit::BadLayout && untouched == "x"); // byte count off
+    CHECK(gs::setInConfig(file("17", "34"), 5, &untouched, &old) == gs::Edit::BadLayout && untouched == "x"); // not one digit
+    CHECK(gs::setInConfig(file("8", "33"), 5, &untouched, &old) == gs::Edit::BadLayout && untouched == "x");  // not a GpuSync value
+    std::string twice = in;
+    twice.insert(twice.find("b013004"), "b013003\r\n1397442896\r\n33\r\nFalse\r\n7\r\nFalse\r\n0\r\nFalse\r\nTrue\r\n");
+    CHECK(gs::setInConfig(twice, 5, &untouched, &old) == gs::Edit::BadLayout && untouched == "x"); // two display chunks
+    std::string noSkip = in;
+    noSkip.replace(noSkip.find("b013003\r\n1397442896") + 9, 10, "1397442897");
+    CHECK(gs::setInConfig(noSkip, 5, &untouched, &old) == gs::Edit::BadLayout && untouched == "x");
+    std::string lf = in;
+    for (size_t p = lf.find("\r\n"); p != std::string::npos; p = lf.find("\r\n", p)) lf.erase(p, 1); // LF only
+    CHECK(gs::setInConfig(lf, 5, &untouched, &old) == gs::Edit::NoChunk && untouched == "x");
+    CHECK(gs::readFromConfig(head + tail) == -1);
+}
+
 static int unit() {
+    testGpuSync();
     testStats();
     testSkipAndStart();
     testRing();

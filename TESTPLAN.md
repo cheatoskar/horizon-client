@@ -131,6 +131,15 @@ Nur TMNF-test ohne TMVS-d3d9.dll im Ordner: in TM Horizon DXVK an, Benchmark `dx
 
 Zurück: alle Optionen aus (Standard), DXVK aus, Replay-Archiv rückgängig, „Optimieren“ hat für jede Änderung „Rückgängig“.
 
+### F. Cpu/Gpu synchro (0.3.2)
+
+Seite Horizon Performance > Smoothing > „Cpu/Gpu synchro“.
+
+1. Pro Spiel: Die Auswahl zeigt, was das Spiel gerade nutzt (meist „Immediate“). Log: `Cpu/Gpu synchro: Immediate (live switch available)`. Steht dort `no live switch (...)`: Log schicken.
+2. Auf „1 Frame“ stellen, Strecke fahren: FPS mit TMVS deutlich höher, Log `Cpu/Gpu synchro: Immediate -> 1 Frame (live)`. Zurück auf „Immediate“: FPS wie vorher.
+3. ESWC, Sunrise, Original: nach dem Umstellen steht im Log `Default.SystemConfig.Gbx Immediate -> 1 Frame: saved`, neben der Exe liegt einmal `Default.SystemConfig.Gbx.horizon-backup`. Spiel neu starten: die Auswahl zeigt weiter „1 Frame“, der Launcher ebenso.
+4. TMNF/TMUF: Hinweis „This session only“; nach einem Neustart wieder der Wert aus dem Launcher. Mit Competition Patch: Auswahl gesperrt, nichts im Log außer der Startzeile.
+
 ## Controller nachträglich erkennen (Branch `controller-hotplug`, Modul `controller-hotplug`)
 
 Nur Testkopien (ESWC, einmal Sunrise). Das Modul ist neu und standardmäßig an. Was es tut: `docs/plugins/controller-hotplug.md`. Ein Gamepad bereithalten.
