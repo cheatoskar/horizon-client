@@ -1,0 +1,20 @@
+{
+  "id": "tmx-browser",
+  "name": "TMX Browser",
+  "version": "0.2.2",
+  "dll": "tmx-browser.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "original",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Search TMX and play maps in the game.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": true,
+  "ui": { "min_w": 420, "min_h": 320, "pref_w": 900, "pref_h": 620 }
+}

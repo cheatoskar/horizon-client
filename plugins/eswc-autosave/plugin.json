@@ -1,14 +1,17 @@
 {
   "id": "eswc-autosave",
-  "name": "ESWC Autosave",
-  "version": "2.0.0",
+  "name": "Autosave & Login-Fix",
+  "version": "2.1.0",
   "dll": "eswc-autosave.dll",
   "games": [
-    "eswc"
+    "eswc",
+    "sunrise",
+    "original"
   ],
   "online": "online-ok",
   "abi": 1,
-  "description": "Saves your replay after each finish, without the dialogs.",
+  "description": "Saves your replay after each finish.",
   "author": "cheatoskar",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "ui": { "min_w": 320, "min_h": 240, "pref_w": 460, "pref_h": 340 }
 }

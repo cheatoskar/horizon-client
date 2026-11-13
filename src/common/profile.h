@@ -23,6 +23,7 @@ struct Profile {
     bool safeMode = false;
     std::string menuKey;    // "" = host default
     bool bar = true;
+    std::string statsDir;   // "stats_dir": TM Horizon's folder for play events (host/stats.h), "" = none
     std::vector<ProfilePlugin> plugins;
     std::vector<std::string> warnings; // entries that were skipped and why
     std::string writtenBy, writtenAt;
@@ -41,7 +42,12 @@ struct PluginManifest {
     unsigned games = 0;      // HORIZON_GAME_* mask (0 = not stated)
     bool soloOnly = true;    // "online": "solo-only" (default) / "online-ok"
     bool enabledByDefault = true; // "enabled_by_default": false = off until switched on (no profile.json)
+    bool defaultWhenPaired = false; // "enabled_by_default": "paired" = on only once this game is paired with TM Horizon
+    bool startupOnly = false;     // "startup_only": true = hooks the game at start: switching it on later needs a restart
     int abi = 0;
+    // "ui": {"min_w", "min_h", "pref_w", "pref_h"}: the plugin's own window (pop-out, free window) in logical
+    // pixels at UI scale 1. The host multiplies by the UI scale and clamps to the screen.
+    float uiMinW = 480.0f, uiMinH = 320.0f, uiPrefW = 820.0f, uiPrefH = 560.0f;
 };
 
 // Parses plugin.json. folderId: the folder name, which must equal "id".

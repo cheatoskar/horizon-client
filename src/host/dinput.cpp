@@ -6,12 +6,17 @@
 // GetDeviceState (slot 9) and GetDeviceData (slot 10). The game's call goes through, then the result
 // is emptied while blocked. Joysticks/wheels are passed through untouched (an emptied axis would
 // steer). Method table slots only; dinput8's code is not changed.
+//
+// Stuck keys: the key-up of a key the game saw go down always reaches it, also while blocked, and when the
+// menu closes the game gets key-ups for what it still holds but the device does not (input_gate.h).
 #define DIRECTINPUT_VERSION 0x0800
 #include "host/host.h"
 
 #include <dinput.h>
 
 #include <cstring>
+
+#include "host/input_gate.h"
 
 namespace horizon {
 namespace {
@@ -63,6 +68,26 @@ int kindOf(IDirectInputDevice8W* dev, Table* t) {
     return kind;
 }
 
+// The game's view of its keys and mouse buttons (input_gate.h). Game thread only (its input update).
+InputGate g_gate;
+static_assert(sizeof(GateEvent) == sizeof(DIDEVICEOBJECTDATA), "GateEvent mirrors DIDEVICEOBJECTDATA");
+
+// Down on the device now: keyboard by scan code -> virtual key, mouse buttons 0..4.
+bool physDown(int kind, DWORD ofs) {
+    if (kind == InputGate::kKeyboard) {
+        const UINT sc = ofs >= 0x80 ? (0xE000u | static_cast<UINT>(ofs & 0x7f)) : static_cast<UINT>(ofs);
+        const UINT vk = MapVirtualKeyW(sc, MAPVK_VSC_TO_VK_EX);
+        if (!vk) return false; // unknown key: count it as up, the game gets its release
+        return (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0;
+    }
+    static const int kButtons[] = {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
+    const DWORD b = ofs - InputGate::kMouseButton0;
+    if (b >= 5) return false;
+    int vk = kButtons[b];
+    if (GetSystemMetrics(SM_SWAPBUTTON) && b < 2) vk = b == 0 ? VK_RBUTTON : VK_LBUTTON;
+    return (GetAsyncKeyState(vk) & 0x8000) != 0;
+}
+
 HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, LPVOID data) {
     Table* t = tableOf(dev);
     const HRESULT hr = t->state(dev, size, data);
@@ -74,18 +99,30 @@ HRESULT STDMETHODCALLTYPE getStateDetour(IDirectInputDevice8W* dev, DWORD size, 
     } else if (kind == 1 && g_holdDik >= 0 && size == 256) {
         static_cast<BYTE*>(data)[g_holdDik] = 0;
     }
+    g_gate.sawState(kind == 1 ? InputGate::kKeyboard : InputGate::kMouse, g_blocked != 0, static_cast<const BYTE*>(data), size);
     return hr;
 }
 
 HRESULT STDMETHODCALLTYPE getDataDetour(IDirectInputDevice8W* dev, DWORD objSize, LPDIDEVICEOBJECTDATA data, LPDWORD inOut, DWORD flags) {
     Table* t = tableOf(dev);
+    const DWORD capacity = inOut ? *inOut : 0;
     const HRESULT hr = t->data(dev, objSize, data, inOut, flags);
     if (FAILED(hr) || !inOut) return hr;
     const int kind = kindOf(dev, t);
     if (kind == 3) return hr;
+    const int gateKind = kind == 1 ? InputGate::kKeyboard : InputGate::kMouse;
+    if (!data || (flags & DIGDD_PEEK)) {
+        // a flush (no buffer) or a peek: nothing for the game while blocked, no change to what it holds
+        if (g_blocked) *inOut = 0;
+        return hr;
+    }
     if (g_blocked) {
-        *inOut = 0; // read and dropped: nothing piles up for after the menu
-    } else if (kind == 1 && g_holdDik >= 0 && data && objSize >= sizeof(DIDEVICEOBJECTDATA)) {
+        // read and dropped (nothing piles up for after the menu), except the key-up of a key the game holds:
+        // without it the key stays down in the game (a car steering on after the menu closed)
+        g_gate.filter(gateKind, true, data, objSize, inOut, capacity, &physDown);
+        return hr;
+    }
+    if (kind == 1 && g_holdDik >= 0 && objSize >= sizeof(DIDEVICEOBJECTDATA)) {
         DWORD kept = 0;
         for (DWORD i = 0; i < *inOut; i++) {
             auto* e = reinterpret_cast<DIDEVICEOBJECTDATA*>(reinterpret_cast<BYTE*>(data) + i * objSize);
@@ -95,6 +132,8 @@ HRESULT STDMETHODCALLTYPE getDataDetour(IDirectInputDevice8W* dev, DWORD objSize
         }
         *inOut = kept;
     }
+    // what the game now holds; after the menu: key-ups for keys it holds that are up on the device
+    g_gate.filter(gateKind, false, data, objSize, inOut, capacity, &physDown);
     return hr;
 }
 
@@ -163,6 +202,8 @@ void dinputSetBlocked(bool blocked) {
     const LONG v = blocked ? 1 : 0;
     if (InterlockedExchange(&g_blocked, v) != v) HLOG("input: game keyboard/mouse %s", blocked ? "held back (menu open)" : "back to the game");
 }
+
+bool dinputBlocked() { return g_blocked != 0; }
 
 void dinputHoldUntilReleased(int vk) {
     const UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);

@@ -75,6 +75,7 @@ Profile parseProfile(const std::string& text) {
     p.safeMode = getBool(root, "safe_mode", false);
     p.menuKey = trim(getString(root, "menu_key"));
     p.bar = getBool(root, "bar", true);
+    p.statsDir = trim(getString(root, "stats_dir"));
     p.writtenBy = getString(root, "written_by");
     p.writtenAt = getString(root, "written_at");
     const Json* plugins = root.get("plugins");
@@ -144,9 +145,31 @@ PluginManifest parsePluginManifest(const std::string& text, const std::string& f
             if (g.type == Json::String) m.games |= gameBitFromName(g.str);
     }
     m.soloOnly = lower(getString(root, "online")) != "online-ok";
-    m.enabledByDefault = getBool(root, "enabled_by_default", true);
+    const Json* ebd = root.get("enabled_by_default");
+    if (ebd && ebd->type == Json::String && lower(ebd->str) == "paired") {
+        m.enabledByDefault = false;
+        m.defaultWhenPaired = true;
+    } else {
+        m.enabledByDefault = getBool(root, "enabled_by_default", true);
+    }
+    m.startupOnly = getBool(root, "startup_only", false);
     const Json* abi = root.get("abi");
     m.abi = abi && abi->type == Json::Number ? static_cast<int>(abi->num) : 0;
+    if (const Json* ui = root.get("ui")) {
+        if (ui->type == Json::Object) {
+            // numbers from 160 to 4000 logical pixels; anything else keeps the default
+            auto num = [&](const char* key, float& out) {
+                const Json* v = ui->get(key);
+                if (v && v->type == Json::Number && v->num >= 160.0 && v->num <= 4000.0) out = static_cast<float>(v->num);
+            };
+            num("min_w", m.uiMinW);
+            num("min_h", m.uiMinH);
+            num("pref_w", m.uiPrefW);
+            num("pref_h", m.uiPrefH);
+            if (m.uiPrefW < m.uiMinW) m.uiPrefW = m.uiMinW;
+            if (m.uiPrefH < m.uiMinH) m.uiPrefH = m.uiMinH;
+        }
+    }
     m.valid = true;
     return m;
 }

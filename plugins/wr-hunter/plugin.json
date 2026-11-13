@@ -1,0 +1,20 @@
+{
+  "id": "wr-hunter",
+  "name": "WR Hunter",
+  "version": "0.1.2",
+  "dll": "wr-hunter.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "original",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Splits against your PB and the TMX record.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": false,
+  "ui": { "min_w": 380, "min_h": 300, "pref_w": 620, "pref_h": 560 }
+}

@@ -1,4 +1,6 @@
-// Game adapter for TrackMania Nations ESWC (unofficial 1.80) and TrackMania Sunrise (Win10 repack).
+// Game adapter for TrackMania Nations ESWC (unofficial 1.80), TrackMania Sunrise (Win10 repack) and TrackMania
+// Original (Online Patch v2 community exe; same engine as Sunrise, same reflection member offsets for the classes
+// read here, race virtuals at the same vtable slots: trackmania-internals games/tm-original).
 //
 // What the game runs is read once a frame (game thread, end of frame) from the game's objects, by
 // reflection member NAMES (CConstructionGame.CurrentRace, .Challenge, CTrackMania.Editor, ...; ids and
@@ -8,9 +10,10 @@
 //
 // ESWC only, inline hooks with the prologue checked byte for byte (the same three hooks eswc-autosave
 // has run in game since 1.0): CTrackManiaRace::OnFinishLine (FINISH), RaceNet::StopReplayRecordAndKeepCopy
-// and the solo race end (RACE_END with the run's replay). Sunrise's matching functions are not verified
-// yet: Sunrise gets the polled events only.
+// and the solo race end (RACE_END with the run's replay). Sunrise and Original: OnStartLine, OnFinishLine,
+// OnCheckpoint and the solo race end, static addresses, each hooked only when its prologue matches byte for byte.
 #include "host/host.h"
+#include "host/game/eswc_save.h"
 
 #include <cstdio>
 #include <cstring>
@@ -28,12 +31,27 @@ namespace {
 struct Exe {
     uint32_t game;
     uintptr_t appGlobal;  // CTrackMania* (stored by CConstructionGame's constructor)
+    uintptr_t localPlayerInfo; // CTrackManiaRace::GetLocalPlayerInfo()
+    // Sunrise/Original race hooks (0 = none): CTrackManiaRace::OnStartLine, OnFinishLine, OnCheckpoint (vtable slots
+    // 86, 87, 89) and CTrackManiaRace1P's solo race end (slot 88)
+    uintptr_t onStart, onFinish, onCheckpoint, soloEnd;
 };
-// app globals: ESWC 0x00caee50 (TMVS engine.cpp, verified in game), Sunrise 0x00bcce50 (legacy-randomizer spike, static).
-const Exe kEswc = {HORIZON_GAME_ESWC, 0x00caee50};
-const Exe kSunrise = {HORIZON_GAME_SUNRISE, 0x00bcce50};
+// app globals: ESWC 0x00caee50 (TMVS engine.cpp, verified in game), Sunrise 0x00bcce50 (legacy-randomizer spike, static),
+// Original 0x00bc8084 (written by CConstructionGame's constructor 0x813b00, matched to Sunrise's 0x815640; static).
+const Exe kEswc = {HORIZON_GAME_ESWC, 0x00caee50, 0x0071c730, 0, 0, 0, 0};
+// Sunrise (repack, PE 5cc8f0cf): tm-modding-knowledge games/tm-sunrise/race-events.md (static, matched from
+// the ESWC race vtables; hooked only behind the byte-exact prologue check). Player info members by reflection.
+const Exe kSunrise = {HORIZON_GAME_SUNRISE, 0x00bcce50, 0x0082aeb0, 0x007ec550, 0x007ec7a0, 0x007ec5b0, 0x007dd7b0};
+// Original (Online Patch v2, PE 5d337477): race vtable 0xa484f8, Race1P vtable 0xa48138, same slots and prologues as
+// Sunrise (trackmania-internals games/tm-original/addresses.md; static, not run yet).
+const Exe kOriginal = {HORIZON_GAME_ORIGINAL, 0x00bc8084, 0x00829200, 0x007eab20, 0x007ead30, 0x007eab80, 0x007dc250};
 
 constexpr uint32_t kClassTrackMania = 0x24001000;
+// CTrackManiaEditorPuzzle (-> CTrackManiaEditorFree -> CTrackManiaEditor). ESWC 1.80 holds one in CTrackMania.Editor
+// (+0x2e4) for the whole of a campaign solo race (read in game 2026-11-12: Editor class 0x24017000 next to CurrentRace
+// CTrackManiaRace1P 0x24018000, on A-3, D-3, B-7, G-3); it is cleared with the race on the way back to the menu
+// (0x006c95c0). With a race of its own running it is a race, not the map editor.
+constexpr uint32_t kClassEditorPuzzle = 0x24017000;
 
 // ESWC 1.80 race/player members not exposed by reflection (TMVS engine.cpp, verified):
 constexpr size_t kEswcRaceStarts = 0x4dc, kEswcRaceRespawns = 0x4e0, kEswcRaceApp = 0x40;
@@ -42,7 +60,13 @@ constexpr size_t kEswcInfoState = 0x25c, kEswcInfoTime = 0x1f4, kEswcInfoBest = 
 constexpr size_t kEswcInfoCheckpoints = 0x244, kEswcInfoPassed = 0x284;
 constexpr size_t kEswcPlayerInfo = 0x34;
 constexpr size_t kEswcAppPrevReplay = 0x25c, kEswcAppCurReplay = 0x144;
-constexpr uintptr_t kEswcLocalPlayerInfo = 0x0071c730; // CTrackManiaRace::GetLocalPlayerInfo()
+// A replay watched from the menu (or shot as a video) runs in the app's clip viewer, not in CurrentRace and not in
+// the Editor slot: CConstructionGame +0x128, class CCtnMediaClipViewer 0x2408a000 (no reflection member; made at
+// 0x006ea968 / 0x006e74fc, cleared when the replay ends; TMVS wt-150 engine.cpp kEswcGameClipViewer, in game since
+// TMVS 1.5). Sunrise's slot is not known: Sunrise reports a watched replay as "Loading" (the benchmark then starts
+// by its key).
+constexpr size_t kEswcAppClipViewer = 0x128;
+constexpr uint32_t kEswcClassClipViewer = 0x2408a000;
 
 enum RaceKind { kNone = 0, kSolo = 1, kNet = 2, kOther = 3 };
 
@@ -50,7 +74,18 @@ struct Offsets {
     int race = -1, challenge = -1, network = -1, editor = -1;
     int chName = -1, chParams = -1, chPlayMode = -1;
     int pAuthor = -1, pGold = -1, pSilver = -1, pBronze = -1, pAuthorScore = -1;
+    // CTrackManiaPlayerInfo (ESWC: 0x25c/0x1f4/0x1f8/0x1f0/0x258, Sunrise: 0x228/0x1c0/0x1c4/0x1bc/0x224)
+    int piState = -1, piTime = -1, piBest = -1, piStartTime = -1, piCurTime = -1;
 };
+
+// Sunrise: the local player's info and race, as the race hooks saw them; checkpoint counter of the run.
+void* g_sunRace = nullptr;
+void* g_sunInfo = nullptr;
+int g_sunCheckpoints = 0;
+// Original calls OnCheckpoint ~50 times within ~0.13 s for one checkpoint (log 2026-11-12, RaceA1):
+// calls closer than this to the previous one belong to the same checkpoint.
+constexpr ULONGLONG kSunCheckpointBurstMs = 300;
+ULONGLONG g_sunCheckpointTick = 0;
 
 struct Snapshot {
     void* app = nullptr;
@@ -59,7 +94,9 @@ struct Snapshot {
     void* editor = nullptr;
     int raceKind = kNone;
     bool editorIsReplay = false;
-    void* info = nullptr; // ESWC: local player info
+    bool editorIsPuzzle = false; // CTrackManiaEditorPuzzle: ESWC keeps one in the Editor slot through every solo race
+    bool clipViewer = false; // ESWC: a replay plays in the app's clip viewer
+    void* info = nullptr; // local player info (ESWC: polled; Sunrise: from the race hooks)
     uint32_t starts = 0, respawns = 0, passed = 0;
     int infoState = 0;
 };
@@ -142,7 +179,9 @@ LegacyAdapter* g_self = nullptr;
 class LegacyAdapter final : public GameAdapter {
 public:
     explicit LegacyAdapter(const Exe& exe) : exe_(exe) { g_self = this; }
-    const char* name() const override { return exe_.game == HORIZON_GAME_ESWC ? "ESWC" : "Sunrise"; }
+    const char* name() const override {
+        return exe_.game == HORIZON_GAME_ESWC ? "ESWC" : exe_.game == HORIZON_GAME_ORIGINAL ? "Original" : "Sunrise";
+    }
     bool eswc() const { return exe_.game == HORIZON_GAME_ESWC; }
 
     void install() override {
@@ -161,11 +200,22 @@ public:
             o_.pSilver = reflect::offsetOf("CConstructionChallengeParameters", "SilverTime");
             o_.pBronze = reflect::offsetOf("CConstructionChallengeParameters", "BronzeTime");
             o_.pAuthorScore = reflect::offsetOf("CConstructionChallengeParameters", "AuthorScore");
+            o_.piState = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceState");
+            o_.piTime = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceTime");
+            o_.piBest = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceBestTime");
+            o_.piStartTime = reflect::offsetOf("CTrackManiaPlayerInfo", "RaceStartTime");
+            o_.piCurTime = reflect::offsetOf("CTrackManiaPlayerInfo", "CurrentTime");
+            HLOG("game: CTrackManiaPlayerInfo RaceState +0x%x, RaceTime +0x%x, RaceBestTime +0x%x, RaceStartTime +0x%x, CurrentTime +0x%x",
+                 o_.piState, o_.piTime, o_.piBest, o_.piStartTime, o_.piCurTime);
             HLOG("game: CurrentRace +0x%x, Challenge +0x%x, Network +0x%x, Editor +0x%x, ChallengeName +0x%x, ChallengeParameters +0x%x",
                  o_.race, o_.challenge, o_.network, o_.editor, o_.chName, o_.chParams);
         }
+        // offsets the finish code reads: ESWC's verified constants, Sunrise by reflection
+        stateOff = eswc() ? static_cast<int>(kEswcInfoState) : o_.piState;
+        timeOff = eswc() ? static_cast<int>(kEswcInfoTime) : o_.piTime;
+        bestOff = eswc() ? static_cast<int>(kEswcInfoBest) : o_.piBest;
         if (eswc()) installEswcHooks();
-        else HLOG("game: Sunrise: finish/checkpoint/respawn events not available yet (functions not verified); map, state and online are");
+        else installSunriseHooks();
     }
 
     void frame() override;
@@ -185,6 +235,7 @@ public:
     // Map starts and the menu exit: legacy-randomizer's gamectl module (src/gamectl, vendored).
     HorizonResult playMapFile(const char* path, uint32_t) override { return fromGamectl(gamectl::playMapFile(wide(path).c_str())); }
     HorizonResult returnToMenu() override { return fromGamectl(gamectl::returnToMenu()); }
+    HorizonResult saveReplay(const std::wstring& stem, std::string* pathOut, std::string* why) override;
     std::string status() const override { return status_; }
 
     // ---- ESWC hooks (public for the detours)
@@ -196,20 +247,31 @@ public:
         for (const auto& x : d) onRaceEnd(x.race, x.replay, x.solo);
     }
     int finishDepth = 0;
+    int stateOff = -1, timeOff = -1, bestOff = -1;
+    void* localInfo(void* race);
+    void onSunStart(void* race, void* player);
+    void onSunCheckpoint(void* race, void* player);
 
 private:
     bool read(Snapshot& s);
     int raceKind(void* race);
     void loadNames();
     void emitMapLoaded(void* challenge);
+    // The map editor (or its test drive): an editor that is not the replay editor, and not ESWC's puzzle editor
+    // under a solo or network race (that is a plain race).
+    static bool mapEditor(const Snapshot& s) {
+        if (!s.editor || s.editorIsReplay) return false;
+        return !(s.editorIsPuzzle && s.race && (s.raceKind == kSolo || s.raceKind == kNet));
+    }
     HorizonPlayMode playMode() const {
-        if (snap_.editor && !snap_.editorIsReplay) return HORIZON_MODE_EDITOR_TEST;
+        if (mapEditor(snap_)) return HORIZON_MODE_EDITOR_TEST;
         if (snap_.raceKind == kNet) return HORIZON_MODE_NET;
         if (snap_.raceKind == kSolo) return HORIZON_MODE_SOLO;
-        if (snap_.editorIsReplay) return HORIZON_MODE_REPLAY;
+        if (snap_.editorIsReplay || (snap_.clipViewer && !snap_.race)) return HORIZON_MODE_REPLAY;
         return HORIZON_MODE_UNKNOWN;
     }
     void installEswcHooks();
+    void installSunriseHooks();
 
     Exe exe_;
     Offsets o_;
@@ -272,10 +334,16 @@ bool LegacyAdapter::read(Snapshot& s) {
             loadNames();
             auto n = classNames_.find(eid);
             s.editorIsReplay = n != classNames_.end() && n->second.find("Replay") != std::string::npos;
+            s.editorIsPuzzle = eid == kClassEditorPuzzle || (n != classNames_.end() && n->second == "CTrackManiaEditorPuzzle");
         }
     }
     if (o_.race >= 0) rd(app, static_cast<size_t>(o_.race), &s.race);
     s.raceKind = raceKind(s.race);
+    if (eswc()) {
+        void* viewer = nullptr;
+        uint32_t vid = 0;
+        s.clipViewer = rd(app, kEswcAppClipViewer, &viewer) && viewer && classIdOf(viewer, &vid) && vid == kEswcClassClipViewer;
+    }
     if (eswc() && s.race && s.raceKind != kOther) {
         rd(s.race, kEswcRaceStarts, &s.starts);
         rd(s.race, kEswcRaceRespawns, &s.respawns);
@@ -289,6 +357,10 @@ bool LegacyAdapter::read(Snapshot& s) {
             rd(info, kEswcInfoPassed, &s.passed);
             rd(info, kEswcInfoState, &s.infoState);
         }
+    }
+    if (!eswc() && s.race && s.race == g_sunRace && g_sunInfo) {
+        s.info = g_sunInfo;
+        if (o_.piState >= 0) rd(g_sunInfo, static_cast<size_t>(o_.piState), &s.infoState);
     }
     return true;
 }
@@ -343,8 +415,13 @@ void LegacyAdapter::emitMapLoaded(void* challenge) {
 }
 
 void LegacyAdapter::frame() {
+    gamectl::tick(); // a returnToMenu() in progress presses the quit dialog's Quit
     Snapshot s;
     const bool ok = read(s);
+    if (!eswc() && s.race != g_sunRace) {
+        g_sunRace = nullptr;
+        g_sunInfo = nullptr;
+    }
     const Snapshot prev = snap_;
     const bool hadSnap = haveSnap_;
     snap_ = s;
@@ -352,14 +429,26 @@ void LegacyAdapter::frame() {
     // state
     HorizonGameState st = HORIZON_STATE_UNKNOWN;
     if (!ok) st = HORIZON_STATE_LOADING;
-    else if (s.editor && !s.editorIsReplay) st = HORIZON_STATE_EDITOR;
+    else if (mapEditor(s)) st = HORIZON_STATE_EDITOR;
     else if (s.editor && s.editorIsReplay) st = HORIZON_STATE_REPLAY;
     else if (s.race && s.raceKind == kNet) st = HORIZON_STATE_NET_RACE;
     else if (s.race && s.raceKind == kSolo) st = s.infoState == 2 ? HORIZON_STATE_END_RACE : HORIZON_STATE_SOLO_RACE;
     else if (s.race) st = HORIZON_STATE_REPLAY; // a race of another class: replay viewer, video
     else if (!s.challenge) st = HORIZON_STATE_MAIN_MENU;
+    else if (s.clipViewer) st = HORIZON_STATE_REPLAY; // ESWC: a replay watched from the menu
     else st = HORIZON_STATE_LOADING;
     state_ = st;
+    if (ok && hadSnap && s.editor != prev.editor) {
+        uint32_t eid = 0;
+        const bool known = s.editor && classIdOf(s.editor, &eid);
+        auto n = known ? classNames_.find(eid) : classNames_.end();
+        if (!s.editor) HLOG("game: editor slot empty");
+        else
+            HLOG("game: editor slot holds %s (id %08x)%s", n != classNames_.end() ? n->second.c_str() : "?", eid,
+                 mapEditor(s) ? "" : s.editorIsReplay ? ": replay editor" : ": puzzle editor under a race, counted as the race");
+    }
+    if (ok && s.clipViewer != prev.clipViewer && hadSnap)
+        HLOG("game: %s", s.clipViewer ? "a replay plays (the app's clip viewer)" : "the replay's clip viewer is gone");
     char line[160];
     snprintf(line, sizeof(line), "%s; reflection %s", gameStateText(st), reflect::ready() ? "ready" : "off");
     status_ = line;
@@ -411,21 +500,30 @@ void LegacyAdapter::frame() {
     }
 }
 
-void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t bestBefore) {
-    int after = 0;
-    if (!info || stateBefore != 1 || !rd(info, kEswcInfoState, &after) || after != 2) return;
+void* LegacyAdapter::localInfo(void* race) {
     using FnLocal = void*(__fastcall*)(void*, void*);
     void* local = nullptr;
     __try {
-        local = reinterpret_cast<FnLocal>(rebase(kEswcLocalPlayerInfo))(race, nullptr);
+        local = reinterpret_cast<FnLocal>(rebase(exe_.localPlayerInfo))(race, nullptr);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         local = nullptr;
     }
-    if (local != info) return;
-    uint32_t time = 0, best = 0xffffffffu, respawns = 0;
-    rd(info, kEswcInfoTime, &time);
-    rd(info, kEswcInfoBest, &best);
-    rd(race, kEswcRaceRespawns, &respawns);
+    return local;
+}
+
+void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t bestBefore) {
+    int after = 0;
+    if (!info || stateOff < 0 || stateBefore != 1 || !rd(info, static_cast<size_t>(stateOff), &after) || after != 2) return;
+    if (localInfo(race) != info) return;
+    if (!eswc()) {
+        g_sunRace = race;
+        g_sunInfo = info;
+    }
+    uint32_t time = 0, best = 0xffffffffu;
+    int32_t respawns = -1; // Sunrise: not known yet
+    if (timeOff >= 0) rd(info, static_cast<size_t>(timeOff), &time);
+    if (bestOff >= 0) rd(info, static_cast<size_t>(bestOff), &best);
+    if (eswc()) rd(race, kEswcRaceRespawns, &respawns);
     const bool pb = best != bestBefore || time < bestBefore;
     if (time < sessionBest_) sessionBest_ = time;
     HorizonEvent e = {};
@@ -435,7 +533,49 @@ void LegacyAdapter::onFinish(void* race, void* info, int stateBefore, uint32_t b
     e.time_ms = static_cast<int32_t>(time);
     e.is_local_player = 1;
     e.is_pb = pb ? 1u : 0u;
-    e.respawns = static_cast<int32_t>(respawns);
+    e.respawns = respawns;
+    e.engine_race = race;
+    dispatchEvent(e);
+}
+
+// Sunrise: OnStartLine / OnCheckpoint of the local player.
+void LegacyAdapter::onSunStart(void* race, void* player) {
+    void* info = nullptr;
+    if (!player || !rd(player, kEswcPlayerInfo, &info) || !info || localInfo(race) != info) return;
+    g_sunRace = race;
+    g_sunInfo = info;
+    g_sunCheckpoints = 0;
+    g_sunCheckpointTick = 0;
+    HorizonEvent e = {};
+    e.type = HORIZON_EVENT_RACE_START;
+    const int kind = raceKind(race);
+    e.play_mode = kind == kNet ? HORIZON_MODE_NET : kind == kSolo ? HORIZON_MODE_SOLO : static_cast<uint32_t>(playMode());
+    e.engine_race = race;
+    dispatchEvent(e);
+}
+
+void LegacyAdapter::onSunCheckpoint(void* race, void* player) {
+    void* info = nullptr;
+    if (!player || !rd(player, kEswcPlayerInfo, &info) || !info || localInfo(race) != info) return;
+    const bool sameRace = g_sunRace == race;
+    g_sunRace = race;
+    g_sunInfo = info;
+    const ULONGLONG nowTick = GetTickCount64();
+    const bool burst = sameRace && g_sunCheckpointTick && nowTick - g_sunCheckpointTick < kSunCheckpointBurstMs;
+    g_sunCheckpointTick = nowTick;
+    if (burst) return; // the same checkpoint again: one event per checkpoint
+    // race time at the checkpoint: CurrentTime - RaceStartTime (not verified in game yet; -1 if implausible)
+    int32_t now = 0, start = 0, t = -1;
+    if (o_.piCurTime >= 0 && o_.piStartTime >= 0 && rd(info, static_cast<size_t>(o_.piCurTime), &now) &&
+        rd(info, static_cast<size_t>(o_.piStartTime), &start) && now >= start && now - start < 86400000)
+        t = now - start;
+    HorizonEvent e = {};
+    e.type = HORIZON_EVENT_CHECKPOINT;
+    const int kind = raceKind(race);
+    e.play_mode = kind == kNet ? HORIZON_MODE_NET : kind == kSolo ? HORIZON_MODE_SOLO : static_cast<uint32_t>(playMode());
+    e.time_ms = t;
+    e.checkpoint_index = g_sunCheckpoints++;
+    e.respawns = -1;
     e.engine_race = race;
     dispatchEvent(e);
 }
@@ -467,8 +607,8 @@ void __fastcall finishDetour(void* race, void* edx, void* player) {
     int stateBefore = 0;
     uint32_t bestBefore = 0xffffffffu;
     if (player && rd(player, kEswcPlayerInfo, &info) && info) {
-        rd(info, kEswcInfoState, &stateBefore);
-        rd(info, kEswcInfoBest, &bestBefore);
+        if (g_self->stateOff >= 0) rd(info, static_cast<size_t>(g_self->stateOff), &stateBefore);
+        if (g_self->bestOff >= 0) rd(info, static_cast<size_t>(g_self->bestOff), &bestBefore);
     }
     g_self->finishDepth++;
     reinterpret_cast<FnFinish>(g_finishHook.trampoline)(race, edx, player);
@@ -500,6 +640,65 @@ void __fastcall soloEndDetour(void* race, void* edx) {
     g_self->onRaceEnd(race, replay, true);
 }
 
+// ---------------------------------------------------------------- Sunrise / Original inline hooks
+// Static addresses (link addresses set per exe from Exe before install); each one only when its prologue matches
+// byte for byte. The prologues are the same in Sunrise and Original.
+InlineHook g_sunStartHook = {0x007ec550, {0x8b, 0x44, 0x24, 0x04, 0x56}, 5, "Sunrise CTrackManiaRace::OnStartLine", nullptr};
+InlineHook g_sunFinishHook = {0x007ec7a0, {0x8b, 0x44, 0x24, 0x04, 0x53, 0x55, 0x56, 0x33, 0xdb, 0x3b, 0xc3}, 11,
+                              "Sunrise CTrackManiaRace::OnFinishLine", nullptr};
+InlineHook g_sunCheckpointHook = {0x007ec5b0, {0x83, 0xec, 0x38, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x44, 0x56, 0x8b, 0xf1}, 12,
+                                  "Sunrise CTrackManiaRace::OnCheckpoint", nullptr};
+InlineHook g_sunSoloEndHook = {0x007dd7b0, {0x83, 0xec, 0x08, 0x53, 0x55, 0x56, 0x57, 0x8b, 0xf1}, 9, "Sunrise CTrackManiaRace1P race end", nullptr};
+
+void __fastcall sunStartDetour(void* race, void* edx, void* player) {
+    reinterpret_cast<FnFinish>(g_sunStartHook.trampoline)(race, edx, player);
+    g_self->onSunStart(race, player);
+}
+
+void __fastcall sunCheckpointDetour(void* race, void* edx, void* player) {
+    reinterpret_cast<FnFinish>(g_sunCheckpointHook.trampoline)(race, edx, player);
+    g_self->onSunCheckpoint(race, player);
+}
+
+void __fastcall sunFinishDetour(void* race, void* edx, void* player) {
+    void* info = nullptr;
+    int stateBefore = 0;
+    uint32_t bestBefore = 0xffffffffu;
+    if (player && rd(player, kEswcPlayerInfo, &info) && info) {
+        if (g_self->stateOff >= 0) rd(info, static_cast<size_t>(g_self->stateOff), &stateBefore);
+        if (g_self->bestOff >= 0) rd(info, static_cast<size_t>(g_self->bestOff), &bestBefore);
+    }
+    g_self->finishDepth++;
+    reinterpret_cast<FnFinish>(g_sunFinishHook.trampoline)(race, edx, player);
+    g_self->finishDepth--;
+    g_self->onFinish(race, info, stateBefore, bestBefore);
+    if (g_self->finishDepth == 0) g_self->flushDeferred();
+}
+
+void __fastcall sunSoloEndDetour(void* race, void* edx) {
+    reinterpret_cast<FnRaceVoid>(g_sunSoloEndHook.trampoline)(race, edx);
+    g_self->onRaceEnd(race, nullptr, true); // the replay's place in the app is not known on Sunrise yet
+}
+
+void LegacyAdapter::installSunriseHooks() {
+    g_sunStartHook.link = exe_.onStart;
+    g_sunFinishHook.link = exe_.onFinish;
+    g_sunCheckpointHook.link = exe_.onCheckpoint;
+    g_sunSoloEndHook.link = exe_.soloEnd;
+    g_sunStartHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnStartLine" : g_sunStartHook.name;
+    g_sunFinishHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnFinishLine" : g_sunFinishHook.name;
+    g_sunCheckpointHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace::OnCheckpoint" : g_sunCheckpointHook.name;
+    g_sunSoloEndHook.name = exe_.game == HORIZON_GAME_ORIGINAL ? "Original CTrackManiaRace1P race end" : g_sunSoloEndHook.name;
+    const bool haveInfo = stateOff >= 0 && timeOff >= 0;
+    const bool a = installInlineHook(g_sunStartHook, reinterpret_cast<void*>(&sunStartDetour));
+    const bool b = haveInfo && installInlineHook(g_sunFinishHook, reinterpret_cast<void*>(&sunFinishDetour));
+    const bool c = installInlineHook(g_sunCheckpointHook, reinterpret_cast<void*>(&sunCheckpointDetour));
+    const bool d = installInlineHook(g_sunSoloEndHook, reinterpret_cast<void*>(&sunSoloEndDetour));
+    HLOG("game: %s events (static addresses, first test): start %s, finish %s, checkpoint %s, solo race end %s; "
+         "respawn not available, network race end not available",
+         name(), a ? "on" : "OFF", b ? "on" : (haveInfo ? "OFF" : "OFF (player info members not found)"), c ? "on" : "OFF", d ? "on" : "OFF");
+}
+
 void LegacyAdapter::installEswcHooks() {
     const bool a = installInlineHook(g_finishHook, reinterpret_cast<void*>(&finishDetour));
     const bool b = installInlineHook(g_keepCopyHook, reinterpret_cast<void*>(&keepCopyDetour));
@@ -512,5 +711,35 @@ void LegacyAdapter::installEswcHooks() {
 
 GameAdapter* makeEswcAdapter() { return new LegacyAdapter(kEswc); }
 GameAdapter* makeSunriseAdapter() { return new LegacyAdapter(kSunrise); }
+GameAdapter* makeOriginalAdapter() { return new LegacyAdapter(kOriginal); }
+
+// save_replay (ESWC only; Sunrise and Original: not supported): the solo end-race screen saves the current run (as "Save replay" there);
+// elsewhere (menus, LAN/online after a race) the previous race's copy (as "Save previous replay").
+// A solo race still running has no finished replay yet.
+HorizonResult LegacyAdapter::saveReplay(const std::wstring& stem, std::string* pathOut, std::string* why) {
+    if (!eswc()) {
+        *why = "not supported on Sunrise and Original yet";
+        return HORIZON_ERR_NOT_SUPPORTED;
+    }
+    Snapshot s;
+    read(s);
+    if (!s.app) {
+        *why = "game not ready";
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    if (state_ == HORIZON_STATE_SOLO_RACE || state_ == HORIZON_STATE_LOADING || state_ == HORIZON_STATE_EDITOR) {
+        *why = "no finished run (race running, loading or editor)";
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    const bool solo = state_ == HORIZON_STATE_END_RACE;
+    EswcSaveResult r = {};
+    eswcSaveReplay(s.app, solo, stem.empty() ? nullptr : stem.c_str(), &r);
+    if (r.ok == 1) {
+        *pathOut = utf8(std::wstring(r.folder) + r.name);
+        return HORIZON_OK;
+    }
+    *why = r.why ? r.why : "failed";
+    return r.ok == 0 ? HORIZON_ERR_FAILED : HORIZON_ERR_WRONG_STATE;
+}
 
 } // namespace horizon

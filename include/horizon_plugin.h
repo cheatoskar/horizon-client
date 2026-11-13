@@ -29,7 +29,13 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 1 /* 1: create_texture_rgba, release_texture, save_replay */
+#define HORIZON_ABI_MINOR 5 /* 1: create_texture_rgba, release_texture, save_replay
+                               2: panels (register_panel ...), host flags (capture)
+                               3: open_page, toasts (notify), the TM Horizon bridge (bridge_request,
+                                  bridge_state), HorizonDeviceCallbacks.post_present
+                               4: ui_metrics (menu size, content scale, room for a plugin page)
+                               5: suspend_widgets (hide other plugins' widgets for a while),
+                                  HORIZON_PANEL_NO_BACKGROUND */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -49,7 +55,7 @@ extern "C" {
 /* ------------------------------------------------------------------ games (bit mask) ---------- */
 #define HORIZON_GAME_ESWC     0x01u /* TrackMania Nations ESWC (unofficial 1.80 build) */
 #define HORIZON_GAME_SUNRISE  0x02u /* TrackMania Sunrise (Win10 community repack) */
-#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (not supported yet) */
+#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (Online Patch v2 exe) */
 #define HORIZON_GAME_TMNF     0x08u /* TrackMania Nations Forever (also TMLoader's combined exe) */
 #define HORIZON_GAME_TMUF     0x10u /* TrackMania United Forever */
 #define HORIZON_GAME_LEGACY   (HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL)
@@ -114,6 +120,83 @@ typedef enum HorizonEventType {
     HORIZON_EVENT_ONLINE_CHANGED = 9,/* is_online changed; sent to every plugin, gated or not */
     HORIZON_EVENT_GAME_STATE = 10    /* game_state changed (HorizonGameState) */
 } HorizonEventType;
+
+/* ------------------------------------------------------------------ panels (ABI minor 2) ------- */
+/* A panel is a piece of a plugin's UI the host places: a tab on the plugin's page in the menu, which
+ * the player can pop out into its own window (and keep on screen with the menu closed). The host owns
+ * the tab list, the windows, their options (keep open, opacity, lock layout, click-through, hide in
+ * photos and videos) and saves them per plugin id + panel key. The plugin only draws the body. */
+#define HORIZON_PANEL_MENU_PAGE 0x01u /* a tab on the plugin's page in the menu */
+#define HORIZON_PANEL_HUD       0x02u /* starts in its own window that stays on screen with the menu closed
+                                         (e.g. a timer); the player can still bring it into the menu */
+#define HORIZON_PANEL_START_HIDDEN 0x04u /* with HUD: a widget that is off until the player shows it (layout mode
+                                            bar, or "Show" on its tab). Host 0.3.0; older hosts show it at once */
+#define HORIZON_PANEL_NO_BACKGROUND 0x08u /* with HUD: no window background or border while the menu is closed,
+                                             only what the panel draws (e.g. an input display bare in a corner).
+                                             With the menu open and in layout mode the window shows its frame
+                                             so it can be found and moved. Host 0.3.1 (ABI minor 5); older
+                                             hosts ignore it */
+
+typedef void (HORIZON_CALL* HorizonPanelDrawFn)(void* user);
+
+typedef struct HorizonPanelDef {
+    uint32_t size;               /* sizeof(HorizonPanelDef) */
+    const char* key;             /* stable within the plugin, [a-z0-9-], saved with the layout; never change it */
+    const char* title;           /* tab and window title, one or two words */
+    uint32_t icon;               /* HZ_ICON_* codepoint from horizon_imgui.h (Lucide), 0 = none */
+    uint32_t flags;              /* HORIZON_PANEL_* (neither: MENU_PAGE) */
+    HorizonPanelDrawFn draw;     /* draws the body: no ImGui::Begin/End of its own, no heading */
+    void* user;                  /* passed to draw */
+    /* first place of its window, as fractions of the screen (0..1); w/h 0 = fit the content */
+    float default_x, default_y, default_w, default_h;
+} HorizonPanelDef;
+
+/* Host flags (HorizonHostApi.set_host_flag / host_flags) */
+#define HORIZON_HOST_FLAG_CAPTURE 0x01u /* a photo or video is being taken (set by e.g. TMVS): windows with
+                                           "Hide in photos and videos" and the Horizon bar are hidden */
+
+/* ------------------------------------------------------------------ toasts (ABI minor 3) ------- */
+/* A toast is a short note in the corner of the screen ("Upload finished", "Map saved"). The host draws
+ * them in the TM Horizon look, stacks them, hides them in photos and videos (HORIZON_HOST_FLAG_CAPTURE
+ * and HorizonHost_SetCaptureActive) and holds them back while the player has "Do not disturb" on. */
+#define HORIZON_TOAST_INFO  0u
+#define HORIZON_TOAST_OK    1u
+#define HORIZON_TOAST_WARN  2u
+#define HORIZON_TOAST_ERROR 3u
+#define HORIZON_TOAST_IMPORTANT 0x01u /* flags: shown even with "Do not disturb" (use sparingly) */
+
+typedef struct HorizonToast {
+    uint32_t size;               /* sizeof(HorizonToast) */
+    uint32_t kind;               /* HORIZON_TOAST_* */
+    const char* title;           /* one short line, required */
+    const char* text;            /* optional second line, "" or NULL for none */
+    uint32_t icon;               /* HZ_ICON_* codepoint, 0 = the kind's icon */
+    uint32_t duration_ms;        /* 0 = 5000; at most 30000 */
+    uint32_t flags;              /* HORIZON_TOAST_IMPORTANT */
+} HorizonToast;
+
+/* ------------------------------------------------------------------ TM Horizon bridge (ABI minor 3) */
+/* The game process never talks to the internet. Plugins that need online data (TMX search, a record
+ * replay) ask the TM Horizon launcher on the same PC through the host's bridge: plain HTTP on
+ * 127.0.0.1, paired once (the player presses Allow in TM Horizon), see docs/client-bridge.md.
+ * The host owns the connection, the key and a rate limit; a plugin only sends requests. */
+#define HORIZON_BRIDGE_OFF        0 /* the player switched the bridge off (host settings) */
+#define HORIZON_BRIDGE_SEARCHING  1 /* TM Horizon is not running (or not found yet) */
+#define HORIZON_BRIDGE_PAIRING    2 /* waiting for Allow in TM Horizon */
+#define HORIZON_BRIDGE_CONNECTED  3
+#define HORIZON_BRIDGE_DENIED     4 /* the player pressed No; asks again after a while */
+
+/* bridge_request answers. status: the launcher's HTTP status (200 ...), or one of these: */
+#define HORIZON_BRIDGE_ERR_NOT_CONNECTED -1 /* not paired / TM Horizon not running */
+#define HORIZON_BRIDGE_ERR_TIMEOUT       -2
+#define HORIZON_BRIDGE_ERR_RATE_LIMIT    -3 /* too many requests from this plugin, try again later */
+#define HORIZON_BRIDGE_ERR_TOO_LARGE     -4 /* answer larger than the host takes (16 MB) */
+#define HORIZON_BRIDGE_ERR_CANCELLED     -5 /* the plugin was switched off before the answer came */
+
+/* Runs on the game thread at the end of a frame. body is valid only during the call. content_type
+ * is the answer's Content-Type ("application/json", "image/jpeg", ...), "" if none. */
+typedef void (HORIZON_CALL* HorizonBridgeCallback)(void* user, int32_t status, const char* content_type, const void* body,
+                                                   uint32_t body_len);
 
 /* Bit for HorizonHostApi.subscribe: HORIZON_EVENT_BIT(HORIZON_EVENT_FINISH) | ... */
 #define HORIZON_EVENT_BIT(type) (1u << (type))
@@ -189,6 +272,20 @@ typedef struct HorizonStyle {
     void* font_mono;             /* ImFont* */
 } HorizonStyle;
 
+/* ------------------------------------------------------------------ UI metrics (ABI minor 4) --- */
+/* The player sets the menu size (share of the screen) and a content scale (80-125 %) in General ->
+ * Display, or with Ctrl + mouse wheel in the menu. The host then rebuilds its fonts inside the same
+ * ImFont objects (HorizonStyle's font pointers stay valid) and HorizonStyle.scale changes. Values change
+ * between frames: read them while drawing, don't keep copies. */
+typedef struct HorizonUiMetrics {
+    uint32_t size;               /* sizeof(HorizonUiMetrics) */
+    float scale;                 /* = HorizonStyle.scale: screen height / 1080 (1..2) x content scale */
+    float content_scale;         /* the player's content scale, 0.8 .. 1.25 */
+    float display_w, display_h;  /* the game's back buffer, pixels */
+    float menu_w, menu_h;        /* the Horizon menu window, pixels */
+    float page_w, page_h;        /* room for a plugin page inside the menu card, pixels (0 before a page was drawn) */
+} HorizonUiMetrics;
+
 /* ------------------------------------------------------------------ device access --------------- */
 /* For HORIZON_CAP_DEVICE plugins. All pointers are IDirect3DDevice9* / D3DPRESENT_PARAMETERS* passed
  * as void* so this header needs no d3d9.h. Order per frame: device plugins' pre_present -> host
@@ -201,6 +298,10 @@ typedef struct HorizonDeviceCallbacks {
     void (HORIZON_CALL* before_reset)(void* user, void* device);
     void (HORIZON_CALL* after_reset)(void* user, void* device, int32_t hresult);
     void (HORIZON_CALL* pre_present)(void* user, void* device);
+    /* ABI minor 3 (host->abi_minor >= 3; an older host never calls it): right after the game's Present
+     * returned, with its HRESULT. For frame timing and frame pacing (a limiter that waits here lets the
+     * game read input right after the wait). Keep it short; never call Present from here. */
+    void (HORIZON_CALL* post_present)(void* user, void* device, int32_t hresult);
 } HorizonDeviceCallbacks;
 
 /* ------------------------------------------------------------------ host API -------------------- */
@@ -299,8 +400,58 @@ typedef struct HorizonHostApi {
     void (HORIZON_CALL* release_texture)(HorizonPluginHandle plugin, uint64_t texture);
     /* Saves the replay of the current/last run like the game's "Save replay", without dialogs.
      * name_utf8: file name without extension ("" = the game's default name). HORIZON_ERR_NOT_SUPPORTED
-     * where the host does not do it yet (host 0.1.0: everywhere; the ESWC Autosave plugin saves on ESWC). */
+     * where the host does not do it (host 0.2.0 and later: ESWC only; Sunrise, Original and Forever return it.
+     * The Autosave plugin saves on ESWC, Sunrise and Original with its own copy of the game's calls). */
     HorizonResult (HORIZON_CALL* save_replay)(HorizonPluginHandle plugin, const char* name_utf8);
+
+    /* ---- ABI minor 2 (check host->abi_minor >= 2 before use) ------------------------------------ */
+    /* Adds a panel, or replaces the one with the same key. def and its strings are copied. Game thread
+     * (Init is fine). HORIZON_ERR_INVALID_ARG: no key/title/draw or a bad key. */
+    HorizonResult (HORIZON_CALL* register_panel)(HorizonPluginHandle plugin, const HorizonPanelDef* def);
+    void (HORIZON_CALL* unregister_panel)(HorizonPluginHandle plugin, const char* key);
+    /* 1 while the panel is drawn this frame (its tab is the open one, or its window is on screen). */
+    int32_t (HORIZON_CALL* panel_visible)(HorizonPluginHandle plugin, const char* key);
+    /* Host flags (HORIZON_HOST_FLAG_*): each plugin sets its own; host_flags() is the OR of all. */
+    void (HORIZON_CALL* set_host_flag)(HorizonPluginHandle plugin, uint32_t flag, int32_t on);
+    uint32_t (HORIZON_CALL* host_flags)(void);
+
+    /* ---- ABI minor 3 (check host->abi_minor >= 3 before use) ------------------------------------ */
+    /* Order is fixed: open_page first (TMVS 2.0 reads it right after host_flags), then notify,
+     * bridge_request, bridge_state. A plugin built against 1.2 never sees these fields. */
+    /* Opens the Horizon menu on this plugin's page (for a "open my page" hotkey). panel_key NULL or ""
+     * = the plugin's Settings tab (or the plain page), else that panel's tab; a key the plugin has no
+     * panel for returns HORIZON_ERR_INVALID_ARG, the page still opens on Settings. If the menu is
+     * already open on this page it closes (toggle, like the menu key). Game thread only.
+     * HORIZON_ERR_WRONG_STATE while a capture (HorizonHost_SetCaptureActive) is active. */
+    HorizonResult (HORIZON_CALL* open_page)(HorizonPluginHandle plugin, const char* panel_key);
+    /* Shows a toast (copied). Any thread. Toasts of a plugin that is off or gated online are dropped. */
+    void (HORIZON_CALL* notify)(HorizonPluginHandle plugin, const HorizonToast* toast);
+    /* Sends one request to TM Horizon over the bridge. method "GET" or "POST"; path starts with "/v1/"
+     * (docs/client-bridge.md lists them); body/body_len for POST (JSON), else NULL/0. The answer comes
+     * later through callback (game thread), errors too. Returns HORIZON_OK when queued,
+     * HORIZON_ERR_INVALID_ARG, HORIZON_ERR_BUSY (8 requests of this plugin open) or
+     * HORIZON_ERR_NOT_SUPPORTED (bridge switched off), HORIZON_ERR_WRONG_STATE (not on the game
+     * thread). A request over the rate limit is still HORIZON_OK; its callback gets
+     * HORIZON_BRIDGE_ERR_RATE_LIMIT. Game thread. */
+    HorizonResult (HORIZON_CALL* bridge_request)(HorizonPluginHandle plugin, const char* method, const char* path,
+                                                 const void* body, uint32_t body_len, HorizonBridgeCallback callback,
+                                                 void* user);
+    int32_t (HORIZON_CALL* bridge_state)(void); /* HORIZON_BRIDGE_* */
+
+    /* ---- ABI minor 4 (check host->abi_minor >= 4 before use) ------------------------------------ */
+    /* Menu size, content scale and the room a plugin page has, so a wide page can pick fewer columns
+     * instead of clipping. The pointer stays valid for the whole start. Game thread. */
+    const HorizonUiMetrics* (HORIZON_CALL* ui_metrics)(void);
+
+    /* ---- ABI minor 5 (check host->abi_minor >= 5 before use) ------------------------------------ */
+    /* Hides other plugins' widgets while this plugin needs the screen (e.g. a randomizer run shows its own
+     * map card, so the Clock and Map Info script widgets would only cover it). on = 1 hides, on = 0 shows
+     * them again. plugin_id: whose widgets ("scripts"); key_prefix: panel keys that start with it ("" or
+     * NULL = every widget of that plugin). Nothing is saved: the widgets come back when this plugin calls
+     * it with on = 0, is switched off, crashes or unloads, and at the next game start. Calls of several
+     * plugins add up. Game thread. HORIZON_ERR_INVALID_ARG: no plugin_id, or this plugin's own id. */
+    HorizonResult (HORIZON_CALL* suspend_widgets)(HorizonPluginHandle plugin, const char* plugin_id, const char* key_prefix,
+                                                  int32_t on);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

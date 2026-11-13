@@ -1,12 +1,16 @@
 // Plugin loading (profile.json -> horizon\plugins\<id>\), the per-plugin HorizonHostApi tables, and
 // every call into a plugin (each one SEH-guarded: a plugin that crashes is switched off, the game goes on).
 #include "host/plugins.h"
+#include "host/bridge.h"
+#include "host/panels.h"
+#include "host/toasts.h"
 
 #include <cstdarg>
 #include <cstdio>
 #include <memory>
 #include <mutex>
 
+#include "common/modules.h"
 #include "common/profile.h"
 #include "common/util.h"
 #include "reflect/reflect.h"
@@ -16,6 +20,7 @@ namespace {
 
 std::vector<std::unique_ptr<Plugin>> g_plugins;
 Profile g_profile;
+ModulesConfig g_modules;
 
 struct Queued {
     Plugin* plugin;
@@ -28,6 +33,13 @@ std::vector<Queued> g_queue;
 Plugin* fromHandle(HorizonPluginHandle h) { return reinterpret_cast<Plugin*>(h); }
 
 // ---------------------------------------------------------------- guarded calls (no C++ objects inside)
+// A benchmark request for Horizon Performance is waiting (written by tools/bench_series.ps1 or TM Horizon).
+bool benchRequestWaiting() {
+    const std::wstring path = state().dataRoot + L"data\\performance\\bench-request.json";
+    const DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 bool sehInfo(HorizonPlugin_InfoFn fn, const HorizonPluginInfo** out) {
     __try {
         *out = fn();
@@ -106,6 +118,27 @@ void crashed(Plugin* p, const char* where) {
     p->status = ui::PluginStatus::Failed;
     p->statusText = std::string("crashed in ") + where + ": switched off until the next start";
     logLine(HORIZON_LOG_ERROR, p->id.c_str(), "crashed in %s: switched off until the next start", where);
+    // its set_host_flag bits (input capture, photo) end with it: hostFlagsAll only reads running plugins
+    const std::string title = (p->name.empty() ? p->id : p->name) + " stopped after an error";
+    HorizonToast t = {};
+    t.size = sizeof(t);
+    t.kind = HORIZON_TOAST_ERROR;
+    t.title = title.c_str();
+    t.text = "Details in the log.";
+    toastsPush("Horizon", t);
+}
+
+struct DrawCall {
+    void(HORIZON_CALL* fn)(void);
+};
+bool guardedDrawCall(void* c) { return sehVoid(static_cast<DrawCall*>(c)->fn); }
+
+// DrawMenu/DrawOverlay: a throw switches only this plugin off; the ImGui stacks it left open are closed.
+bool drawPlugin(Plugin* p, void(HORIZON_CALL* fn)(void), const char* where) {
+    DrawCall c{fn};
+    if (imguiGuardedCall(&guardedDrawCall, &c)) return true;
+    crashed(p, where);
+    return false;
 }
 
 // ---------------------------------------------------------------- the API table
@@ -291,10 +324,90 @@ uint64_t HORIZON_CALL apiCreateTexture(HorizonPluginHandle h, uint32_t w, uint32
     return id;
 }
 void HORIZON_CALL apiReleaseTexture(HorizonPluginHandle, uint64_t id) { releaseTexture(id); }
-HorizonResult HORIZON_CALL apiSaveReplay(HorizonPluginHandle h, const char*) {
+HorizonResult HORIZON_CALL apiSaveReplay(HorizonPluginHandle h, const char* name) {
     Plugin* p = fromHandle(h);
-    if (p) logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: not supported by this host version yet");
-    return HORIZON_ERR_NOT_SUPPORTED;
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "save_replay: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    const std::wstring stem = replayStemFromName(wide(name ? name : ""));
+    std::string path, why;
+    const HorizonResult r = game().saveReplay(stem, &path, &why);
+    if (r == HORIZON_OK) {
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: saved %s", path.c_str());
+        postReplaySavedNow(p, path);
+    } else {
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "save_replay: %d (%s)", r, why.c_str());
+    }
+    return r;
+}
+
+// ---- ABI minor 2: panels, host flags
+HorizonResult HORIZON_CALL apiRegisterPanel(HorizonPluginHandle h, const HorizonPanelDef* def) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    const HorizonResult r = panelRegister(p, def);
+    if (r != HORIZON_OK) logLine(HORIZON_LOG_WARN, p->id.c_str(), "register_panel: invalid (key [a-z0-9-], title and draw needed)");
+    return r;
+}
+void HORIZON_CALL apiUnregisterPanel(HorizonPluginHandle h, const char* key) {
+    if (Plugin* p = fromHandle(h)) panelUnregister(p, key);
+}
+int32_t HORIZON_CALL apiPanelVisible(HorizonPluginHandle h, const char* key) {
+    Plugin* p = fromHandle(h);
+    return p ? panelVisible(p, key) : 0;
+}
+// ---- ABI minor 3: open_page
+HorizonResult HORIZON_CALL apiOpenPage(HorizonPluginHandle h, const char* panelKey) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "open_page: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    return menuOpenPluginPage(p->id, panelKey ? panelKey : "");
+}
+void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t on) {
+    Plugin* p = fromHandle(h);
+    if (!p) return;
+    const uint32_t before = p->hostFlags;
+    p->hostFlags = on ? (p->hostFlags | flag) : (p->hostFlags & ~flag);
+    if (before != p->hostFlags) logLine(HORIZON_LOG_INFO, p->id.c_str(), "host flags 0x%x", p->hostFlags);
+}
+uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll(); }
+
+// ---- ABI minor 3: toasts, the TM Horizon bridge
+void HORIZON_CALL apiNotify(HorizonPluginHandle h, const HorizonToast* t) {
+    Plugin* p = fromHandle(h);
+    if (!p || !t || t->size < offsetof(HorizonToast, flags) + sizeof(uint32_t)) return;
+    if (!p->running || !p->enabled || pluginGated(p)) return;
+    toastsPush(p->name.empty() ? p->id : p->name, *t);
+}
+HorizonResult HORIZON_CALL apiBridgeRequest(HorizonPluginHandle h, const char* method, const char* path, const void* body, uint32_t len,
+                                            HorizonBridgeCallback cb, void* user) {
+    Plugin* p = fromHandle(h);
+    if (!p) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) return HORIZON_ERR_WRONG_STATE;
+    const HorizonResult r = bridgeRequest(p, method, path, body, len, cb, user);
+    if (r == HORIZON_ERR_INVALID_ARG) logLine(HORIZON_LOG_WARN, p->id.c_str(), "bridge_request: invalid (GET/POST, a /v1/ path, a callback)");
+    return r;
+}
+int32_t HORIZON_CALL apiBridgeState() { return bridgeState(); }
+
+// ---- ABI minor 4: menu size and content scale
+const HorizonUiMetrics* HORIZON_CALL apiUiMetrics() { return hostUiMetrics(); }
+
+// ---- ABI minor 5: other plugins' widgets hidden for a while
+HorizonResult HORIZON_CALL apiSuspendWidgets(HorizonPluginHandle h, const char* pluginId, const char* keyPrefix, int32_t on) {
+    Plugin* p = fromHandle(h);
+    if (!p || !pluginId || !*pluginId || p->id == pluginId) return HORIZON_ERR_INVALID_ARG;
+    if (GetCurrentThreadId() != state().mainThread) {
+        logLine(HORIZON_LOG_WARN, p->id.c_str(), "suspend_widgets: called outside the game thread");
+        return HORIZON_ERR_WRONG_STATE;
+    }
+    panelsSuspend(p, pluginId, keyPrefix ? keyPrefix : "", on != 0);
+    return HORIZON_OK;
 }
 
 void fillApi(Plugin* p) {
@@ -338,6 +451,17 @@ void fillApi(Plugin* p) {
     a.create_texture_rgba = &apiCreateTexture;
     a.release_texture = &apiReleaseTexture;
     a.save_replay = &apiSaveReplay;
+    a.register_panel = &apiRegisterPanel;
+    a.unregister_panel = &apiUnregisterPanel;
+    a.panel_visible = &apiPanelVisible;
+    a.set_host_flag = &apiSetHostFlag;
+    a.host_flags = &apiHostFlags;
+    a.open_page = &apiOpenPage;
+    a.notify = &apiNotify;
+    a.bridge_request = &apiBridgeRequest;
+    a.bridge_state = &apiBridgeState;
+    a.ui_metrics = &apiUiMetrics;
+    a.suspend_widgets = &apiSuspendWidgets;
 }
 
 // ---------------------------------------------------------------- loading
@@ -373,7 +497,7 @@ void loadOne(Plugin* p) {
         p->statusText = "HorizonPlugin_Info failed";
     } else if (info->abi != HORIZON_ABI) {
         p->status = ui::PluginStatus::Failed;
-        p->statusText = "made for plugin ABI " + std::to_string(info->abi) + ", this host has " + std::to_string(HORIZON_ABI);
+        p->statusText = "made for plugin ABI " + std::to_string(info->abi) + ", Horizon Client has " + std::to_string(HORIZON_ABI);
     } else if (!info->id || p->id != info->id) {
         p->status = ui::PluginStatus::Failed;
         p->statusText = std::string("its id \"") + (info->id ? info->id : "") + "\" differs from its folder";
@@ -399,7 +523,11 @@ void loadOne(Plugin* p) {
                     entry->version.c_str(), p->version.c_str());
         }
     }
-    p->settings.load(state().dataRoot + L"settings\\" + wide(p->id) + L".json");
+    bool sharedSettings = false;
+    const std::wstring settingsPath = pluginSettingsPath(*p, &sharedSettings);
+    p->settings.setMerging(sharedSettings); // the shared setup: other games may write the same file
+    if (!p->settings.load(settingsPath)) logLine(HORIZON_LOG_WARN, p->id.c_str(), "settings file is not a JSON object, using defaults");
+    if (sharedSettings) logLine(HORIZON_LOG_INFO, p->id.c_str(), "settings from the shared setup");
     p->dataFolderW = state().dataRoot + L"data\\" + wide(p->id) + L"\\";
     ensureDir(p->dataFolderW);
     p->dataFolder = utf8(p->dataFolderW);
@@ -432,6 +560,7 @@ bool pluginGated(const Plugin* p) { return p->soloOnly && (!game().onlineKnown()
 
 std::vector<std::unique_ptr<Plugin>>& plugins() { return g_plugins; }
 const Profile& profile() { return g_profile; }
+const ModulesConfig& modulesConfig() { return g_modules; }
 
 Plugin* findPlugin(const std::string& id) {
     for (auto& p : g_plugins)
@@ -510,19 +639,41 @@ void pluginsLoadAll() {
     for (const auto& e : g_profile.plugins)
         if (e.enabled && !findPlugin(e.id)) HWARN("profile: \"%s\" is enabled but not installed in %s", e.id.c_str(), utf8(root).c_str());
 
+    // modules.json next to host.dll: module groups (menu) and first-start defaults over plugin.json
+    {
+        std::string mt;
+        if (readFile(s.baseFolder + L"modules.json", mt)) {
+            g_modules = parseModulesConfig(mt);
+            if (!g_modules.valid) HWARN("modules.json: %s (no groups)", g_modules.error.c_str());
+            else HLOG("modules.json: %zu group(s), %zu default(s)", g_modules.groups.size(), g_modules.defaults.size());
+        }
+    }
+    // An install from before 0.3.1 keeps the switches 0.3.0 gave it: modules whose default changed get that
+    // value written once (only where the player never switched them, never with a profile.json).
+    if (!g_profile.present && hostSetting("setup.defaults", "").empty()) {
+        if (!hostConfigNewInstall()) {
+            for (const auto& d : g_modules.previousDefaults) {
+                const std::string key = "plugin." + d.first + ".enabled";
+                if (findPlugin(d.first) && hostSetting(key, "").empty()) {
+                    hostSetSettingInt(key, d.second ? 1 : 0);
+                    logLine(HORIZON_LOG_INFO, d.first.c_str(), "kept %s as in 0.3.0 (the default changed in 0.3.1)", d.second ? "on" : "off");
+                }
+            }
+        }
+        hostSetSettingInt("setup.defaults", 2);
+    }
+
     for (auto& up : g_plugins) {
         Plugin* p = up.get();
         const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
         // default when the menu never switched it: on, unless plugin.json says enabled_by_default false (only
-        // without profile.json) or the old ESWC Autosave loader is chained (two autosaves = double saves)
-        bool localDefault = g_profile.present || p->manifest.enabledByDefault;
+        // without profile.json), "paired" (on once this game is paired with TM Horizon) or modules.json "defaults"
+        // says otherwise. The Autosave plugin checks for the standalone ESWC Autosave itself and pauses.
+        bool byDefault = p->manifest.enabledByDefault || (p->manifest.defaultWhenPaired && !hostSetting("bridge.key", "").empty());
+        if (const int over = g_modules.defaultFor(p->id); over >= 0) byDefault = over == 1;
+        const bool localDefault = g_profile.present || byDefault;
         std::string offWhy = "switched off in the menu";
-        if (p->id == "eswc-autosave" && s.chainIsAutosave) {
-            localDefault = false;
-            offWhy = "the old ESWC Autosave loader (dinput8.chain.dll) is active";
-        } else if (!g_profile.present && !p->manifest.enabledByDefault) {
-            offWhy = "off by default: switch it on to try it";
-        }
+        if (!g_profile.present && !byDefault) offWhy = "off by default: switch it on to try it";
         const bool local = hostSettingInt("plugin." + p->id + ".enabled", localDefault ? 1 : 0) != 0;
         p->enabled = inProfile && local;
         if (p->status == ui::PluginStatus::Failed) {
@@ -543,6 +694,29 @@ void pluginsLoadAll() {
             p->status = ui::PluginStatus::Off;
             p->statusText = "off in TM Horizon";
             logLine(HORIZON_LOG_INFO, p->id.c_str(), "not loaded: not enabled in profile.json");
+            if (p->id == "performance" && benchRequestWaiting()) {
+                logLine(HORIZON_LOG_WARN, p->id.c_str(), "a benchmark request is waiting, but TM Horizon has the module off");
+                HorizonToast t = {};
+                t.size = sizeof(t);
+                t.kind = HORIZON_TOAST_WARN;
+                t.title = "Benchmark wartet";
+                t.text = "Performance-Modul in TM Horizon einschalten.";
+                toastsPush("host", t);
+            }
+            continue;
+        }
+        if (!local && p->id == "performance" && benchRequestWaiting()) {
+            // tools/bench_series.ps1 (or TM Horizon) left a benchmark request: the module runs for this start only,
+            // the switch in the menu stays where it was
+            logLine(HORIZON_LOG_INFO, p->id.c_str(), "on for this start only: a benchmark request is waiting (data\\performance\\bench-request.json)");
+            HorizonToast t = {};
+            t.size = sizeof(t);
+            t.kind = HORIZON_TOAST_INFO;
+            t.title = "Benchmark wartet";
+            t.text = "Performance-Modul ist f\xC3\xBCr diesen Start eingeschaltet.";
+            toastsPush("host", t);
+            p->enabled = true;
+            loadOne(p);
             continue;
         }
         if (!local) {
@@ -578,6 +752,7 @@ void pluginSetEnabled(const std::string& id, bool on) {
     }
     // not loaded this start
     p->wanted = on;
+    p->loadQueued = false;
     const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
     if (on && !inProfile) {
         p->status = ui::PluginStatus::Off;
@@ -585,11 +760,81 @@ void pluginSetEnabled(const std::string& id, bool on) {
     } else if (state().safeMode) {
         p->status = ui::PluginStatus::Off;
         p->statusText = "safe mode";
+    } else if (!on) {
+        p->status = ui::PluginStatus::Off;
+        p->statusText = "switched off in the menu";
+    } else if (p->manifest.startupOnly) {
+        p->status = ui::PluginStatus::NeedsRestart;
+        p->statusText = "needs a restart: this module hooks the game at start";
+    } else if (p->module) {
+        // loaded once and refused (Init failed or crashed): a second LoadLibrary would only hand back the same DLL
+        p->status = ui::PluginStatus::Failed;
+        if (p->statusText.empty()) p->statusText = "could not start: try after a restart";
     } else {
-        p->status = on ? ui::PluginStatus::NeedsRestart : ui::PluginStatus::Off;
-        p->statusText = on ? "applies after a restart" : "switched off in the menu";
+        // load it now: at the start of the next frame, outside the ImGui frame (Init may draw or register panels)
+        p->loadQueued = true;
+        p->status = ui::PluginStatus::Off;
+        p->statusText = "loading...";
+        logLine(HORIZON_LOG_INFO, p->id.c_str(), "switched on in the menu: loading it now");
+        return;
     }
     logLine(HORIZON_LOG_INFO, p->id.c_str(), "switched %s in the menu (not loaded now: %s)", on ? "on" : "off", p->statusText.c_str());
+}
+
+bool pluginSwitchNeedsRestart(const Plugin* p) {
+    if (p->running) return !p->live;
+    if (p->status == ui::PluginStatus::Failed || p->status == ui::PluginStatus::WrongGame) return false;
+    return p->manifest.startupOnly && !state().safeMode;
+}
+
+namespace {
+// The state a freshly loaded plugin would have seen from game start: the game state and the running map,
+// sent only to it and only if it subscribed.
+void catchUp(Plugin* p) {
+    if (!p->running || !p->enabled || !p->onEvent) return;
+    HorizonEvent e = {};
+    e.size = sizeof(e);
+    e.is_online = isOnlineNow() ? 1u : 0u;
+    e.map = currentMap();
+    e.engine_race = game().engine(HORIZON_ENGINE_RACE);
+    e.engine_challenge = game().engine(HORIZON_ENGINE_CHALLENGE);
+    const uint32_t types[2] = {HORIZON_EVENT_GAME_STATE, HORIZON_EVENT_MAP_LOADED};
+    for (uint32_t type : types) {
+        if (!(p->eventMask & HORIZON_EVENT_BIT(type))) continue;
+        if (type == HORIZON_EVENT_MAP_LOADED && !e.map) continue;
+        if (pluginGated(p)) continue;
+        e.type = type;
+        e.game_state = static_cast<uint32_t>(game().gameState());
+        if (!sehEvent(p->onEvent, &e)) {
+            crashed(p, "OnEvent");
+            return;
+        }
+    }
+}
+} // namespace
+
+void pluginsLoadPending() {
+    for (auto& up : g_plugins) {
+        Plugin* p = up.get();
+        if (!p->loadQueued) continue;
+        p->loadQueued = false;
+        if (p->running || p->module) continue;
+        p->enabled = true;
+        p->wanted = -1;
+        p->status = ui::PluginStatus::Off;
+        p->statusText.clear();
+        const DWORD t0 = GetTickCount();
+        loadOne(p);
+        if (p->running) {
+            p->loadedLate = true;
+            logLine(HORIZON_LOG_INFO, p->id.c_str(), "loaded while the game runs (%lu ms, device %s)", GetTickCount() - t0,
+                    gameDevice() ? (p->hasDev ? "handed over" : "not used") : "not there yet");
+            catchUp(p);
+        } else {
+            p->enabled = false;
+            logLine(HORIZON_LOG_WARN, p->id.c_str(), "could not be loaded while the game runs: %s", p->statusText.c_str());
+        }
+    }
 }
 
 bool pluginSwitchPosition(const Plugin* p) {
@@ -598,18 +843,20 @@ bool pluginSwitchPosition(const Plugin* p) {
     return p->enabled;
 }
 
+void pluginCrashed(Plugin* p, const char* where) { crashed(p, where); }
+
 void pluginDrawMenu(const std::string& id) {
     Plugin* p = findPlugin(id);
     if (!p) return;
     if (!p->running || !p->drawMenu) return;
-    if (!sehVoid(p->drawMenu)) crashed(p, "DrawMenu");
+    drawPlugin(p, p->drawMenu, "DrawMenu");
 }
 
 void pluginsDrawOverlays() {
     for (auto& up : g_plugins) {
         Plugin* p = up.get();
         if (!p->running || !p->enabled || !p->drawOverlay || pluginGated(p)) continue;
-        if (!sehVoid(p->drawOverlay)) crashed(p, "DrawOverlay");
+        drawPlugin(p, p->drawOverlay, "DrawOverlay");
     }
 }
 
@@ -655,8 +902,10 @@ void pluginsShutdownAll() {
         Plugin* p = up.get();
         if (!p->running) continue;
         p->running = false;
+        bridgeDropPlugin(p);
         if (!sehVoid(p->shutdown)) logLine(HORIZON_LOG_ERROR, p->id.c_str(), "crashed in Shutdown");
         else logLine(HORIZON_LOG_INFO, p->id.c_str(), "shut down");
+        panelsRemovePlugin(p);
     }
     pluginsSaveSettings(true);
     // The DLLs stay loaded until the process ends: queued calls, threads and hooks of theirs may still point into them.
@@ -697,5 +946,22 @@ void pluginsPrePresent(void* device) {
             crashed(p, "pre_present");
     }
 }
+void pluginsPostPresent(void* device, long hr) {
+    for (auto& up : g_plugins) {
+        Plugin* p = up.get();
+        if (p->running && p->enabled && p->hasDev && p->dev.post_present &&
+            !sehDevHr(p->dev.post_present, p->dev.user, device, static_cast<int32_t>(hr)))
+            crashed(p, "post_present");
+    }
+}
 
 } // namespace horizon
+
+// Test program only (tests\host_test.cpp): the menu switch of a plugin, as a click on it would move it.
+// Refused (0) in a game. Game thread.
+extern "C" __declspec(dllexport) int __cdecl HorizonHost_TestSetPluginEnabled(const char* id, int on) {
+    using namespace horizon;
+    if (state().loader != LoaderKind::Test || !id || !findPlugin(id)) return 0;
+    pluginSetEnabled(id, on != 0);
+    return 1;
+}

@@ -36,7 +36,7 @@ if ($Mode -eq 'install') {
         }
     }
     Copy-Item $ours $target -Force
-    Write-Host "Horizon Host installed for $($exes -join ', '). Start the game; the menu opens with Insert." -ForegroundColor Green
+    Write-Host "Horizon Client installed for $($exes -join ', '). Start the game; the menu opens with Insert." -ForegroundColor Green
 } else {
     if (Test-Ours $target) { Remove-Item $target -Force }
     if ((Test-Path $chain) -and -not (Test-Path $target)) {

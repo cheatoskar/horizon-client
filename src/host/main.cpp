@@ -7,6 +7,8 @@
 #include <cstdio>
 
 #include "common/util.h"
+#include "host/bridge.h"
+#include "host/stats.h"
 #include "gamectl/gamectl.h"
 #include "reflect/reflect.h"
 
@@ -49,7 +51,7 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     }
     ensureDir(s.dataRoot);
     logOpen(s.dataRoot + L"logs\\", 20);
-    HLOG("---- Horizon Host %s (plugin ABI %d.%d, Dear ImGui %s) start via %s, thread %lu ----", kHostVersion, HORIZON_ABI,
+    HLOG("---- Horizon Client (host %s, plugin ABI %d.%d, Dear ImGui %s) start via %s, thread %lu ----", kHostVersion, HORIZON_ABI,
          HORIZON_ABI_MINOR, "1.91.5", loaderName(loader), GetCurrentThreadId());
     HLOG("folders: host %s, data %s", utf8(s.baseFolder).c_str(), utf8(s.dataRoot).c_str());
 
@@ -73,15 +75,22 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
             const std::string needle(reinterpret_cast<const char*>(mark), wcslen(mark) * sizeof(wchar_t));
             s.chainIsAutosave = bytes.find(needle) != std::string::npos;
             HLOG("chain: dinput8.chain.dll is loaded before the system dinput8 (%s)",
-                 s.chainIsAutosave ? "it is the ESWC Autosave loader: the Autosave plugin stays off unless switched on" : "another mod");
+                 s.chainIsAutosave ? "it is the standalone ESWC Autosave: the Autosave plugin pauses itself" : "another mod");
             if (s.chainIsAutosave)
-                s.notes.push_back("The old ESWC Autosave loader (dinput8.chain.dll) is active, so the Autosave plugin is off. "
-                                  "To use the plugin: switch it on here, close the game, delete dinput8.chain.dll.");
+                s.notes.push_back("The standalone ESWC Autosave (dinput8.chain.dll) is active, so the Autosave module is paused. "
+                                  "To use the module instead: close the game, delete dinput8.chain.dll.");
         }
     }
 
     // game info for plugins
     s.infoGameFolder = utf8(s.game.exeFolder);
+    // Forever keeps its user data (Tracks, Replays) in Documents\TrackMania\, also under TMLoader, unless it runs
+    // with /useexedir (then the game folder is used, and "" makes plugins fall back to it). Same rule as gamectl.
+    if ((s.game.game & HORIZON_GAME_FOREVER) && !wcsstr(GetCommandLineW(), L"/useexedir")) {
+        wchar_t docs[MAX_PATH] = {};
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs)))
+            s.infoUserFolder = utf8(std::wstring(docs) + L"\\TrackMania\\");
+    }
     s.info.size = sizeof(HorizonGameInfo);
     s.info.game = s.game.game;
     s.info.game_name = s.game.name.c_str();
@@ -100,11 +109,13 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     hostConfigLoad();
     pluginsReadProfile();
     if (s.safeMode) HLOG("safe mode: %s", s.safeWhy.c_str());
+    statsStart();
 
     GameAdapter* adapter = nullptr;
     switch (s.game.game) {
     case HORIZON_GAME_ESWC: adapter = makeEswcAdapter(); break;
     case HORIZON_GAME_SUNRISE: adapter = makeSunriseAdapter(); break;
+    case HORIZON_GAME_ORIGINAL: adapter = makeOriginalAdapter(); break;
     case HORIZON_GAME_TMNF:
     case HORIZON_GAME_TMUF: adapter = makeForeverAdapter(); break;
     default: adapter = makeNullAdapter(); break;
@@ -112,14 +123,17 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     setGame(adapter);
     adapter->install();
     eventsInit();
-    if (s.game.game == HORIZON_GAME_ESWC) {
-        if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base);
+    if (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) {
+        // HttpOpenRequestA import slot: ESWC 0x00aca340, Original 0x00a162d4 (PE import directory)
+        const uintptr_t slot = s.game.game == HORIZON_GAME_ESWC ? 0x00aca340 : 0x00a162d4;
+        if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base, slot);
         else HLOG("online: OnlineFix=0 in host.json, login left as it is");
     }
     if (adapter->usesDirectInputBlock()) dinputInstall();
     else HLOG("input: not blocked while the menu is open on this game (Competition Patch rule)");
     overlayCreateContext();
     d3dInstall();
+    bridgeStart();
     pluginsLoadAll();
     hostConfigSave(true);
     HLOG("ready: %zu plugin folder(s) found", pluginCount());

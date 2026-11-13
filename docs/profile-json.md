@@ -40,10 +40,28 @@ Encoding UTF-8, with or without BOM.
 | `safe_mode` | bool | no (false) | `true` = "Start without mods": the host runs, no plugin is loaded. Same as holding Shift at start. |
 | `menu_key` | string | no ("Insert") | Default key of the Horizon menu, e.g. `"Insert"`, `"Ctrl+Tab"`, `"F2"`. A key rebound in the menu's Hotkeys page wins over this value (stored in `settings\host.json`). |
 | `bar` | bool | no (true) | `false` hides the Horizon bar at the top screen edge. |
+| `stats_dir` | string | no | A folder TM Horizon reads for its statistics page. The host appends one JSON line per map load, start, respawn and finish to `<stats_dir>\<yyyy-mm>.jsonl` (see below). Missing: nothing is written. Safe mode writes nothing. |
 | `plugins` | array | no ([]) | The plugins this profile enables, see below. Missing or empty array: no plugin is loaded. |
 | `written_by`, `written_at` | string | no | For the log. |
 
 Unknown keys are ignored (the launcher can add fields without breaking older hosts).
+
+### Play events (`stats_dir`)
+
+One line per event, UTF-8, `\n` at the end, file opened for appending (a half-written last line after a crash is skipped by TM Horizon). `v` is the format (1), `t` Unix time in ms, `uid` the map uid.
+
+| `ev` | When | Other fields |
+|---|---|---|
+| `map` | MAP_LOADED | `name`, `author` and `env` when known |
+| `start` | RACE_START (each start and restart) | |
+| `respawn` | RESPAWN (ESWC/Sunrise; Forever has no respawn event) | `respawns`: count in this run |
+| `finish` | FINISH | `time_ms`, `respawns`, `local`, `pb`, `mode` (`solo`, `net`, `unknown`) |
+
+```
+{"v":1,"t":1794326446230,"ev":"finish","uid":"7GK45NEyMOif7S9jicImvQNz7gf","time_ms":45230,"respawns":0,"local":true,"pb":true,"mode":"solo"}
+```
+
+Replays and the editor's test drives write nothing. The uid comes from the map file when the host started the map; for a map picked in the game's menus it is read from the engine's id table (plain reads, no game code is called). If neither works the line has no `uid` and TM Horizon skips it. The writes run on a worker thread; the host never reads, rewrites or deletes these files.
 
 ### `plugins` entries
 
@@ -70,8 +88,15 @@ Duplicate ids: the first entry counts. Ids listed but not installed: a warning i
 Every folder in `horizon\plugins\` with a valid id is a plugin candidate and loads, unless
 
 - its `plugin.json` says `"enabled_by_default": false` (then it is off until switched on in the menu), or
-- it was switched off in the menu (stored in `settings\host.json`), or
-- it is `eswc-autosave` and the old ESWC Autosave loader is chained as `dinput8.chain.dll` (two autosaves would save every replay twice; the menu says how to switch).
+- it was switched off in the menu (stored in `settings\host.json`).
+
+Without a profile only the quiet modules start: the menu itself, Horizon Scripts (clock, map info), Autosave & Login-Fix and Controller hot-plug. WR Hunter, Input Display, Node Explorer, TMX Browser, TMX Upload and Horizon Performance ship with `"enabled_by_default": false`. A switch the player already set in the menu (`plugin.<id>.enabled` in `settings\host.json`) stays as it is.
+
+Switching a module on in the menu loads it right away (DLL, `Init`, the game's Direct3D device handed over through `set_device_callbacks`, its settings page appears). Only a module whose `plugin.json` says `"startup_only": true` (it must hook the game at start) still needs a restart; the menu says so on its switch.
+
+`eswc-autosave` ("Autosave & Login-Fix") is on by default and checks for the standalone ESWC Autosave itself (`eswc_autosave.dll` loaded, or `eswc_autosave.dll` and `dinput8.chain.dll` in the game folder). If it is there, the module loads but stays passive (no hook, no event, no hotkey) and shows "Eigenständiges ESWC Autosave gefunden – Modul pausiert" as a toast and on its page; the standalone files are never touched. The ESWC login fix (error 12157) is part of the host, not of the plugin: switch `OnlineFix` in settings\host.json (menu: General, "Login-Fix (Fehler 12157)", default on).
+
+`controller-hotplug` ("Controller fix") is on by default as well. It pauses itself the same way when the standalone `controller_hotplug.dll` is loaded in the game (toast "Controller fix paused: standalone active").
 
 The switches in the menu persist in `settings\host.json` and work the same with or without a profile.
 
@@ -80,7 +105,7 @@ The switches in the menu persist in `settings\host.json` and work the same with 
 | Path (legacy games: under `<game>\horizon\`; TMLoader: the product folder `...\products\Horizon Host\`) | Content |
 |---|---|
 | `logs\<yyyy-mm-dd_hh-mm-ss>.log` | one log per start, the last 20 are kept |
-| `settings\host.json` | menu switches (`plugin.<id>.enabled`), hotkeys (`hotkey.<owner>.<action>`), `bar`, `OnlineFix` |
+| `settings\host.json` | menu switches (`plugin.<id>.enabled`), hotkeys (`hotkey.<owner>.<action>`), `bar`, `OnlineFix`, menu size `ui.menu_size` (0 = auto, else 60/70/80/90 % of the screen), content scale `ui.content_scale` (0 = auto, else 80-125 %), widget layout `panel.<plugin>.<key>`, free windows `pwin.<plugin>` |
 | `settings\<plugin id>.json` | each plugin's own settings |
 | `data\<plugin id>\` | each plugin's data folder |
 

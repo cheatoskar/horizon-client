@@ -1,0 +1,8 @@
+# Map Info: name, author and medal times of the map that is running.
+name = "Map Info"
+author = "cheatoskar"
+version = "1.3.0"
+description = "Map name, author and medal times as a widget."
+games = ["eswc", "sunrise", "original", "tmnf", "tmuf"]
+online = "online-ok"
+permissions = ["ui", "settings", "read-game"]

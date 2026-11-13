@@ -15,7 +15,7 @@ if not exist build\test\imgui.lib (
   lib /nologo /OUT:build\test\imgui.lib build\test\imgui\*.obj || exit /b 1
 )
 
-cl /nologo /c /O2 /MT /W4 /WX /EHsc /std:c++17 /utf-8 %DEFS% /Isrc /Ithird_party\imgui /Fo"build\test\ui\\" src\host\ui\ui_style.cpp src\host\ui\ui_menu.cpp src\host\ui\ui_bar.cpp tests\ui_preview.cpp || exit /b 1
+cl /nologo /c /O2 /MT /W4 /WX /EHsc /std:c++17 /utf-8 %DEFS% /Iinclude /Isrc /Ithird_party\imgui /Fo"build\test\ui\\" src\host\ui\ui_style.cpp src\host\ui\ui_menu.cpp src\host\ui\ui_bar.cpp tests\ui_preview.cpp || exit /b 1
 link /nologo /MACHINE:X86 /OUT:build\test\ui_preview.exe build\test\ui\*.obj build\test\imgui.lib d3d9.lib user32.lib gdi32.lib ole32.lib windowscodecs.lib || exit /b 1
 build\test\ui_preview.exe
 exit /b %errorlevel%

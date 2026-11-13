@@ -1,0 +1,11 @@
+{
+  "id": "abi12",
+  "name": "ABI 1.2 test",
+  "version": "1.0.0",
+  "dll": "abi12.dll",
+  "games": ["eswc", "sunrise", "original", "tmnf", "tmuf"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Test only: built against the ABI 1.2 header.",
+  "author": "test"
+}

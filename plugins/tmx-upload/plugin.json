@@ -1,0 +1,20 @@
+{
+  "id": "tmx-upload",
+  "name": "TMX Upload",
+  "version": "0.1.0",
+  "dll": "tmx-upload.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "original",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Lets the TMX uploader pick up your new replays.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "enabled_by_default": "paired",
+  "ui": { "min_w": 360, "min_h": 260, "pref_w": 520, "pref_h": 420 }
+}

@@ -1,0 +1,195 @@
+// Headless test of the menu's input (no game, no Direct3D): with the menu open and its dim layer active,
+// the pointer must hit the menu panel (not the dim layer), a click must land on a menu control, and the
+// same must hold after the display size changed (Reset 640x480 -> 2560x1440).
+#include <windows.h>
+
+#ifdef small
+#undef small
+#endif
+#include "host/ui/ui.h"
+#include "imgui.h"
+#include "imgui_internal.h"
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+using namespace horizon::ui;
+
+namespace {
+
+int g_failed = 0;
+void check(bool ok, const char* what) {
+    std::printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
+    if (!ok) ++g_failed;
+}
+
+Model g_model;
+Actions g_actions;
+bool g_open = true;
+bool g_widget = false;
+int g_barToggles = 0;
+int g_saved = 0;
+float g_savedRect[4] = {};
+
+void frames(int n, ImVec2 mouse, int clickAt = -1) {
+    ImGuiIO& io = ImGui::GetIO();
+    for (int f = 0; f < n; ++f) {
+        io.DeltaTime = 1.0f / 30.0f;
+        io.AddMousePosEvent(mouse.x, mouse.y);
+        if (clickAt >= 0 && f == clickAt) io.AddMouseButtonEvent(0, true);
+        if (clickAt >= 0 && f == clickAt + 2) io.AddMouseButtonEvent(0, false);
+        ImGui::NewFrame();
+        if (g_open) drawMenu(g_model, g_actions, &g_open);
+        if (g_widget) { // a HUD widget outside the menu, drawn after it (as the host does)
+            ImGui::SetNextWindowPos(ImVec2(20, 20));
+            ImGui::SetNextWindowSize(ImVec2(120, 100));
+            ImGui::Begin("##widget", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::TextUnformatted("Inputs");
+            ImGui::End();
+        }
+        ImGui::EndFrame();
+    }
+}
+
+std::string hoveredRoot() {
+    ImGuiContext& c = *ImGui::GetCurrentContext();
+    return c.HoveredWindow && c.HoveredWindow->RootWindow ? c.HoveredWindow->RootWindow->Name : "";
+}
+
+} // namespace
+
+int main() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    setIconFontFile("assets/lucide-subset.ttf");
+    loadFonts(1.0f);
+    applyStyle(1.0f);
+    unsigned char* px;
+    int w, h;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    io.DisplaySize = ImVec2(640, 480); // the first device is made at 640x480 and Reset later
+    g_model.hostVersion = "0.1.0";
+    g_model.gameName = "TrackMania Sunrise";
+    g_model.menuHotkey = 1;
+    g_model.barEnabled = true;
+    g_model.menuKeySuggestions = {"Insert", "F2"};
+    g_actions.setBarEnabled = [](bool) { ++g_barToggles; };
+    g_actions.closeMenu = [] {};
+    showPage("general");
+
+    std::printf("menu input with the dim layer\n");
+    frames(40, ImVec2(320, 240));
+    check(g_open, "menu stays open");
+    check(hoveredRoot() == "##horizon_panel", "pointer over the menu hits the panel, not the dim layer (640x480)");
+
+    io.DisplaySize = ImVec2(2560, 1440); // Reset to the real size
+    frames(40, ImVec2(1280, 720));
+    check(hoveredRoot() == "##horizon_panel", "after the display change (2560x1440) the pointer still hits the panel");
+
+    io.DisplaySize = ImVec2(1600, 900);
+    g_model.menuSizePct = 75; // 1200 x 675 px, centred
+    frames(10, ImVec2(5, 5)); // outside the panel: dim only, the panel is not hovered
+    check(hoveredRoot() != "##horizon_panel", "pointer outside the panel does not hit the panel");
+    // click on the "Top bar" switch (right card, first row at 1600x900)
+    g_barToggles = 0;
+    frames(20, ImVec2(1314, 249), 10);
+    check(g_open, "menu still open after the click");
+    check(g_barToggles == 1, "a click on a menu switch lands (setBarEnabled called once)");
+    // the menu size follows the setting
+    {
+        ImGuiWindow* panel = ImGui::FindWindowByName("##horizon_panel");
+        check(panel && static_cast<int>(panel->Size.x) == 1200 && static_cast<int>(panel->Size.y) == 675, "menu size 75 % of 1600x900");
+    }
+    // a click on a widget (a window drawn above the dim layer) keeps the menu open; a click on the dim layer closes it
+    g_widget = true;
+    frames(10, ImVec2(60, 60));
+    frames(10, ImVec2(60, 60), 3);
+    check(g_open, "a click on a widget outside the menu keeps the menu open");
+    frames(10, ImVec2(60, 860), 3);
+    check(!g_open, "a click on the dim layer closes the menu");
+    g_widget = false;
+    g_open = true;
+
+    // free plugin windows (bar, left click): open, remember, clamp, close
+    std::printf("free plugin windows\n");
+    g_open = false;
+    PluginView pv;
+    pv.id = "demo";
+    pv.name = "Demo";
+    pv.status = PluginStatus::On;
+    pv.enabled = true;
+    pv.hasMenu = true;
+    pv.winX = 5000; // remembered off screen: must be clamped
+    pv.winY = 4000;
+    pv.winW = 600;
+    pv.winH = 400;
+    g_model.plugins.push_back(pv);
+    PluginView pv2 = pv;
+    pv2.id = "second";
+    pv2.name = "Second";
+    pv2.winX = pv2.winY = -1;
+    g_model.plugins.push_back(pv2);
+    static float s_roomW = 0.0f, s_availW = 0.0f;
+    g_actions.drawPluginPage = [](const std::string&) {
+        s_roomW = menuMetrics().pageW; // ui_metrics page_w while the plugin draws
+        s_availW = ImGui::GetContentRegionAvail().x;
+        ImGui::Button("Demo button");
+    };
+    g_actions.saveWindow = [](const std::string&, float x, float y, float w, float h) {
+        ++g_saved;
+        g_savedRect[0] = x; g_savedRect[1] = y; g_savedRect[2] = w; g_savedRect[3] = h;
+    };
+    auto drawWins = [&](int n, ImVec2 mouse) {
+        for (int f = 0; f < n; ++f) {
+            io.DeltaTime = 1.0f / 30.0f;
+            io.AddMousePosEvent(mouse.x, mouse.y);
+            ImGui::NewFrame();
+            drawPluginWindows(g_model, g_actions);
+            ImGui::EndFrame();
+        }
+    };
+    io.DisplaySize = ImVec2(1600, 900);
+    check(!anyPluginWindowOpen(), "no window open at the start");
+    togglePluginWindow("demo");
+    check(pluginWindowOpen("demo") && anyPluginWindowOpen(), "left click on the icon opens the window");
+    drawWins(5, ImVec2(10, 10));
+    check(g_saved >= 1 && g_savedRect[0] <= 1600 - 100 && g_savedRect[1] <= 900 - 40 && g_savedRect[0] >= 0, "remembered position off screen is clamped");
+    check(g_savedRect[2] == 600 && g_savedRect[3] == 400, "remembered size is kept");
+    check(s_roomW > 0.0f && s_roomW == s_availW && s_roomW < 600.0f, "page_w is the free window's room while it draws");
+    check(menuMetrics().pageW != s_roomW, "page_w is restored after the draw call");
+    togglePluginWindow("second");
+    drawWins(5, ImVec2(10, 10));
+    check(pluginWindowOpen("demo") && pluginWindowOpen("second"), "several windows can be open at once");
+    {
+        ImGuiWindow* w2 = ImGui::FindWindowByName("Second###hzwin.second");
+        check(w2 && static_cast<int>(w2->Size.x) == 820 && static_cast<int>(w2->Size.y) == 560, "a new window opens at the preferred size (820x560)");
+        check(w2 && w2->Pos.y >= 56.0f, "a new window opens below the top bar");
+    }
+    drawWins(5, ImVec2(g_savedRect[0] + 100, g_savedRect[1] + 100));
+    check(hoveredRoot().find("hzwin.") != std::string::npos, "pointer over a free window hits that window");
+    io.DisplaySize = ImVec2(640, 480); // Reset to a smaller display: windows are clamped again
+    g_saved = 0;
+    drawWins(5, ImVec2(10, 10));
+    check(g_saved >= 1 && g_savedRect[0] <= 640 - 100 && g_savedRect[2] <= 640, "after a Reset the windows are clamped to the screen");
+    {
+        // fitWindow: minimum, clamp to the screen below the top bar
+        const WinRect a = fitWindow(-1, -1, 100, 100, 480, 320, 1600, 900, 0);
+        check(a.w == 480 && a.h == 320 && a.y >= 56.0f, "fitWindow: never below the minimum");
+        const WinRect b = fitWindow(-1, -1, 820, 560, 480, 320, 640, 480, 0);
+        check(b.w == 640 && b.y + b.h <= 480.0f && b.y >= 56.0f && b.h < 480.0f, "fitWindow: 640x480 clamps below the top bar");
+        const WinRect c = fitWindow(5000, -50, 600, 400, 480, 320, 1920, 1080, 0);
+        check(c.x == 1920 - 600 && c.y >= 56.0f, "fitWindow: saved place off screen comes back");
+    }
+    togglePluginWindow("demo");
+    togglePluginWindow("second");
+    drawWins(3, ImVec2(10, 10));
+    check(!anyPluginWindowOpen(), "left click again closes them");
+
+    ImGui::DestroyContext();
+    std::printf(g_failed ? "FAILED\n" : "all ok\n");
+    return g_failed;
+}

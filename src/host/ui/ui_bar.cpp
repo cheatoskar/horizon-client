@@ -3,8 +3,11 @@
 #include "ui_common.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // BringWindowToDisplayFront
+#include "horizon_imgui.h" // HZ_ICON_*
 
 #include <cmath>
+#include <cstring>
 
 namespace horizon {
 namespace ui {
@@ -86,15 +89,34 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     const float btnH = 32.0f * s;
     ImFont* bf = F(f.bodyBold);
     const bool hasOnline = model.online;
+    const char* menuLabel = HZ_ICON_MENU_U8 "  Menu";
+    const char* logLabel = HZ_ICON_SCROLL_TEXT_U8 "  Log";
+    const char* layoutLabel = HZ_ICON_LAYOUT_GRID_U8 "  Layout";
+    const char* launcherLabel = "TM Horizon  " HZ_ICON_EXTERNAL_LINK_U8;
     const float chipH = 26.0f * s;
     float fixedW = pad + 28.0f * s + 12.0f * s;                       // logo
-    float tail = 12.0f * s + 1.0f * s + 12.0f * s;                    // separator
-    tail += buttonWidth(bf, "Menu") + gap + buttonWidth(bf, "Log") + gap + buttonWidth(bf, "TM Horizon");
-    if (hasOnline) tail += gap + chipWidth(f.small, "Online", true);
-    tail += pad;
-    size_t maxIcons = model.plugins.size();
-    const float room = io.DisplaySize.x - 32.0f * s - fixedW - tail;
-    while (maxIcons > 0 && static_cast<float>(maxIcons) * (iconD + gap) - gap > room) --maxIcons;
+    float tail = 0.0f;
+    size_t maxIcons = 0;
+    bool compact = false;
+    // Small window (640x480): when the module icons do not all fit, the buttons shrink to their icons
+    // (names in the tooltips), so Menu, Layout and Log always stay on screen.
+    for (int pass = 0; pass < 2; ++pass) {
+        if (pass == 1) {
+            if (maxIcons == model.plugins.size()) break;
+            compact = true;
+            menuLabel = HZ_ICON_MENU_U8;
+            logLabel = HZ_ICON_SCROLL_TEXT_U8;
+            layoutLabel = HZ_ICON_LAYOUT_GRID_U8;
+            launcherLabel = HZ_ICON_EXTERNAL_LINK_U8;
+        }
+        tail = 12.0f * s + 1.0f * s + 12.0f * s; // separator
+        tail += buttonWidth(bf, menuLabel) + gap + buttonWidth(bf, layoutLabel) + gap + buttonWidth(bf, logLabel) + gap + buttonWidth(bf, launcherLabel);
+        if (hasOnline) tail += gap + (compact ? chipH : chipWidth(f.small, "Game: online", true));
+        tail += pad;
+        maxIcons = model.plugins.size();
+        const float room = io.DisplaySize.x - 32.0f * s - fixedW - tail;
+        while (maxIcons > 0 && static_cast<float>(maxIcons) * (iconD + gap) - gap > room) --maxIcons;
+    }
     const float iconsW = maxIcons > 0 ? static_cast<float>(maxIcons) * (iconD + gap) - gap : 0.0f;
     const float w = fixedW + iconsW + tail;
 
@@ -110,6 +132,8 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
                                    ImGuiWindowFlags_NoBackground;
     ImGui::Begin("##horizon_bar", nullptr, flags);
     ImGui::PopStyleVar(2);
+    // above popped-out modules and free windows: Menu, Layout and Log are never covered
+    ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float r = t.radius * s;
@@ -161,7 +185,7 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
         dl->AddCircleFilled(dc, 6.0f * s, U(t.bg2), 16);
         dl->AddCircleFilled(dc, 4.5f * s, U(dot), 16);
 
-        if (clicked && canToggle(p.status) && actions.setPluginEnabled) actions.setPluginEnabled(p.id, !p.enabled);
+        if (clicked) togglePluginWindow(p.id); // free window with the plugin's page; on/off is a switch inside it
         if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
             showPluginPage(p.id);
             if (openMenu) *openMenu = true;
@@ -169,8 +193,7 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
         if (hov) {
             std::string tip = p.name + ": " + statusLabel(p.status, false);
             if (!p.statusText.empty() && p.status != PluginStatus::NeedsRestart) tip += "\n" + p.statusText;
-            if (!p.liveToggle && canToggle(p.status)) tip += "\nApplies after a restart.";
-            if (p.hasMenu) tip += "\nRight-click for settings.";
+            tip += "\nLinksklick: Fenster \xC2\xB7 Rechtsklick: Einstellungen";
             ImGui::SetTooltip("%s", tip.c_str());
         }
         ImGui::PopID();
@@ -183,18 +206,39 @@ bool drawBar(const Model& model, const Actions& actions, bool mouseAtTop, bool m
     x += 1.0f * s + 12.0f * s;
 
     const float by = midY - btnH * 0.5f;
-    if (pillButton(dl, "##menu", ImVec2(x, by), btnH, bf, "Menu", true) && openMenu) *openMenu = true;
-    x += buttonWidth(bf, "Menu") + gap;
-    if (pillButton(dl, "##log", ImVec2(x, by), btnH, bf, "Log", false)) {
+    if (pillButton(dl, "##menu", ImVec2(x, by), btnH, bf, menuLabel, true) && openMenu) *openMenu = true;
+    if (compact && ImGui::IsItemHovered()) ImGui::SetTooltip("Menu");
+    x += buttonWidth(bf, menuLabel) + gap;
+    if (pillButton(dl, "##layout", ImVec2(x, by), btnH, bf, layoutLabel, false) && model.layoutAllowed && actions.toggleLayout) actions.toggleLayout();
+    if (ImGui::IsItemHovered()) {
+        std::string tip = "Edit layout";
+        if (!model.layoutKey.empty()) tip += " (" + model.layoutKey + ")";
+        if (!model.layoutAllowed) tip += "\n" + model.layoutWhy;
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
+    x += buttonWidth(bf, layoutLabel) + gap;
+    if (pillButton(dl, "##log", ImVec2(x, by), btnH, bf, logLabel, false)) {
         showPage("log");
         if (openMenu) *openMenu = true;
     }
-    x += buttonWidth(bf, "Log") + gap;
-    if (pillButton(dl, "##launcher", ImVec2(x, by), btnH, bf, "TM Horizon", false) && actions.openLauncher) {
+    if (compact && ImGui::IsItemHovered()) ImGui::SetTooltip("Log");
+    x += buttonWidth(bf, logLabel) + gap;
+    if (pillButton(dl, "##launcher", ImVec2(x, by), btnH, bf, launcherLabel, false) && actions.openLauncher) {
         actions.openLauncher();
     }
-    x += buttonWidth(bf, "TM Horizon") + gap;
-    if (hasOnline) drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, "Online", t.ok, true);
+    if (compact && ImGui::IsItemHovered()) ImGui::SetTooltip("TM Horizon");
+    x += buttonWidth(bf, launcherLabel) + gap;
+    if (hasOnline) {
+        if (compact) { // a green dot, the text in the tooltip
+            const ImVec2 c(x + chipH * 0.5f, midY);
+            dl->AddCircleFilled(c, chipH * 0.5f, W(0.06f), 24);
+            dl->AddCircleFilled(c, 4.0f * s, U(t.ok), 16);
+            if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(ImVec2(x, midY - chipH * 0.5f), ImVec2(x + chipH, midY + chipH * 0.5f)))
+                ImGui::SetTooltip("Game: online");
+        } else {
+            drawChip(dl, ImVec2(x, midY - chipH * 0.5f), chipH, f.small, "Game: online", t.ok, true);
+        }
+    }
 
     ImGui::End();
 

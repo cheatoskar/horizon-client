@@ -11,7 +11,8 @@
 
 namespace horizon {
 
-constexpr const char* kHostVersion = "0.1.0";
+constexpr const char* kHostVersion = "0.3.1";
+constexpr unsigned kHostVersionNum = (0u << 16) | (3u << 8) | 1u; // HorizonHost_Version: (major<<16)|(minor<<8)|patch
 
 enum class LoaderKind : uint32_t { Legacy = 1, TMLoader = 2, Test = 3 };
 
@@ -88,11 +89,18 @@ public:
     virtual void* engine(uint32_t /*which*/) { return nullptr; }
     virtual HorizonResult playMapFile(const char* /*path*/, uint32_t /*flags*/) { return HORIZON_ERR_NOT_SUPPORTED; }
     virtual HorizonResult returnToMenu() { return HORIZON_ERR_NOT_SUPPORTED; }
+    // save_replay: the run's replay without dialogs. stem "" = the game's default name. pathOut: the file
+    // written (UTF-8), why: a short reason when not OK. Game thread.
+    virtual HorizonResult saveReplay(const std::wstring& /*stem*/, std::string* /*pathOut*/, std::string* why) {
+        if (why) *why = "not supported for this game";
+        return HORIZON_ERR_NOT_SUPPORTED;
+    }
     virtual bool usesDirectInputBlock() const { return true; } // false on Forever (Competition Patch rule)
     virtual std::string status() const { return std::string(); } // one line for the About page
 };
 GameAdapter* makeEswcAdapter();
 GameAdapter* makeSunriseAdapter();
+GameAdapter* makeOriginalAdapter();
 GameAdapter* makeForeverAdapter();
 GameAdapter* makeNullAdapter();
 GameAdapter& game();
@@ -121,6 +129,7 @@ void pluginsAdjustParams(void* params);
 void pluginsBeforeReset(void* device);
 void pluginsAfterReset(void* device, long hr);
 void pluginsPrePresent(void* device);
+void pluginsPostPresent(void* device, long hr);
 void pluginsDeliver(const HorizonEvent& e);
 void pluginsRunQueued();              // RunOnGameThread queue (end of frame)
 void pluginsSaveSettings(bool force); // dirty settings to disk
@@ -133,6 +142,26 @@ int hostSettingInt(const std::string& key, int fallback);
 void hostSetSetting(const std::string& key, const std::string& value);
 void hostSetSettingInt(const std::string& key, int value);
 void hostConfigSave(bool force);
+// No settings\host.json existed at this start (a new install): first-start defaults apply.
+bool hostConfigNewInstall();
+// The shared setup (docs/shared-setup.md): one setup for every game install of this Windows user.
+struct Plugin;
+// settings\<id>.json, or the shared folder's <id>.json while the shared setup is on (modules made for every game).
+std::wstring pluginSettingsPath(const Plugin& p, bool* shared);
+struct SetupStatus {
+    bool available = false;     // a shared folder exists for this user (not in the test program)
+    bool wanted = false;        // the switch (setup.shared)
+    bool active = false;        // what this start uses
+    bool restartNeeded = false; // switched, copied, reset or imported since the start
+    std::wstring folder;        // ...\Horizon Client\ (shared\, setups\)
+    std::vector<std::string> exports; // setups\*.json, newest first
+};
+SetupStatus setupStatus();
+bool setupSetShared(bool on);  // applies after a restart; the first switch-on copies this game's setup
+bool setupCopyFromGame();      // this game's own setup becomes the shared one
+bool setupReset();             // the shared setup back to the defaults
+bool setupExport(std::string& fileName, std::string& err); // setups\setup-<time>.json
+bool setupImport(const std::string& fileName, std::string& err);
 // Hotkeys: owner "host" or a plugin id.
 int hotkeyAdd(const std::string& owner, const std::string& ownerName, const std::string& action, const std::string& name,
               const char* defaultKey, void (*callback)(void*), void* user);
@@ -158,16 +187,33 @@ bool keyCaptureActive();
 void d3dInstall();
 void overlayCreateContext();
 void texturesLoad(); // logo, plugin and other-mod icons (textures.cpp), after the device exists
+void texturesReloadPluginIcons(); // after the icon style changed (host.json "ui.icon_alt"), between frames
 void* gameDevice();
 void overlayDeviceCreated(void* device, HWND window, void* params);
+HWND overlayWindow(); // the game window the device was made for (nullptr before)
 void overlayBeforeReset();
 void overlayAfterReset(bool ok);
 void overlayFrame(void* device); // in Present, before the call on
+// An exception left overlayFrame (host code; plugin calls are caught one by one). Closes the menu and
+// layout mode, gives the game its keyboard and mouse back and repairs the ImGui frame. giveUp: the third
+// time; the Horizon UI stays off until the next start and takes no input.
+void overlayAfterFault(bool giveUp);
+// Runs a guarded plugin draw (call returns false when the plugin threw). When it threw, the ImGui stacks
+// go back to how they were before the call (open windows, IDs, style, fonts). Game thread.
+bool imguiGuardedCall(bool (*call)(void*), void* ctx);
 bool menuOpen();
 void setMenuOpen(bool open, const char* why);
+// ABI minor 3 open_page: menu on the plugin's page (and panel tab), or closed again when it already shows it.
+HorizonResult menuOpenPluginPage(const std::string& pluginId, const std::string& panelKey);
 void* imguiContext();
 void imguiAllocators(void** allocFn, void** freeFn, void** user);
 const HorizonStyle* hostStyle();
+const HorizonUiMetrics* hostUiMetrics(); // ABI minor 4
+// Layout mode ("Edit layout"): every widget gets a frame to move, resize, minimise and hide.
+bool layoutModeOn();
+// why: a short reason when it may not start now (TMNF/TMUF during a race).
+bool layoutAllowed(std::string* why);
+void setLayoutMode(bool on, const char* why);
 uint64_t createTextureRgba(uint32_t w, uint32_t h, const void* rgba); // game thread
 void releaseTexture(uint64_t id);
 
@@ -175,6 +221,7 @@ void releaseTexture(uint64_t id);
 void dinputInstall();
 // While true, the game's DirectInput keyboard/mouse reads return nothing.
 void dinputSetBlocked(bool blocked);
+bool dinputBlocked();
 void dinputHoldUntilReleased(int vk); // keeps one key away from the game until it is released
 
 // ------------------------------------------------------------------ helpers (inlinehook.cpp)
@@ -192,7 +239,8 @@ bool readPointer(const void* address, void** out);
 void describeAddress(const void* address, char* out, size_t size);
 bool patchImport(HMODULE module, const char* dll, const char* function, void* replacement, void** originalOut);
 
-// ------------------------------------------------------------------ ESWC online fix (onlinefix.cpp)
-void onlineFixInstall(uintptr_t exeBase);
+// ------------------------------------------------------------------ online fix, ESWC and Original (onlinefix.cpp)
+// iatSlot: link address of the exe's HttpOpenRequestA import slot.
+void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot);
 
 } // namespace horizon

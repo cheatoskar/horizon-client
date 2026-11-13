@@ -1,0 +1,20 @@
+{
+  "id": "performance",
+  "name": "Horizon Performance",
+  "version": "0.1.0",
+  "dll": "performance.dll",
+  "games": [
+    "eswc",
+    "sunrise",
+    "original",
+    "tmnf",
+    "tmuf"
+  ],
+  "online": "online-ok",
+  "abi": 1,
+  "enabled_by_default": false,
+  "description": "Frame times, benchmark and frame limiter.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "ui": { "min_w": 420, "min_h": 320, "pref_w": 640, "pref_h": 620 }
+}

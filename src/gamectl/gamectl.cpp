@@ -7,7 +7,10 @@
 #include <string.h>
 #include <wchar.h>
 
+#include <vector>
+
 #include "core/gbx.h"
+#include "gamectl/gamectl_pick.h"
 #include "reflect/reflect.h"
 
 namespace gamectl {
@@ -15,6 +18,16 @@ namespace {
 
 // What the "Play Track > Solo" path and the race quit button touch, per exe. Found with Ghidra and the
 // engine's reflection tables; see tm-modding-knowledge games/tmn-eswc, games/tm-sunrise, games/tmnf, games/tmuf.
+//
+// Solo play on ESWC/Sunrise/Original (the game's own path, checked statically 2026-11-12): Play > "Play Track"
+// (CTrackManiaMenus::MenuPlayChallenge_Solo) sets ChallengeType 3 and the menu mode, then opens the track browser.
+// Activating a map there (ESWC 0x6a01e0, Sunrise 0x7bbf90, Original 0x7baaa0, the browser's event-3 handler) stores
+// the info in SelectedChallengeInfo and sets the menu result to 1. The menu fiber (ESWC 0x7887b0, Sunrise 0x87b060)
+// returns that result to the app loop (ESWC 0x6e65f0, Sunrise 0x800070); result 1 starts the play fiber (ESWC
+// 0x6eb540), which loads SelectedChallengeInfo's file (info+0x14, class 0x24003000). The result is read the same
+// way on every menu page, so the main menu works too. The chosen-infos buffer is only read for ChallengeType 10
+// (playlists), and MenuChooseChallenge_OnOk's ESWC result 0xf (ChallengeType not 10/11) is not handled by the app
+// loop at all: it goes back to the menu and reopens the page of the menu mode (0x13 = the track browser).
 struct Spec {
     Game game;
     const char* name;
@@ -26,38 +39,73 @@ struct Spec {
     bool foldersEmbedded;    // folders object inside the app (Forever) instead of a pointer field
     size_t appFolders;
     uintptr_t sortByName;    // CGameCtnChallengeInfo::SortByName (cdecl, no args)
-    uintptr_t gameMalloc, gameFree;
     size_t appChallengeType; // CTrackMania.ChallengeType (reflection name), set to 3 like MenuPlayChallenge_Solo
     size_t appMenus;         // CTrackMania.MenuManager
     size_t menusApp;         // back pointer menus -> app
-    size_t menusChosen;
-    bool chosenIsBuffer;     // ESWC/Sunrise: {count, items, cap} of chosen infos; Forever: one info pointer
-    size_t menusMode;        // 0 = none
+    size_t menusSelected;    // CTrackManiaMenus.SelectedChallengeInfo (Forever: the info LaunchManiaCodeAction sets)
+    size_t menusMode;        // menu mode = page shown when the menu fiber starts again; 0 = none
     int modeValue;
-    size_t menusResult;
-    int resultValue;
+    size_t menusResult;      // menu result the menu fiber hands to the app loop
+    int resultValue;         // 1 = play SelectedChallengeInfo
     size_t appRace;          // current race (CTrackMania.Races in ESWC/Sunrise, SetRace field in Forever)
     uintptr_t quitButton;    // CTrackManiaRace::ButtonQuitOnClick (thiscall, no args)
     const wchar_t* tracksRoot; // L"exe" = <exe dir>\GameData, L"docs" = Documents\TrackMania (Forever default)
 };
 
 const Spec kSpecs[] = {
-    // TMN ESWC unofficial 1.80, sha256 983bd127...; MenuPlayChallenge_Solo 0x69f8b0, MenuChooseChallenge_OnOk 0x6a0480
+    // TMN ESWC unofficial 1.80, sha256 983bd127...; MenuPlayChallenge_Solo 0x69f8b0 (mode 0x13), browser play 0x6a01e0
     {Game::Eswc, "TrackMania Nations ESWC 1.80", 0x5ce7272f, 0x00caee50, 0x00caed34, 0x00703990, 3, false, 0x1f0,
-     0x00703b00, 0x004044b0, 0x004045b0, 0x2e8, 0x104, 0x374, 0x3a4, true, 0x3e4, 0x13, 0x2e4, 0xf, 0x2f0,
-     0x006db380, L"exe"},
-    // TM Sunrise Win10 repack, sha256 e59dfc7e...; MenuPlayChallenge_Solo 0x7bb660, MenuPlayChallenge_OnOk 0x7bc230
+     0x00703b00, 0x2e8, 0x104, 0x374, 0x47c, 0x3e4, 0x13, 0x2e4, 1, 0x2f0, 0x006db380, L"exe"},
+    // TM Sunrise Win10 repack, sha256 e59dfc7e...; MenuPlayChallenge_Solo 0x7bb660 (mode 2), browser play 0x7bbf90
     {Game::Sunrise, "TrackMania Sunrise (Win10 repack)", 0x5cc8f0cf, 0x00bcce50, 0x00bcd1e8, 0x0085fce0, 3, false,
-     0x1b8, 0x0085fe50, 0x00402cc0, 0x00402b90, 0x2a0, 0x104, 0x2e8, 0x318, true, 0x354, 2, 0x258, 1, 0x2a8,
-     0x007ed580, L"exe"},
+     0x1b8, 0x0085fe50, 0x2a0, 0x104, 0x2e8, 0x3d4, 0x354, 2, 0x258, 1, 0x2a8, 0x007ed580, L"exe"},
+    // TM Original, Online Patch v2 community exe, sha256 75e129d7...: Sunrise's code with the same menu, app and race
+    // offsets (compared instruction by instruction); MenuPlayChallenge_Solo 0x7ba170, browser play 0x7baaa0,
+    // SetChallengeType 0x823370 (trackmania-internals games/tm-original). Static, not run yet.
+    {Game::Original, "TrackMania Original (Online Patch v2)", 0x5d337477, 0x00bc8084, 0x00bc841c, 0x0085e0a0, 3, false,
+     0x1b8, 0x0085e210, 0x2a0, 0x104, 0x2e8, 0x3d4, 0x354, 2, 0x258, 1, 0x2a8, 0x007ebb00, L"exe"},
     // TMNF (map symbols): CTrackManiaMenus::LaunchManiaCodeAction 0x4fb950 plays a file this way
-    // (menus+0x13c = info, SetChallengeType(3), menus+0x704 = 1)
+    // (menus+0x13c = info, SetChallengeType(3), menus+0x704 = 1). The host plays Forever maps through
+    // src/host/game/forever.cpp now; the fields stay for state() and returnToMenu().
     {Game::Tmnf, "TrackMania Nations Forever", 0x4d431494, 0x00d68c44, 0x00d69120, 0x005cf100, 2, true, 0x148,
-     0x005cdde0, 0, 0, 0x418, 0x194, 0x784, 0x13c, false, 0, 0, 0x704, 1, 0x454, 0x0047b290, L"docs"},
+     0x005cdde0, 0x418, 0x194, 0x784, 0x13c, 0, 0, 0x704, 1, 0x454, 0x0047b290, L"docs"},
     // TMUF: same classes and offsets as TMNF (reflection tables identical), functions ported with fnmatch
     {Game::Tmuf, "TrackMania United Forever", 0x4b9e8add, 0x00d6a2a4, 0x00d6a780, 0x005cf2a0, 2, true, 0x148,
-     0x005cdf70, 0, 0, 0x418, 0x194, 0x784, 0x13c, false, 0, 0, 0x704, 1, 0x454, 0x0047b0e0, L"docs"},
+     0x005cdf70, 0x418, 0x194, 0x784, 0x13c, 0, 0, 0x704, 1, 0x454, 0x0047b0e0, L"docs"},
 };
+
+// Leaving a solo race on ESWC, Sunrise and Original (static, 2026-11-13; TMNF/TMUF keep ButtonQuitOnClick).
+// CTrackManiaRace::ButtonQuitOnClick only sets the race's result (race+0x14, setter ESWC 0x71e040) to 2, and the app
+// loop (ESWC 0x6ed9f2) handles result 2 of a ChallengeType 3 race by going back to the CTrackManiaEditorPuzzle that
+// every solo race runs under (0x6eedc8 -> 0x6ebd30): the player lands in the editor and the menu only comes after he
+// leaves it. Esc in a race (the race's input handler, ESWC 0x6d7147, Sunrise 0x7ea1a2, Original 0x7e8802) sets result
+// 0xb (ESWC) / 0xa (Sunrise, Original) instead; the app answers with CTrackManiaMenus::DialogQuitRace, and its Quit
+// button (DialogQuitRace_OnQuit: hide the dialog layer, dialog result 0x10 / 0xe) makes the app leave to the menu
+// (ESWC 0x6edd9f -> 0x6f0770). returnToMenu() does the same: result = Esc, and once the dialog layer is up, the
+// Quit button's own handler.
+struct QuitSpec {
+    Game game;
+    uint32_t escResult;       // race result of Esc
+    uintptr_t dialogQuit;     // CTrackManiaMenus::DialogQuitRace_OnQuit (thiscall, menus)
+    size_t menusDialogResult; // the menus' dialog result, written by OnQuit
+    size_t menusDialogLayer;  // the menus' dialog layer; layer+0x74 != 0 while it is shown (ESWC 0x716dd0)
+};
+const QuitSpec kQuitSpecs[] = {
+    {Game::Eswc, 0xb, 0x0074d4a0, 0x2e0, 0x37c},     // reflection: DialogQuitRace_OnQuit 0x74d4a0
+    {Game::Sunrise, 0xa, 0x008437f0, 0x254, 0x2f0},  // reflection: DialogQuitRace_OnQuit 0x8437f0
+    {Game::Original, 0xa, 0x00841b80, 0x254, 0x2f0}, // same bytes as Sunrise's (pattern), no reflection dump
+};
+constexpr size_t kRaceResult = 0x14;
+constexpr size_t kLayerShown = 0x74;
+
+// CConstructionChallengeInfo+0x14: the info's CSystemFidFile (Build 0x702a60 / 0x85ede0 / 0x85d1a0 look infos up by
+// it, RefreshFromDisk drops infos whose file is gone, the play fiber loads it). Same in ESWC, Sunrise, Original.
+constexpr size_t kInfoFid = 0x14;
+// CSystemFidFile.FileName {u32 length, char* text} (reflection offset 88 in ESWC and Sunrise; the same {length,
+// text} layout as the info's Password at +0x6c that the play fiber reads).
+constexpr int kFidFileNameDefault = 0x58;
+// CConstructionChallengeInfo.Kind (reflection, logged only; 7 survives a rescan without a file).
+constexpr int kInfoKindDefault = 0x60;
 
 struct Buffer {
     uint32_t count;
@@ -70,6 +118,10 @@ Game g_game = Game::Unknown;
 LogFn g_log = nullptr;
 wchar_t g_lastPath[MAX_PATH] = {};
 bool g_experimental = false;
+// Image base minus the link base 0x400000: TMLoader's TmForever 2.12.0 is relocated (ASLR), 2.12.0-compat and the
+// original exes load at 0x400000 (delta 0). Every link address of a Spec is moved by it.
+uintptr_t g_delta = 0;
+inline uintptr_t A(uintptr_t link) { return link + g_delta; }
 
 void logf(const char* fmt, ...) {
     if (!g_log) return;
@@ -92,7 +144,7 @@ template <typename T> bool readAt(const void* base, size_t off, T* out) {
 
 void* appPtr() {
     void* app = nullptr;
-    if (!g_spec || !readAt(reinterpret_cast<const void*>(g_spec->app), 0, &app)) return nullptr;
+    if (!g_spec || !readAt(reinterpret_cast<const void*>(A(g_spec->app)), 0, &app)) return nullptr;
     return app;
 }
 
@@ -105,7 +157,17 @@ void* fieldOfKind(void* obj, size_t hint, const char* kind) {
         if (off == hint) continue;
         if (readAt(obj, off, &p) && p && reinterpret_cast<uintptr_t>(p) > 0x10000 &&
             reflect::isKindOf(reflect::classOfObject(p), kind)) {
-            if (hint) logf("gamectl: %s found at +0x%X instead of +0x%X", kind, (unsigned)off, (unsigned)hint);
+            // once per class and place (tick() reads the race every frame while leaving)
+            static char logged[8][48];
+            static int nLogged = 0;
+            char key[48];
+            _snprintf_s(key, _TRUNCATE, "%s+%X", kind, (unsigned)off);
+            bool seen = false;
+            for (int i = 0; i < nLogged && !seen; i++) seen = strcmp(logged[i], key) == 0;
+            if (hint && !seen) {
+                logf("gamectl: %s found at +0x%X instead of +0x%X", kind, (unsigned)off, (unsigned)hint);
+                if (nLogged < 8) strcpy_s(logged[nLogged++], key);
+            }
             return p;
         }
     }
@@ -161,57 +223,126 @@ bool makeDirs(const wchar_t* dir) {
     return GetFileAttributesW(dir) != INVALID_FILE_ATTRIBUTES;
 }
 
-int refreshAndFindNew(void* app, void** newInfo) {
+// The info list as raw pointers (SEH-guarded: the game owns the buffer). -1 on an exception.
+int infoCount() {
     __try {
-        Buffer* infos = reinterpret_cast<Buffer*>(g_spec->infos);
-        const uint32_t before = infos->count;
-        void** snapshot = static_cast<void**>(HeapAlloc(GetProcessHeap(), 0, (before + 1) * sizeof(void*)));
-        if (!snapshot) return -1;
-        for (uint32_t i = 0; i < before; i++) snapshot[i] = infos->items[i];
-        void* folders = g_spec->foldersEmbedded ? static_cast<char*>(app) + g_spec->appFolders
-                                                 : *reinterpret_cast<void**>(static_cast<char*>(app) + g_spec->appFolders);
-        if (g_spec->refreshArgs == 3)
-            reinterpret_cast<void(__cdecl*)(void*, int, int)>(g_spec->refresh)(folders, 0, 0);
-        else
-            reinterpret_cast<void(__cdecl*)(void*, void*)>(g_spec->refresh)(folders, nullptr);
-        reinterpret_cast<void(__cdecl*)()>(g_spec->sortByName)();
-        int added = 0;
-        for (uint32_t i = 0; i < infos->count; i++) {
-            void* p = infos->items[i];
-            bool old = false;
-            for (uint32_t j = 0; j < before && !old; j++) old = snapshot[j] == p;
-            if (!old) {
-                added++;
-                *newInfo = p;
-            }
-        }
-        logf("gamectl: challenge infos %u -> %u, %d new", before, infos->count, added);
-        HeapFree(GetProcessHeap(), 0, snapshot);
-        return added;
+        return static_cast<int>(reinterpret_cast<Buffer*>(A(g_spec->infos))->count);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        logf("gamectl: exception 0x%08X while rescanning the track folders", GetExceptionCode());
         return -1;
     }
 }
+int copyInfos(void** out, uint32_t cap) {
+    __try {
+        Buffer* infos = reinterpret_cast<Buffer*>(A(g_spec->infos));
+        const uint32_t n = infos->count < cap ? infos->count : cap;
+        for (uint32_t i = 0; i < n; i++) out[i] = infos->items[i];
+        return static_cast<int>(n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+bool snapshotInfos(std::vector<void*>& v) {
+    const int n = infoCount();
+    if (n < 0 || n > 1000000) return false;
+    v.assign(static_cast<size_t>(n) + 64, nullptr);
+    const int got = copyInfos(v.data(), static_cast<uint32_t>(v.size()));
+    if (got < 0) return false;
+    v.resize(static_cast<size_t>(got));
+    return true;
+}
 
+// RefreshFromDisk + SortByName, the game's own rescan of its track folders. One call per play_map_file.
+bool refreshInfos(void* app) {
+    __try {
+        void* folders = g_spec->foldersEmbedded ? static_cast<char*>(app) + g_spec->appFolders
+                                                 : *reinterpret_cast<void**>(static_cast<char*>(app) + g_spec->appFolders);
+        if (g_spec->refreshArgs == 3)
+            reinterpret_cast<void(__cdecl*)(void*, int, int)>(A(g_spec->refresh))(folders, 0, 0);
+        else
+            reinterpret_cast<void(__cdecl*)(void*, void*)>(A(g_spec->refresh))(folders, nullptr);
+        reinterpret_cast<void(__cdecl*)()>(A(g_spec->sortByName))();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        logf("gamectl: exception 0x%08X while rescanning the track folders", GetExceptionCode());
+        return false;
+    }
+}
+
+// Offset of an info's gold time (ms): reflection ("GoldTime" of CConstructionChallengeInfo on ESWC/Sunrise/
+// Original, CGameCtnChallengeInfo on Forever), else the dumped offsets 88 / 100.
+int goldOffset() {
+    int off = reflect::offsetOf("CConstructionChallengeInfo", "GoldTime");
+    if (off < 0) off = reflect::offsetOf("CGameCtnChallengeInfo", "GoldTime");
+    if (off < 0 && g_spec) off = (g_spec->game == Game::Tmnf || g_spec->game == Game::Tmuf) ? 100 : 88;
+    return off;
+}
+
+// Offsets read from the reflection when it has them (the static table is the fallback).
+int fidFileNameOffset() {
+    const int off = reflect::offsetOf("CSystemFidFile", "FileName");
+    return off >= 0 ? off : kFidFileNameDefault;
+}
+int infoKindOffset() {
+    const int off = reflect::offsetOf("CConstructionChallengeInfo", "Kind");
+    return off >= 0 ? off : kInfoKindDefault;
+}
+
+// File name of an info's CSystemFidFile (info+0x14 -> FileName). False if the info has no file, the pointer is not
+// a CSystemFidFile or the text is unreadable. Read only, SEH-guarded.
+bool copyText(const char* src, uint32_t len, char* out) {
+    __try {
+        memcpy(out, src, len);
+        out[len] = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// CSystemFidFile.FileName is a wide string (reflection type 0x29, the type of CConstructionChallenge.ChallengeName,
+// which the host reads as {length, wchar_t*}; ESWC 1.80 member entry 0x00c08588). Read as 8-bit text it gave the
+// first letter only ("H"): no info ever matched the copy's name ("176 of 205 infos have a readable file name, 0 match",
+// ESWC log 2026-11-12). Read wide; a text that is not UTF-16 (no zero high bytes) is taken as 8-bit.
+bool copyWide(const wchar_t* src, uint32_t len, wchar_t* out) {
+    __try {
+        memcpy(out, src, len * sizeof(wchar_t));
+        out[len] = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
+    void* fid = nullptr;
+    if (!info || !readAt(info, kInfoFid, &fid) || reinterpret_cast<uintptr_t>(fid) < 0x10000) return false;
+    if (reflect::ready() && !reflect::isKindOf(reflect::classOfObject(fid), "CSystemFidFile")) return false;
+    uint32_t len = 0;
+    const void* text = nullptr;
+    if (!readAt(fid, static_cast<size_t>(nameOff), &len) || !readAt(fid, static_cast<size_t>(nameOff) + 4, &text)) return false;
+    if (!text || len == 0 || len >= cap || len >= MAX_PATH) return false;
+    wchar_t wide[MAX_PATH + 1];
+    if (copyWide(static_cast<const wchar_t*>(text), len, wide)) {
+        // 8-bit text read as UTF-16 packs two letters per unit (>= 0x2020); a file name's first letter is < 0x100
+        bool utf16 = wide[0] < 0x100;
+        for (uint32_t i = 0; i < len && utf16; i++)
+            if (wide[i] == 0) utf16 = false;
+        if (utf16) {
+            const int n = WideCharToMultiByte(CP_ACP, 0, wide, static_cast<int>(len), out, static_cast<int>(cap) - 1, nullptr, nullptr);
+            if (n > 0) {
+                out[n] = 0;
+                return true;
+            }
+        }
+    }
+    return copyText(static_cast<const char*>(text), len, out);
+}
+
+// The game's own "play the selected map" (see the comment above kSpecs): SelectedChallengeInfo = info,
+// ChallengeType 3 (solo), menu mode as MenuPlayChallenge_Solo sets it, menu result 1. The menu fiber hands the
+// result to the app loop within the next frames.
 bool setMenuToPlay(void* app, void* menus, void* info) {
     __try {
         char* m = static_cast<char*>(menus);
-        if (g_spec->chosenIsBuffer) {
-            Buffer& chosen = *reinterpret_cast<Buffer*>(m + g_spec->menusChosen);
-            if (chosen.capacity < 1 || !chosen.items) {
-                void** items = static_cast<void**>(
-                    reinterpret_cast<void*(__cdecl*)(size_t)>(g_spec->gameMalloc)(4 * sizeof(void*)));
-                if (!items) return false;
-                if (chosen.items) reinterpret_cast<void(__cdecl*)(void*)>(g_spec->gameFree)(chosen.items);
-                chosen.items = items;
-                chosen.capacity = 4;
-            }
-            chosen.items[0] = info;
-            chosen.count = 1;
-        } else {
-            *reinterpret_cast<void**>(m + g_spec->menusChosen) = info;
-        }
+        *reinterpret_cast<void**>(m + g_spec->menusSelected) = info;
         *reinterpret_cast<int*>(static_cast<char*>(app) + g_spec->appChallengeType) = 3;
         if (g_spec->menusMode) *reinterpret_cast<int*>(m + g_spec->menusMode) = g_spec->modeValue;
         *reinterpret_cast<int*>(m + g_spec->menusResult) = g_spec->resultValue;
@@ -224,7 +355,7 @@ bool setMenuToPlay(void* app, void* menus, void* info) {
 
 bool pressQuit(void* race) {
     __try {
-        reinterpret_cast<void(__thiscall*)(void*)>(g_spec->quitButton)(race);
+        reinterpret_cast<void(__thiscall*)(void*)>(A(g_spec->quitButton))(race);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         logf("gamectl: exception 0x%08X in ButtonQuitOnClick", GetExceptionCode());
@@ -232,7 +363,82 @@ bool pressQuit(void* race) {
     }
 }
 
-// Unknown exe (e.g. TM Original or another version): log what the reflection finds, so one run is enough
+const QuitSpec* quitSpec() {
+    for (const QuitSpec& q : kQuitSpecs)
+        if (g_spec && q.game == g_spec->game) return &q;
+    return nullptr;
+}
+
+bool bytesAt(uintptr_t addr, uint8_t* out, size_t n) {
+    __try {
+        memcpy(out, reinterpret_cast<const void*>(addr), n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The code the quit path relies on, byte for byte: ButtonQuitOnClick = push 2; call setter (setter: mov eax,
+// [esp+4]; cmp [ecx+14h], eax), DialogQuitRace_OnQuit = push esi; mov esi, ecx; call close; mov [esi+result], code;
+// pop esi; ret.
+bool quitCodeOk(const QuitSpec& q, const char** why) {
+    uint8_t b[20] = {};
+    if (!bytesAt(A(g_spec->quitButton), b, 8) || b[0] != 0x6a || b[1] != 0x02 || b[2] != 0xe8 || b[7] != 0xc3) {
+        *why = "ButtonQuitOnClick";
+        return false;
+    }
+    int32_t rel = 0;
+    memcpy(&rel, b + 3, 4);
+    const uintptr_t setter = A(g_spec->quitButton) + 7 + rel;
+    static const uint8_t kSetter[] = {0x8b, 0x44, 0x24, 0x04, 0x39, 0x41, 0x14};
+    uint8_t s[sizeof(kSetter)] = {};
+    if (!bytesAt(setter, s, sizeof(s)) || memcmp(s, kSetter, sizeof(s)) != 0) {
+        *why = "the race result setter";
+        return false;
+    }
+    uint32_t off = 0;
+    if (!bytesAt(A(q.dialogQuit), b, 20) || b[0] != 0x56 || b[1] != 0x8b || b[2] != 0xf1 || b[3] != 0xe8 || b[8] != 0xc7 ||
+        b[9] != 0x86 || b[18] != 0x5e || b[19] != 0xc3) {
+        *why = "DialogQuitRace_OnQuit";
+        return false;
+    }
+    memcpy(&off, b + 10, 4);
+    if (off != q.menusDialogResult) {
+        *why = "the dialog result offset";
+        return false;
+    }
+    return true;
+}
+
+bool writeRaceResult(void* race, uint32_t v) {
+    __try {
+        *reinterpret_cast<uint32_t*>(static_cast<char*>(race) + kRaceResult) = v;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool pressDialogQuit(const QuitSpec& q, void* menus) {
+    __try {
+        reinterpret_cast<void(__thiscall*)(void*)>(A(q.dialogQuit))(menus);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        logf("gamectl: exception 0x%08X in DialogQuitRace_OnQuit", GetExceptionCode());
+        return false;
+    }
+}
+
+// A returnToMenu() on ESWC/Sunrise/Original in progress (tick() finishes it).
+struct Leaving {
+    bool active = false;
+    void* race = nullptr;
+    DWORD start = 0;
+    int frames = 0, presses = 0, lastPress = -100;
+} g_leave;
+constexpr DWORD kLeaveTimeoutMs = 6000;
+
+// Unknown exe (another version of a known game): log what the reflection finds, so one run is enough
 // to fill in a Spec. Changes nothing in the game.
 void discover() {
     if (!reflect::ready()) {
@@ -284,13 +490,14 @@ Game init(LogFn log, bool allowExperimentalOriginal) {
     auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
     const uint32_t ts = nt->FileHeader.TimeDateStamp;
     g_spec = nullptr;
-    if (reinterpret_cast<uintptr_t>(base) == 0x400000)
-        for (const Spec& s : kSpecs)
-            if (s.timestamp == ts) g_spec = &s;
+    g_delta = reinterpret_cast<uintptr_t>(base) - 0x400000;
+    for (const Spec& s : kSpecs)
+        if (s.timestamp == ts) g_spec = &s;
     const bool reflection = reflect::init(ts);
     if (g_spec) {
         g_game = g_spec->game;
-        logf("gamectl: %s (PE timestamp %08X), reflection %s", g_spec->name, ts, reflection ? "ok" : "missing");
+        logf("gamectl: %s (PE timestamp %08X, image base %p%s), reflection %s", g_spec->name, ts, base,
+             g_delta ? ", relocated: link addresses moved" : "", reflection ? "ok" : "missing");
         return g_game;
     }
     g_game = Game::Unknown;
@@ -298,13 +505,15 @@ Game init(LogFn log, bool allowExperimentalOriginal) {
          reflection ? "found by pattern" : "missing", allowExperimentalOriginal ? ", running discovery" : "");
     if (allowExperimentalOriginal) {
         discover();
-        // TM Original would be identified here once a run of the discovery has given its Spec values.
+        // An unknown exe with the TrackMania app class (e.g. another TM Original build): reported, never controlled.
         if (reflect::findClass("CTrackMania")) g_game = Game::Original;
     }
     return g_game;
 }
 
 Game game() { return g_game; }
+
+void* appObject() { return appPtr(); }
 
 const char* gameName() {
     if (g_spec) return g_spec->name;
@@ -336,24 +545,90 @@ Result playMapFile(const wchar_t* path) {
     void* app = appPtr();
     void* menus = app ? menusPtr(app) : nullptr;
     if (!menus) return Result::WrongState;
+    // A result the menu fiber has not handed on yet (a button pressed this frame): not ours to overwrite.
+    int pending = 0;
+    if (!readAt(menus, g_spec->menusResult, &pending)) return Result::GameError;
+    if (pending != 0) {
+        logf("gamectl: the menu is busy (result %d pending), not starting a map", pending);
+        return Result::WrongState;
+    }
+    // The selected-info field must be where the reflection says (the game reads it to load the map).
+    const int selOff = reflect::offsetOf("CTrackManiaMenus", "SelectedChallengeInfo");
+    if (selOff >= 0 && static_cast<size_t>(selOff) != g_spec->menusSelected) {
+        logf("gamectl: CTrackManiaMenus.SelectedChallengeInfo is at +0x%X, expected +0x%X - not starting a map", selOff,
+             (unsigned)g_spec->menusSelected);
+        return Result::GameError;
+    }
     wchar_t dir[MAX_PATH], dst[MAX_PATH];
     if (!tracksDir(dir, MAX_PATH) || !makeDirs(dir)) {
         logf("gamectl: cannot create the tracks folder");
         return Result::FileError;
     }
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+        logf("gamectl: map file not found (%lu)", GetLastError());
+        return Result::FileError;
+    }
+    // The source may be anywhere (a plugin's data folder, a download folder): it is copied into the one folder
+    // the game scans under a unique name and found again by that file name (gamectl_pick.h says why pointers and
+    // counts are no proof).
+    char src8[MAX_PATH * 3] = {};
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, src8, sizeof(src8), nullptr, nullptr);
+    const lr::GbxMapHeader hdr = lr::readChallengeHeaderFile(src8);
+    if (!hdr.ok) {
+        logf("gamectl: not a readable challenge file (%s)", hdr.error.c_str());
+        return Result::FileError;
+    }
+    std::vector<void*> before, after;
+    if (!snapshotInfos(before)) return Result::GameError;
     swprintf_s(dst, L"%sHZ_%010lu.Challenge.Gbx", dir, GetTickCount());
     if (!CopyFileW(path, dst, FALSE)) {
         logf("gamectl: copy failed (%lu)", GetLastError());
         return Result::FileError;
     }
-    void* info = nullptr;
-    int added = refreshAndFindNew(app, &info);
-    if (added < 0) return Result::GameError;
-    if (added != 1 || !info) {
-        logf("gamectl: expected 1 new map in the game's list, got %d (tracks folder %ls)", added, dir);
+    const DWORD t0 = GetTickCount();
+    if (!refreshInfos(app) || !snapshotInfos(after)) return Result::GameError;
+    const int goff = goldOffset();
+    const int nameOff = fidFileNameOffset();
+    const wchar_t* slash = wcsrchr(dst, L'\\');
+    char want[MAX_PATH] = {};
+    WideCharToMultiByte(CP_ACP, 0, slash ? slash + 1 : dst, -1, want, sizeof(want), nullptr, nullptr);
+    PickReport rep;
+    const int pick = pickCopiedChallenge(
+        before, after, [nameOff](void* info, char* buf, size_t cap) { return infoFileName(info, nameOff, buf, cap); }, want,
+        [goff](void* info, int* ms) { return goff >= 0 && readAt(info, static_cast<size_t>(goff), ms); }, hdr.goldMs, &rep);
+    logf("gamectl: challenge infos %u -> %u (%d new pointers, rescan %lu ms); %s %s: %d of %u infos have a readable file "
+         "name (FileName +0x%X), %d match",
+         static_cast<unsigned>(before.size()), static_cast<unsigned>(after.size()), rep.newCount, GetTickCount() - t0,
+         rep.method == PickMethod::FileName ? "looking for the file" : "no file names readable, falling back to the gold time of",
+         rep.method == PickMethod::FileName ? want : "the new infos", rep.named, static_cast<unsigned>(after.size()), nameOff,
+         rep.matches);
+    if (pick < 0) {
+        if (rep.method == PickMethod::FileName) {
+            logf("gamectl: %s", pick == kPickNoNew ? "the game did not list the copy (no info has its file name)"
+                                                   : "several infos have the copy's file name, not guessing");
+            // what the names look like (the last three infos of the list), for the next look at a failure
+            for (size_t i = after.size() > 3 ? after.size() - 3 : 0; i < after.size(); i++) {
+                char nm[300] = {};
+                if (infoFileName(after[i], nameOff, nm, sizeof(nm))) logf("gamectl: info #%u file name \"%s\"", static_cast<unsigned>(i), nm);
+            }
+        }
+        else
+            logf("gamectl: gold %d (offset %d): %s", hdr.goldMs, goff,
+                 pick == kPickNoNew ? "the rescan added no info" : "none or several of the new infos match");
+        DeleteFileW(dst);
         return Result::NotFound;
     }
+    void* info = after[static_cast<size_t>(pick)];
+    int kind = -1, gold = -1;
+    readAt(info, static_cast<size_t>(infoKindOffset()), &kind);
+    if (goff >= 0) readAt(info, static_cast<size_t>(goff), &gold);
+    logf("gamectl: picked info %p (#%d, %s, kind %d, gold %d, file header gold %d)%s", info, pick,
+         rep.method == PickMethod::FileName ? "by file name" : "by gold time", kind, gold, hdr.goldMs,
+         (hdr.goldMs > 0 && gold != hdr.goldMs) ? " - gold differs from the file header" : "");
     if (!setMenuToPlay(app, menus, info)) return Result::GameError;
+    logf("gamectl: menu set to play: SelectedChallengeInfo +0x%X, ChallengeType 3, mode +0x%X = %d, result +0x%X = %d",
+         (unsigned)g_spec->menusSelected, (unsigned)g_spec->menusMode, g_spec->modeValue, (unsigned)g_spec->menusResult,
+         g_spec->resultValue);
     wcscpy_s(g_lastPath, dst);
     logf("gamectl: playing %ls", dst);
     return Result::Ok;
@@ -365,7 +640,60 @@ Result returnToMenu() {
     void* app = appPtr();
     void* race = app ? racePtr(app) : nullptr;
     if (!race) return Result::WrongState;
-    return pressQuit(race) ? Result::Ok : Result::GameError;
+    const QuitSpec* q = quitSpec();
+    if (!q) return pressQuit(race) ? Result::Ok : Result::GameError; // TMNF/TMUF
+    if (g_leave.active && g_leave.race == race && GetTickCount() - g_leave.start < kLeaveTimeoutMs) return Result::Ok;
+    const char* why = "";
+    if (!quitCodeOk(*q, &why)) {
+        logf("gamectl: %s has unexpected bytes - not leaving the race", why);
+        return Result::GameError;
+    }
+    uint32_t result = 0;
+    if (!readAt(race, kRaceResult, &result)) return Result::GameError;
+    if (result == 0) {
+        if (!writeRaceResult(race, q->escResult)) return Result::GameError;
+        logf("gamectl: leaving the race like Esc > Quit: race result 0x%X, then the quit dialog's Quit", q->escResult);
+    } else {
+        logf("gamectl: leaving the race: race result %u already pending, pressing the dialog's Quit when it is up", result);
+    }
+    g_leave = Leaving();
+    g_leave.active = true;
+    g_leave.race = race;
+    g_leave.start = GetTickCount();
+    return Result::Ok;
+}
+
+void tick() {
+    if (!g_leave.active || !g_spec) return;
+    const QuitSpec* q = quitSpec();
+    void* app = appPtr();
+    void* race = app ? racePtr(app) : nullptr;
+    g_leave.frames++;
+    if (!q || race != g_leave.race) {
+        logf("gamectl: race left after %d frames (%lu ms, %d dialog press(es))", g_leave.frames, GetTickCount() - g_leave.start,
+             g_leave.presses);
+        g_leave = Leaving();
+        return;
+    }
+    if (GetTickCount() - g_leave.start > kLeaveTimeoutMs) {
+        logf("gamectl: the race did not end within %lu ms (%d dialog press(es)); leave it by hand", kLeaveTimeoutMs, g_leave.presses);
+        g_leave = Leaving();
+        return;
+    }
+    // The app reads the result on its next frame and opens the dialog; at most three presses, 15 frames apart.
+    if (g_leave.frames < 2 || g_leave.presses >= 3 || g_leave.frames - g_leave.lastPress < 15) return;
+    void* menus = menusPtr(app);
+    void* layer = nullptr;
+    int shown = 0, dialogResult = -1;
+    uint32_t result = 0;
+    if (!menus || !readAt(menus, q->menusDialogLayer, &layer) || !layer || !readAt(layer, kLayerShown, &shown) ||
+        !readAt(menus, q->menusDialogResult, &dialogResult) || !readAt(race, kRaceResult, &result))
+        return;
+    if (!shown || dialogResult != 0 || result == 0) return;
+    g_leave.presses++;
+    g_leave.lastPress = g_leave.frames;
+    logf("gamectl: quit dialog up after %d frames: pressing its Quit", g_leave.frames);
+    if (!pressDialogQuit(*q, menus)) g_leave = Leaving();
 }
 
 bool currentMap(MapInfo* out) {

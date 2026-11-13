@@ -4,16 +4,29 @@ State of 0.1.0 (2026-11-11). Additive ABI changes only (`HORIZON_ABI_MINOR`), se
 
 ## Next ABI minors (planned, not built)
 
-- **Panels** (`register_panel(plugin, const HorizonPanelDef*)`): `HorizonPanelDef { key (stable, for saving), title, icon, flags (MENU_PAGE | HUD_PANEL), draw(void* user), user, default rect }`. The host owns the tab list, pop-out into detached windows (TMVS's detach-windows model, `tm shaders` branch detach-windows, commit 34dc1f7), minimize, close back to the menu, "keep open when the menu closes", opacity, edit/locked layout, click-through, hidden during photo/video, persistence per plugin + key, layout presets. The Legacy Randomizer does its own panels until then.
-- **Shared icon font** in the host's atlas (Lucide, ISC licence) with the codepoints in `horizon_imgui.h`: plugins can't add fonts to the shared atlas themselves.
-- `save_replay` (ABI 1.1 entry exists, returns NOT_SUPPORTED): wire to the ESWC save path (the Autosave plugin's code moves into the host's ESWC adapter).
+- ~~**Panels**~~ done in 0.2.0 (ABI 1.2, see plugin-abi.md "Panels"); still open from the plan: minimize, layout presets. Original plan: (`register_panel(plugin, const HorizonPanelDef*)`): `HorizonPanelDef { key (stable, for saving), title, icon, flags (MENU_PAGE | HUD_PANEL), draw(void* user), user, default rect }`. The host owns the tab list, pop-out into detached windows (TMVS's detach-windows model, `tm shaders` branch detach-windows, commit 34dc1f7), minimize, close back to the menu, "keep open when the menu closes", opacity, edit/locked layout, click-through, hidden during photo/video, persistence per plugin + key, layout presets. The Legacy Randomizer does its own panels until then.
+- ~~**Toasts and the TM Horizon bridge**~~ done in 0.2.0 (ABI 1.3: `notify`, `bridge_request`, `bridge_state`, see plugin-abi.md "ABI 1.3" and client-bridge.md). First users: the client mods WR Hunter, Input Display and TMX Browser (docs/plugins/). Open: real-game test of the Forever car offsets and of the ESWC/Sunrise map UID offset; speed, gear and RPM on ESWC/Sunrise (engine getters only).
+- ~~**Shared icon font**~~ done: 53 Lucide icons (ISC licence) merged into every host font, codepoints in `horizon_imgui.h` (`HZ_ICON_*`, ABI), used in the sidebar and the bar. Plugins can't add fonts to the shared atlas themselves, so new icons go through `tools/make_icon_font.py`.
+- ~~`save_replay`~~ done on ESWC in 0.2.0 (the Autosave plugin's save code, now also in the host). Open: Sunrise and Original in the host (the Autosave module 2.1.0 already saves there with its own copy of the calls, app+0x130), Forever; ESWC Autosave could use `save_replay` instead of its own copy of the code.
 - `unsubscribe`/hotkey query: not needed so far.
+
+## Phase 2: scripts (Horizon Scripts plugin)
+
+Built (branch `scripts`, plugin 0.1.0, not yet run in a game): AngelScript 2.38.0 as a plugin (`plugins/scripts`), no host changes. Scripts in `<game>\horizon\scripts\<id>\` with `info.toml`/`info.json`, hot reload, per-script errors with file:line in the Scripts tab, settings page from `[Setting]` globals, UI (ImGui subset), Time, Game (state, map, PlayMapFile/ReturnToMenu behind `game-control`), read-only Reflection over the Node Explorer's read layer, IO for the script's own data folder, Log. Time budget per callback, online gate, Competition Patch rule. Guide: `docs/scripting.md`.
+
+Next, in this order:
+
+- **Write access behind permissions**: reflection writes and parameterless method calls through the engine's own member accessors, a new permission (`write-game`), solo only, never with Competition Patch loaded, never on members that touch physics, timing, input or replays (allow list per class, not a block list).
+- **Net**: HTTP GET/POST to an allow list declared in `info.toml` (TMX API first), off the game thread, results delivered in a callback; never while a CP run is validated.
+- **Openplanet-compat layer** for simple UI plugins (`UI::`, `Render`/`RenderMenu`, `[Setting]`, `print`): only after asking Openplanet's author whether that is welcome, and without copying Openplanet code or docs.
+- Smaller: `yield()`-style coroutines (Main() that waits for a frame), `UI::Begin` with a close button (needs unsafe references or a handle type), vec4 colour settings (`[Setting color]` is parsed but ignored today), `Game::Map` thumbnail, Sunrise/Forever events as the host gains them (scripts get them without changes).
+- Before a release: run both examples in ESWC, Sunrise, TMNF and TMUF (TESTPLAN), a TMX-validated run with CP 2.0 and the plugin loaded, and ask donadigo how CP treats AngelScript in another DLL.
 
 ## Game adapters
 
 - ESWC: map uid/author/path in MAP_LOADED only when gamectl started the map (gbx header). For maps started from the game's own menu they stay "" (no reflection field for the uid; the challenge's file is reachable through its fid, offsets not mapped yet).
 - Sunrise: finish/checkpoint/respawn/race-end events need the verified OnFinishLine (vtable slot, prologue check) and the solo race end; the randomizer session puts them into tm-modding-knowledge games/tm-sunrise.
-- Forever: no game events yet (candidates in tm-modding-knowledge modding/game-control.md: OnFinishLine TMNF 0x480820 / TMUF 0x480610, Race1P 0x472300 / 0x472080, to be prologue-checked and kept read-only for Competition Patch). gamectl's Forever specs need image base 0x400000: under TMLoader 2.12.0 (relocated) state/online are unknown, so solo-only plugins stay paused there.
+- Forever: events by polling only (no hook, because Competition Patch 2.0 may treat changed code bytes as tampering): MAP_LOADED (medal times from the challenge, uid/author/path only for maps gamectl started), RACE_START (also each restart), FINISH (time, PB), game state incl. END_RACE. Written statically, **not yet run in game**. Limits: no CHECKPOINT/RESPAWN/RACE_END, uid of maps picked in the game's own menu stays "" (an id index that only a game call resolves), editor/replay split by class name unverified. gamectl now moves its link addresses by (image base - 0x400000), so TMLoader 2.12.0 (relocated) is covered like 2.12.0-compat; play_map_file/return_to_menu on Forever are still untested in game. The same patch belongs into legacy-randomizer's gamectl/reflect (vendored copies diverge until then).
 - Original: not supported (no pinned exe).
 
 ## Host

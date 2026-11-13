@@ -35,4 +35,8 @@ bool validId(const std::string& id);
 // SHA-256 of a file as 64 lowercase hex chars. False on any error.
 bool sha256File(const std::wstring& path, std::string& hexOut);
 
+// A plugin's name for a replay file -> stem: no ".Replay.Gbx", no path or reserved characters ('_'),
+// no trailing dots/spaces, max 120 characters.
+std::wstring replayStemFromName(const std::wstring& name);
+
 } // namespace horizon

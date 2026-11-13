@@ -1,3 +1,5 @@
+#include <cwchar>
+#include <cwctype>
 #include "common/util.h"
 
 #include <windows.h>
@@ -173,6 +175,23 @@ bool sha256File(const std::wstring& path, std::string& hexOut) {
         hexOut += hex[b & 15];
     }
     return true;
+}
+
+// "My run.Replay.Gbx" -> "My run"; path separators and other characters Windows refuses become '_'.
+// The game's FilterFileName runs on the result as well.
+std::wstring replayStemFromName(const std::wstring& name) {
+    std::wstring s = name;
+    const std::wstring ext = L".replay.gbx";
+    if (s.size() >= ext.size()) {
+        std::wstring tail = s.substr(s.size() - ext.size());
+        for (auto& c : tail) c = static_cast<wchar_t>(towlower(c));
+        if (tail == ext) s.resize(s.size() - ext.size());
+    }
+    for (auto& c : s)
+        if (c < 32 || wcschr(L"\\/:*?\"<>|", c)) c = L'_';
+    while (!s.empty() && (s.back() == L' ' || s.back() == L'.')) s.pop_back();
+    if (s.size() > 120) s.resize(120);
+    return s;
 }
 
 } // namespace horizon
