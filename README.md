@@ -6,9 +6,15 @@ Version 0.3.1. MIT licence. Built with [Claude Code](https://claude.com/claude-c
 
 ![The menu at 1280x720](docs/images/menu-1280x720.png)
 
-*The menu, rendered by `tests/ui_preview.cpp` with sample data (no game running). In a small window (here 640x480) it shrinks and shows the list or the page:*
+*The menu on a new TrackMania Nations ESWC install, Input Display open. Preview render with the real module list, no game running.*
 
 ![The menu at 640x480](docs/images/menu-640x480.png)
+
+*In a small window (here 640x480) the menu shrinks and shows the list or the page.*
+
+![The Input Display styles](docs/images/input-display.png)
+
+*Input Display: Bars, Arrows, Wheel, Minimal and Controller, on screen in a race (top) and with the menu open (bottom). Preview render on a stand-in picture, not a game capture.*
 
 ## Supported exes
 

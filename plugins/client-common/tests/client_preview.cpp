@@ -6,7 +6,9 @@
 // Also the modules in their own window (top bar, left click on the icon) with the top bar shown, at 640x480 and
 // 1920x1080: screens\client-popout-<tag>-<module>-<size>.png (<tag> = second argument, default "now").
 //
-//   client_preview.exe <build\plugins folder> [tag]
+//   client_preview.exe <build\plugins folder> [tag] [--readme]
+// --readme: only the README images (new ESWC install, real module list and icons): screens\client-readme-menu-*.png and
+// screens\client-input-display.png. The Legacy Randomizer and TMVS icons are read from build\readme-icons\<id>.png.
 #include <windows.h>
 
 #include <d3d9.h>
@@ -626,6 +628,132 @@ void tmxBrowser(const std::string& dir) {
     p.shutdown();
 }
 
+// ---------------------------------------------------------------- README images
+
+// A PNG file as a texture (WIC decode), 0 when it cannot be read.
+uint64_t pngTexture(const std::string& path, float* aspect = nullptr) {
+    const std::wstring w(path.begin(), path.end());
+    IWICImagingFactory* fac = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&fac)))) return 0;
+    IWICBitmapDecoder* dec = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* conv = nullptr;
+    uint64_t tex = 0;
+    if (SUCCEEDED(fac->CreateDecoderFromFilename(w.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &dec)) &&
+        SUCCEEDED(dec->GetFrame(0, &frame)) && SUCCEEDED(fac->CreateFormatConverter(&conv)) &&
+        SUCCEEDED(conv->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+        UINT iw = 0, ih = 0;
+        conv->GetSize(&iw, &ih);
+        std::vector<BYTE> px(static_cast<size_t>(iw) * ih * 4);
+        if (SUCCEEDED(conv->CopyPixels(nullptr, iw * 4, static_cast<UINT>(px.size()), px.data()))) {
+            tex = createTexture(nullptr, iw, ih, px.data());
+            if (aspect && ih) *aspect = static_cast<float>(iw) / static_cast<float>(ih);
+        }
+    }
+    if (conv) conv->Release();
+    if (frame) frame->Release();
+    if (dec) dec->Release();
+    fac->Release();
+    if (!tex) std::printf("icon not loaded: %s\n", path.c_str());
+    return tex;
+}
+
+// The module list as a new ESWC install shows it (0.3.1): the real modules with their plugin.json names and
+// versions and their icon.png, the defaults from packaging\modules.json (Legacy Essentials and TMX Browser on,
+// the rest off). The Legacy Randomizer and the TM Vibrant Shaders modules are separate downloads: their icons
+// are copied to build\readme-icons\<id>.png before the run, their names and versions are those of their releases
+// (Legacy Randomizer 0.2.0, TMVS modules 2.0.0; TMVS Packs is Forever only and not listed on ESWC).
+Model readmeModel() {
+    Model m = baseModel("TrackMania Nations ESWC");
+    m.hostVersion = "0.3.1";
+    m.exeVersion = "0.1.7.9 (unofficial 1.80)";
+    m.gameState = "Main menu";
+    m.bridgePaired = false;
+    m.bridgeText = "";
+    m.onlineFix = 1;
+    m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
+    auto mod = [&](const char* id, const char* name, const char* ver, const char* desc, bool on, bool menu) {
+        PluginView p = view(id, name, desc);
+        p.version = ver;
+        p.enabled = on;
+        p.status = on ? PluginStatus::On : PluginStatus::Off;
+        p.hasMenu = menu;
+        return p;
+    };
+    // the group's members (hidden in the list, shown as the group's tabs)
+    m.plugins.push_back(mod("eswc-autosave", "Autosave & Login-Fix", "2.1.0", "Saves your replay after each finish.", true, true));
+    m.plugins.push_back(mod("controller-hotplug", "Controller fix", "1.2.1", "Adds controllers plugged in while the game runs.", true, true));
+    m.plugins.push_back(mod("game-settings", "Game settings", "1.1.1", "Volume, music and window mode from the menu.", true, true));
+    GroupView g;
+    g.id = "legacy-essentials";
+    g.name = "Legacy Essentials";
+    g.description = "Autosave, controller fix, login fix and game settings for ESWC, Sunrise and Original.";
+    g.enabled = true;
+    auto feat = [&](const char* pluginId, const char* host, const char* label) {
+        GroupFeatureView f;
+        f.pluginId = pluginId;
+        f.hostFeature = host;
+        f.label = label;
+        f.enabled = true;
+        g.features.push_back(f);
+    };
+    feat("eswc-autosave", "", "Autosave");
+    feat("controller-hotplug", "", "Controller fix");
+    feat("", "login-fix", "Login fix");
+    feat("game-settings", "", "Game settings");
+    m.groups.push_back(g);
+    m.plugins.push_back(mod("tmx-browser", "TMX Browser", "0.2.2", "Search TMX and play maps in the game.", true, true));
+    m.plugins.push_back(mod("wr-hunter", "WR Hunter", "0.1.2", "Splits against your PB and the TMX record.", false, true));
+    PluginView inp = mod("input-display", "Input Display", "0.2.0", "Steering, gas, brake and speed on screen.", true, true);
+    inp.panels = {tab("inputs", "Inputs", true)};
+    inp.panels[0].hud = true;
+    inp.panels[0].onScreen = true;
+    m.plugins.push_back(inp);
+    m.plugins.push_back(mod("legacy-randomizer", "Legacy Randomizer", "0.2.0", "Random Map Challenge in game", false, true));
+    m.plugins.push_back(mod("performance", "Horizon Performance", "0.1.0", "Frame times, benchmark and frame limiter.", false, true));
+    m.plugins.push_back(mod("scripts", "Horizon Scripts", "0.2.1", "Runs scripts from horizon\\scripts.", false, true));
+    m.plugins.push_back(mod("tmvs", "TM Vibrant Shaders", "2.0.0", "Light, shadows, sky, weather and colour, with presets per map type.", false, true));
+    m.plugins.push_back(mod("tmvs-capture", "TMVS Capture", "2.0.0", "Photos, instant clips of your runs and checkpoints, and the video export.", false, true));
+    m.plugins.push_back(mod("tmvs-upscaling", "TMVS Upscaling", "2.0.0", "Renders the game at a lower resolution and scales it back up with AMD FSR 1.", false, true));
+    return m;
+}
+
+void readmeIcons() {
+    float aspect = 1.0f;
+    const uint64_t wordmark = pngTexture("assets\\wordmark.png", &aspect);
+    setLogo(wordmark, aspect, pngTexture("assets\\mark.png"));
+    setIcon("group:legacy-essentials", pngTexture("packaging\\icons\\legacy-essentials.png"));
+    for (const char* id : {"tmx-browser", "wr-hunter", "input-display", "performance", "scripts"})
+        setIcon(id, pngTexture(std::string("plugins\\") + id + "\\icon.png"));
+    for (const char* id : {"legacy-randomizer", "tmvs", "tmvs-capture", "tmvs-upscaling"})
+        setIcon(id, pngTexture(std::string("build\\readme-icons\\") + id + ".png"));
+}
+
+// docs\images\menu-1280x720.png (Input Display page) and menu-640x480.png (the module list), ESWC, new install.
+void readme(const std::string& dir) {
+    Plugin p = load(dir, "input-display");
+    if (!p.mod || !p.hook) return;
+    startHost(HORIZON_GAME_ESWC, "input-display");
+    chost::buildWorld(false, "UidOfTheTestMap000000000aB", L"Test");
+    chost::gameState = HORIZON_STATE_MAIN_MENU;
+    const HorizonHostApi api = hostApi();
+    if (p.init(&api) != 0) {
+        ++g_failed;
+        return;
+    }
+    readmeIcons();
+    Actions a = actionsFor(p);
+    a.setGroupEnabled = [](const std::string&, bool) {};
+    const Model m = readmeModel();
+    const int menuPct = m.menuSizePct;
+    setDisplay(1280, 720, fitScale(1.0f, 1280.0f, 720.0f, menuPct));
+    menuShot("readme-menu-1280x720", m, a, "plugin:input-display", 20, nullptr);
+    setDisplay(640, 480, fitScale(1.0f, 640.0f, 480.0f, menuPct));
+    menuShot("readme-menu-640x480", m, a, "mods", 20, nullptr);
+    setDisplay(kWidth, kHeight, 1.0f);
+    p.shutdown();
+}
+
 // ---------------------------------------------------------------- toasts and the General page
 
 void toasts() {
@@ -671,6 +799,7 @@ int main(int argc, char** argv) {
     }
     const std::string dir = argv[1];
     if (argc > 2) g_tag = argv[2];
+    const bool readmeMode = argc > 3 && std::strcmp(argv[3], "--readme") == 0; // only the README images
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr, L"CkPreview", nullptr};
     RegisterClassExW(&wc);
@@ -706,10 +835,15 @@ int main(int argc, char** argv) {
     ImGui_ImplDX9_Init(g_dev);
     CreateDirectoryW(L"screens", nullptr);
 
-    wrHunter(dir);
-    inputDisplay(dir);
-    tmxBrowser(dir);
-    toasts();
+    if (readmeMode) {
+        readme(dir);
+        inputDisplay(dir); // also screens\client-input-display.png
+    } else {
+        wrHunter(dir);
+        inputDisplay(dir);
+        tmxBrowser(dir);
+        toasts();
+    }
 
     ImGui_ImplDX9_Shutdown();
     ImGui_ImplWin32_Shutdown();
