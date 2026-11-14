@@ -93,7 +93,7 @@ A module is a plugin DLL with its own page in the menu, its own switch and its k
 | **Legacy Essentials** (group) | One entry with one switch for the four parts below, a switch per part on its page, and each part's own page as a tab. Same name and features as the standalone [Legacy Essentials](https://github.com/cheatoskar/legacy-essentials). Not shown on TMNF/TMUF. | ESWC, Sunrise, Original | yes |
 | ↳ Autosave | Saves the replay after each finish with the game's own save code, into `My Replays` as `<map>(mm'ss''cc).Replay.Gbx`. ESWC: solo and online (your previous run), plus a TMX copy of online replays with only your ghost. Sunrise, Original: solo only. "Every finish" or new bests only. `F9` saves now. [docs](docs/plugins/eswc-autosave.md) | ESWC, Sunrise, Original | yes |
 | ↳ Controller fix | A controller plugged in or switched on while the game runs is added at once, with the game's own bindings. [docs](docs/plugins/controller-hotplug.md) | ESWC, Sunrise, Original | yes |
-| ↳ Login fix | The online login works again on Windows 10/11 (error 12157): TLS 1.0 and no revocation check, for the game process only. Applies on the next start. | ESWC, Original | yes |
+| ↳ Login fix | The online login works again on Windows 10/11 (error 12157): TLS 1.0 and no revocation check, for the game process only. Sunrise: also its master names (error 12031, they no longer lead to the server) go to the master's IP address 91.121.54.245 with the name kept in the Host header. Applies on the next start. | ESWC, Sunrise, Original | yes |
 | ↳ Game settings | Volume, music and window mode of the game from the menu, applied at every start. Window mode switches at once. | ESWC, Sunrise, Original | yes |
 | **TMX Browser** | Search TrackMania Exchange from the game, pictures, favourites, Save, and Play: the map starts in the game (main menu, offline; on ESWC, Sunrise and Original also during a solo race). Works without TM Horizon. [docs](docs/plugins/tmx-browser.md) | all five | yes |
 | **TMX Upload** | Offers the replays you drive to an uploader on the same PC (TM Horizon or the browser extension of the 100% TMX mod), after you press Allow in the game. Sends nothing on its own. [docs](docs/plugins/tmx-upload.md) | all five | once paired with TM Horizon |
@@ -123,7 +123,7 @@ The Legacy Randomizer ([cheatoskar/legacy-randomizer](https://github.com/cheatos
 |---|---|---|---|---|
 | Menu, bar, hotkeys, log, layout mode | ✓ | ✓ | ✓ | experimental (input only in the game's menus) |
 | Game events | map, start, checkpoint, respawn, finish, race end, state | map, start, checkpoint, finish, solo race end, state | as Sunrise | map, start, finish, state, by reading only (no hooks) |
-| Login fix (error 12157) | ✓ | – (not known to be needed) | experimental (not tested against the server yet) | – |
+| Login fix (error 12157) | ✓ | experimental (with the master name redirect, error 12031; not tested in the game yet) | experimental (not tested against the server yet) | – |
 | Autosave | ✓ solo and online, TMX copy | experimental, solo | experimental, solo | – |
 | Controller fix | ✓ | experimental | experimental | – |
 | Game settings | ✓ | experimental | experimental | – |

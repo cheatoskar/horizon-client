@@ -17,6 +17,7 @@
 #include "host/game/forever_poll.h"
 #include "host/bridge_logic.h"
 #include "host/exe_known.h"
+#include "host/onlinefix_names.h"
 #include "host/input_gate.h"
 #include "gamectl/gamectl_pick.h"
 #include "host/stats_log.h"
@@ -805,6 +806,21 @@ static void testStatsLines() {
     CHECK(!stats::append(L"", "t.jsonl", "x"));
 }
 
+// Login fix on Sunrise: only the two master names (any case, whole name) go to the master's IP address.
+static void testSunriseMasterNames() {
+    CHECK(std::string(kSunriseMasterIp) == "91.121.54.245");
+    const char* g = sunriseMasterName("game.trackmaniasunrise.com");
+    CHECK(g && std::string(g) == "game.trackmaniasunrise.com");
+    const char* w = sunriseMasterName("WWW.TrackManiaSunrise.COM");
+    CHECK(w && std::string(w) == "www.trackmaniasunrise.com");
+    CHECK(sunriseMasterName("Game.TrackmaniaSunrise.com") == g);
+    CHECK(!sunriseMasterName(nullptr) && !sunriseMasterName(""));
+    CHECK(!sunriseMasterName("trackmaniasunrise.com") && !sunriseMasterName("game.trackmanianations.com"));
+    CHECK(!sunriseMasterName("game.trackmaniasunrise.com.") && !sunriseMasterName("game.trackmaniasunrise.co"));
+    CHECK(!sunriseMasterName("xgame.trackmaniasunrise.com") && !sunriseMasterName("game.trackmaniasunrise.com:443"));
+    CHECK(!sunriseMasterName("91.121.54.245") && !sunriseMasterName("player.trackmania.com"));
+}
+
 // Exe identification: only the pinned builds run; TM Original only as the Online Patch v2 exe.
 static void testExeIdentification() {
     const std::string tmo = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
@@ -1075,6 +1091,7 @@ int main() {
     testBridgeLogic();
     testStatsLines();
     testExeIdentification();
+    testSunriseMasterNames();
     testPickNewChallenge();
     testInputGate();
     testKeyMsgGate();

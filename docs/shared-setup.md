@@ -35,7 +35,7 @@ With the shared setup on, these keys are still read from and written to the game
 | --- | --- |
 | `bridge.*` | The pairing with TM Horizon (key, instance) belongs to this install |
 | `setup.*` | The switch itself |
-| `OnlineFix` | Login fix of ESWC and Original only |
+| `OnlineFix` | Login fix of ESWC, Sunrise and Original only |
 | `pwin.<id>` | Free module windows (pixels) |
 | `plugin.<id>.*`, `panel.<id>.*`, `hotkey.<id>.*` of a game-specific module | A module whose `plugin.json` lists fewer than all five games (Autosave & Login-Fix, Controller fix, Node Explorer) |
 

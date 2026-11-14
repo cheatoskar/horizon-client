@@ -247,8 +247,9 @@ bool readPointer(const void* address, void** out);
 void describeAddress(const void* address, char* out, size_t size);
 bool patchImport(HMODULE module, const char* dll, const char* function, void* replacement, void** originalOut);
 
-// ------------------------------------------------------------------ online fix, ESWC and Original (onlinefix.cpp)
-// iatSlot: link address of the exe's HttpOpenRequestA import slot.
-void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot);
+// ------------------------------------------------------------------ online fix, ESWC, Original, Sunrise (onlinefix.cpp)
+// iatSlot: link address of the exe's HttpOpenRequestA import slot. Sunrise also gives its InternetConnectA and
+// InternetCloseHandle slots: its master names then go to the master's IP address with the Host header kept.
+void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot, uintptr_t iatConnect = 0, uintptr_t iatClose = 0);
 
 } // namespace horizon

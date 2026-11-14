@@ -334,7 +334,7 @@ ui::Model buildModel() {
     m.barEnabled = g_barEnabled;
     m.menuHotkey = g_menuHotkey;
     m.menuKeySuggestions = {"Insert", "F2", "#", "+", "Ctrl+Tab"};
-    m.onlineFix = (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
+    m.onlineFix = (s.game.game & HORIZON_GAME_LEGACY) ? (hostSettingInt("OnlineFix", 1) ? 1 : 0) : -1;
     // module groups (modules.json): only the features that apply to this game; a group without any is left out
     for (const ModuleGroup& grp : modulesConfig().groups) {
         ui::GroupView gv;
@@ -419,7 +419,7 @@ ui::Actions makeActions() {
         const uint32_t gameBit = state().game.game;
         for (const GroupMember& mem : grp->members) {
             if (mem.host) {
-                if (mem.id == "login-fix" && (gameBit == HORIZON_GAME_ESWC || gameBit == HORIZON_GAME_ORIGINAL)) hostSetSettingInt("OnlineFix", on ? 1 : 0);
+                if (mem.id == "login-fix" && (gameBit & HORIZON_GAME_LEGACY)) hostSetSettingInt("OnlineFix", on ? 1 : 0);
                 continue;
             }
             const Plugin* p = findPlugin(mem.id);
