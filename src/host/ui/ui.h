@@ -156,7 +156,7 @@ struct Model {
     bool barEnabled = true;                    // General: the top-edge bar on/off
     int menuHotkey = 0;                        // handle of the menu key in hotkeys (for the key picker)
     std::vector<std::string> menuKeySuggestions; // quick picks for the menu key: "Insert", "F2", "#", "+", "Ctrl+Tab"
-    int onlineFix = -1;                        // General: ESWC online login fix, -1 = not this game, 0 off, 1 on (next start)
+    int onlineFix = -1;                        // General: online login fix (ESWC, Sunrise, Original), -1 = not this game, 0 off, 1 on (next start)
     // Notifications (toasts, ABI minor 3) and the TM Horizon bridge
     bool dnd = false;                          // do not disturb: toasts only go to the list below
     bool holdToasts = true;                    // keep toasts back while a run is going

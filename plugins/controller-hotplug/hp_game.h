@@ -79,6 +79,13 @@ public:
     uint32_t deviceCount(); // all devices of the port (keyboard, mouse, pads), 0 without a port
     uint32_t devices() override { return deviceCount(); }
     bool poll() override;
+    // poll at a given time (tests). Besides the race start check: the start report of the bindings
+    // (Binder::reportStart), once, kStartReportMs after the first poll, retried until the profile is loaded
+    bool pollAt(uint32_t now);
+    static constexpr uint32_t kStartReportMs = 3000;
+    static constexpr uint32_t kStartGiveUpMs = 180000;
+    // the pads of the start report once it was logged (game thread), else null
+    const std::vector<StartPad>* startPads() const { return startDone_ && startLogged_ ? &startPads_ : nullptr; }
 
 private:
     uintptr_t rb(uintptr_t link) const { return base_ - 0x400000 + link; }
@@ -102,6 +109,10 @@ private:
     };
     std::vector<CacheEntry> cache_;
     Binder* binder_ = nullptr;
+    bool startDone_ = false;
+    bool startLogged_ = false;
+    uint32_t startFirst_ = 0;
+    std::vector<StartPad> startPads_;
 };
 
 // For tests and the module's test mode: a game in memory.
@@ -131,5 +142,7 @@ public:
 };
 
 std::string toUtf8(const std::wstring& w);
+// "fe7b39e0-cfa8-11f1-8001-444553540000": a GUID as the profile and the registry write it (lower case, no braces)
+std::string guidText(const Guid& g);
 
 } // namespace hp

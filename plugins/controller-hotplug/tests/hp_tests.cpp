@@ -794,6 +794,44 @@ static void bindTests() {
         U32(g_bApp, 0x140) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bRace));
     }
 
+    // 4d: the start report (log only): once, 3 s after the first poll, each pad's bindings in the current config
+    {
+        g_bindLog.clear();
+        const uint32_t cfgEntries = U32(g_bCfg, 0x14);
+        const int passesBefore = g_passCalls;
+        b.pollAt(GetTickCount() + GameBackend::kStartReportMs + 1000);
+        check(bindLogHas("bindings at start: the current profile's bindings config lists"), "start report: the config's device ids");
+        check(bindLogHas("bindings at start: Fake pad (device 2, id 80000007, guid 00000007-0000-0000-0000-000000000055)") &&
+                  bindLogHas("in the profile (saved, or the game's defaults of this start), 3 binding(s): Accelerate=800, Brake=801, Steer=0"),
+              "start report: the first pad's bindings (the device's DirectInput name, GUID text)");
+        check(bindLogHas("bindings at start: Fake pad (device 3, id 80000008, guid ") && bindLogHas("2 binding(s): Respawn=803, Accelerate=805"),
+              "start report: the second pad's saved bindings");
+        check(U32(g_bCfg, 0x14) == cfgEntries && g_passCalls == passesBefore, "start report: nothing changed, no defaults pass");
+        check(b.startPads() && b.startPads()->size() >= 2 && (*b.startPads())[0].guid.size() == 36, "start report: pads with GUID text");
+        g_bindLog.clear();
+        b.pollAt(GetTickCount() + 600000);
+        check(!bindLogHas("bindings at start"), "start report: once");
+    }
+    {
+        Guid g = {};
+        const GUID w = {0xfe7b39e0, 0xcfa8, 0x11f1, {0x80, 0x01, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
+        memcpy(g.b, &w, 16);
+        check(guidText(g) == "fe7b39e0-cfa8-11f1-8001-444553540000", "GUID text as the profile and the registry write it");
+    }
+    // 4e: no profile yet: retried, given up after kStartGiveUpMs with one line
+    {
+        GameBackend b2(&t, 0x400000, &bindLog, nullptr);
+        check(b2.ready(), "second backend ready");
+        U32(g_bApp, 0x58) = 0x1234; // the app's port is not this one yet
+        g_bindLog.clear();
+        const uint32_t t0 = GetTickCount();
+        check(b2.pollAt(t0) && b2.pollAt(t0 + GameBackend::kStartReportMs + 10), "no profile: the backend keeps asking for steps");
+        check(!bindLogHas("bindings at start") && !b2.startPads(), "no profile: nothing reported yet");
+        b2.pollAt(t0 + GameBackend::kStartGiveUpMs + 10);
+        check(bindLogHas("bindings at start: no bindings config of a profile after") && !b2.startPads(), "no profile: given up, one line");
+        U32(g_bApp, 0x58) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_bPort));
+    }
+
     // 5: appendToTable refuses what the game's AddBinding would not produce for the last device
     BindPair p[1] = {{0x55, 0x66}};
     const char* why = "";

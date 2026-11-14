@@ -27,7 +27,7 @@ On Sunrise and Original it reacts only to the host's FINISH of the local player 
 
 ## Login fix
 
-The login fix (error 12157: TLS 1.0 and no revocation check, for the game process only) is part of the host, not of this module (host setting "Login-Fix"). It covers ESWC and, with the host's Original support, Original. Sunrise: none (not known to need one).
+The login fix (error 12157: TLS 1.0 and no revocation check, for the game process only) is part of the host, not of this module (host setting "Login-Fix"). It covers ESWC, Original and Sunrise; on Sunrise it also sends the game's master names (game./www.trackmaniasunrise.com, which no longer lead to the server, error 12031) to the master's IP address 91.121.54.245 with the name kept in the Host header.
 
 ## Games and state
 

@@ -70,6 +70,13 @@ std::string actionName(int position);
 // last range, empty, and at the end of the bindings. reserve8 = the game's Reserve of {count, ptr, cap} arrays.
 bool appendToTable(uint8_t* table, uint32_t devIndex, const BindPair* pairs, int n, uintptr_t reserve8, const char** why);
 
+// a pad of the game's port at start (the start report, log only)
+struct StartPad {
+    uint32_t devIndex;
+    std::string name;
+    std::string guid; // DirectInput instance GUID, lower case without braces (how the profile names the pad)
+};
+
 class Binder {
 public:
     Binder(const BindTable* t, uintptr_t exeBase, uintptr_t reserve8, LogFn log, void* logUser);
@@ -79,6 +86,9 @@ public:
     // game thread, every tick while it returns true: logs once per race start whether the race table the game
     // built has the late pads' bindings
     bool raceCheck(uint8_t* port);
+    // game thread, log only: the current profile's bindings for each pad found at start. false while the game has
+    // no app or no profile's bindings config yet (call again later); true once logged
+    bool reportStart(uint8_t* port, const std::vector<StartPad>& pads);
 
     // what the last apply did (tests, log)
     struct Result {

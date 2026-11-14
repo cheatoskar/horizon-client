@@ -293,6 +293,24 @@ bool appendToTable(uint8_t* table, uint32_t devIndex, const BindPair* pairs, int
     return ok;
 }
 
+// "Accelerate=800, Brake=801" (log only): names by the game's action list (the config's action index is the
+// position in that list), "action N" when the list does not hold that action
+static std::string pairList(uintptr_t actionList, const Scan& s) {
+    std::string list;
+    for (int i = 0; i < s.count; i++) {
+        uintptr_t listed = 0;
+        const int pos = s.actionIdx[i];
+        std::string an = rd(actionList + static_cast<uintptr_t>(pos) * 4, listed) && listed == s.pairs[i].action
+                             ? actionName(pos)
+                             : "action " + std::to_string(pos);
+        char ob[16];
+        sprintf_s(ob, "%X", s.pairs[i].object);
+        if (!list.empty()) list += ", ";
+        list += an + "=" + ob;
+    }
+    return list;
+}
+
 Binder::Binder(const BindTable* t, uintptr_t exeBase, uintptr_t reserve8, LogFn log, void* logUser)
     : t_(t), base_(exeBase), reserve8_(reserve8), log_(log), logUser_(logUser) {}
 
@@ -387,6 +405,49 @@ bool Binder::raceCheck(uint8_t* port) {
     return true;
 }
 
+// Log only, nothing is changed (game thread): the bindings the current profile's config holds for each pad the
+// game found at start. The game's defaults pass already ran when the profile was loaded, so a pad listed here has
+// either bindings saved in the profile or the game's defaults from this start; the list tells which.
+bool Binder::reportStart(uint8_t* port, const std::vector<StartPad>& pads) {
+    if (!verify()) return true; // other code: nothing to read (verify logged it)
+    const uintptr_t p = reinterpret_cast<uintptr_t>(port);
+    uintptr_t app = 0, cb = 0, appPort = 0;
+    if (!rd(rb(t_->appGlobal), app) || !app || !rd(app + t_->appDefaultsCb, cb) || cb != rb(t_->setDefaults) ||
+        !rd(app + t_->appPort, appPort) || appPort != p)
+        return false; // the app is not set up yet
+    uintptr_t config = 0, cfgPort = 0;
+    if (!callCurConfig(rb(t_->currentConfig), app, &config) || !config || !rd(config + kCfgPort, cfgPort) || cfgPort != p)
+        return false; // no profile loaded yet
+    uint32_t ids = 0, entries = 0;
+    rd(config + kCfgIdCount, ids);
+    rd(config + kCfgEntryCount, entries);
+    logf(0, "bindings at start: the current profile's bindings config lists %u device id(s), %u binding(s) in all", ids, entries);
+    if (pads.empty()) logf(0, "bindings at start: no pad in the game's input port");
+    uint32_t devCount = 0;
+    uintptr_t devArr = 0;
+    rd(p + kPortDevCount, devCount);
+    rd(p + kPortDevArray, devArr);
+    for (const auto& pad : pads) {
+        uintptr_t dev = 0;
+        uint32_t id = 0;
+        Scan s = {};
+        if (pad.devIndex >= devCount || !rd(devArr + pad.devIndex * 4, dev) || !dev || !rd(dev + kDevId, id) ||
+            !scanConfig(config, id, &s)) {
+            logf(1, "bindings at start: %s (device %u): not readable", pad.name.c_str(), pad.devIndex);
+            continue;
+        }
+        const std::string list = pairList(rb(t_->actionList), s);
+        if (s.known)
+            logf(0, "bindings at start: %s (device %u, id %08X, guid %s): in the profile (saved, or the game's defaults of this start), "
+                    "%d binding(s): %s",
+                 pad.name.c_str(), pad.devIndex, id, pad.guid.c_str(), s.count, list.empty() ? "none" : list.c_str());
+        else
+            logf(0, "bindings at start: %s (device %u, id %08X, guid %s): none in the profile (the game gave it no defaults)",
+                 pad.name.c_str(), pad.devIndex, id, pad.guid.c_str());
+    }
+    return true;
+}
+
 void Binder::apply(uint8_t* port, uint32_t devIndex, const std::wstring& name) {
     last_ = Result();
     const std::string nm = toUtf8(name);
@@ -433,19 +494,7 @@ void Binder::apply(uint8_t* port, uint32_t devIndex, const std::wstring& name) {
     }
     last_.saved = before.known != 0;
     last_.configPairs = after.count;
-    std::string list;
-    for (int i = 0; i < after.count; i++) {
-        // name by the game's action list (log only): the config's action index is the position in that list
-        uintptr_t listed = 0;
-        const int pos = after.actionIdx[i];
-        std::string an = rd(rb(t_->actionList) + static_cast<uintptr_t>(pos) * 4, listed) && listed == after.pairs[i].action
-                             ? actionName(pos)
-                             : "action " + std::to_string(pos);
-        char ob[16];
-        sprintf_s(ob, "%X", after.pairs[i].object);
-        if (!list.empty()) list += ", ";
-        list += an + "=" + ob;
-    }
+    const std::string list = pairList(rb(t_->actionList), after);
     logf(0, "bindings for %s (device %u, id %08X, read from the device the game just created): %s, %d binding(s): %s", nm.c_str(),
          devIndex, id,
          before.known ? "saved in the profile, kept" : "the game's defaults added to the profile", after.count,

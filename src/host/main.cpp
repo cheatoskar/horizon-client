@@ -123,11 +123,17 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     setGame(adapter);
     adapter->install();
     eventsInit();
-    if (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL) {
-        // HttpOpenRequestA import slot: ESWC 0x00aca340, Original 0x00a162d4 (PE import directory)
-        const uintptr_t slot = s.game.game == HORIZON_GAME_ESWC ? 0x00aca340 : 0x00a162d4;
-        if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base, slot);
-        else HLOG("online: OnlineFix=0 in host.json, login left as it is");
+    if (s.game.game == HORIZON_GAME_ESWC || s.game.game == HORIZON_GAME_ORIGINAL || s.game.game == HORIZON_GAME_SUNRISE) {
+        // import slots (PE import directory): HttpOpenRequestA ESWC 0x00aca340, Original 0x00a162d4, Sunrise
+        // 0x00a1a2dc; Sunrise also InternetConnectA 0x00a1a2d8 and InternetCloseHandle 0x00a1a2d4 (master names)
+        if (!hostSettingInt("OnlineFix", 1)) HLOG("online: OnlineFix=0 in host.json, login left as it is");
+        else if (s.game.game == HORIZON_GAME_ESWC) onlineFixInstall(s.game.base, 0x00aca340);
+        else if (s.game.game == HORIZON_GAME_ORIGINAL) onlineFixInstall(s.game.base, 0x00a162d4);
+        else onlineFixInstall(s.game.base, 0x00a1a2dc, 0x00a1a2d8, 0x00a1a2d4);
+    }
+    if (s.game.game == HORIZON_GAME_SUNRISE || s.game.game == HORIZON_GAME_ORIGINAL) {
+        if (hostSettingInt("KeepBindings", 1)) keepBindingsInstall(s.game.base, s.game.game == HORIZON_GAME_ORIGINAL);
+        else HLOG("bindings: KeepBindings=0 in host.json, the game resets the bindings at every start as before");
     }
     // Forever: keyboard only, installed when the game's device exists (Competition Patch is known by then)
     if (adapter->directInputBlock() == GameAdapter::InputBlock::Full) dinputInstall(false);

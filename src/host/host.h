@@ -247,8 +247,15 @@ bool readPointer(const void* address, void** out);
 void describeAddress(const void* address, char* out, size_t size);
 bool patchImport(HMODULE module, const char* dll, const char* function, void* replacement, void** originalOut);
 
-// ------------------------------------------------------------------ online fix, ESWC and Original (onlinefix.cpp)
-// iatSlot: link address of the exe's HttpOpenRequestA import slot.
-void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot);
+// ------------------------------------------------------------------ online fix, ESWC, Original, Sunrise (onlinefix.cpp)
+// iatSlot: link address of the exe's HttpOpenRequestA import slot. Sunrise also gives its InternetConnectA and
+// InternetCloseHandle slots: its master names then go to the master's IP address with the Host header kept.
+void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot, uintptr_t iatConnect = 0, uintptr_t iatClose = 0);
+
+// ------------------------------------------------------------------ keep bindings, Sunrise and Original (keepbindings.cpp)
+// The game resets all input bindings when it loads the profiles at start; this redirects that one call to the
+// defaults pass (keepbindings_sites.h). Before the profiles are loaded; logs what it did. original: TM Original, else
+// TM Sunrise.
+bool keepBindingsInstall(uintptr_t exeBase, bool original);
 
 } // namespace horizon

@@ -17,6 +17,8 @@
 #include "host/game/forever_poll.h"
 #include "host/bridge_logic.h"
 #include "host/exe_known.h"
+#include "host/keepbindings_sites.h"
+#include "host/onlinefix_names.h"
 #include "host/input_gate.h"
 #include "gamectl/gamectl_pick.h"
 #include "host/stats_log.h"
@@ -805,6 +807,49 @@ static void testStatsLines() {
     CHECK(!stats::append(L"", "t.jsonl", "x"));
 }
 
+// Keep bindings (Sunrise, Original): the exes' bytes at the call, the redirected call, refusal of anything else.
+static void testKeepBindings() {
+    using namespace horizon::keepbind;
+    // what both exes hold (checked with pefile): 8b442410 8b4068 50 8bce e8 e6090000
+    const uint8_t exe[15] = {0x8b, 0x44, 0x24, 0x10, 0x8b, 0x40, 0x68, 0x50, 0x8b, 0xce, 0xe8, 0xe6, 0x09, 0x00, 0x00};
+    CHECK(check(sunrise(), exe) == State::Original && check(original(), exe) == State::Original);
+    uint8_t c[5];
+    callBytes(sunrise().call, sunrise().defaultsFn, c);
+    CHECK(c[0] == 0xe8 && c[1] == 0x16 && c[2] == 0x0a && c[3] == 0 && c[4] == 0); // 0x821D50 - 0x82133A
+    callBytes(original().call, original().defaultsFn, c);
+    CHECK(c[1] == 0x16 && c[2] == 0x0a); // 0x820230 - 0x81F81A
+    uint8_t kept[15];
+    memcpy(kept, exe, 10);
+    memcpy(kept + 10, c, 5);
+    CHECK(check(sunrise(), kept) == State::Kept && check(original(), kept) == State::Kept);
+    uint8_t other[15];
+    memcpy(other, exe, 15);
+    other[11] = 0x12; // a call elsewhere
+    CHECK(check(sunrise(), other) == State::Other);
+    memcpy(other, exe, 15);
+    other[3] = 0x14; // other code before the call
+    CHECK(check(sunrise(), other) == State::Other);
+    memcpy(other, exe, 15);
+    other[10] = 0x90; // no call
+    CHECK(check(original(), other) == State::Other);
+    CHECK(sunrise().call == 0x00821335 && original().call == 0x0081f815 && sunrise().appProfiles == 0x178);
+}
+
+// Login fix on Sunrise: only the two master names (any case, whole name) go to the master's IP address.
+static void testSunriseMasterNames() {
+    CHECK(std::string(kSunriseMasterIp) == "91.121.54.245");
+    const char* g = sunriseMasterName("game.trackmaniasunrise.com");
+    CHECK(g && std::string(g) == "game.trackmaniasunrise.com");
+    const char* w = sunriseMasterName("WWW.TrackManiaSunrise.COM");
+    CHECK(w && std::string(w) == "www.trackmaniasunrise.com");
+    CHECK(sunriseMasterName("Game.TrackmaniaSunrise.com") == g);
+    CHECK(!sunriseMasterName(nullptr) && !sunriseMasterName(""));
+    CHECK(!sunriseMasterName("trackmaniasunrise.com") && !sunriseMasterName("game.trackmanianations.com"));
+    CHECK(!sunriseMasterName("game.trackmaniasunrise.com.") && !sunriseMasterName("game.trackmaniasunrise.co"));
+    CHECK(!sunriseMasterName("xgame.trackmaniasunrise.com") && !sunriseMasterName("game.trackmaniasunrise.com:443"));
+    CHECK(!sunriseMasterName("91.121.54.245") && !sunriseMasterName("player.trackmania.com"));
+}
+
 // Exe identification: only the pinned builds run; TM Original only as the Online Patch v2 exe.
 static void testExeIdentification() {
     const std::string tmo = "75e129d769f4595ddde54a8ef484162915bc2bf998c1a2139cc963294fe8175e";
@@ -1075,6 +1120,8 @@ int main() {
     testBridgeLogic();
     testStatsLines();
     testExeIdentification();
+    testKeepBindings();
+    testSunriseMasterNames();
     testPickNewChallenge();
     testInputGate();
     testKeyMsgGate();
