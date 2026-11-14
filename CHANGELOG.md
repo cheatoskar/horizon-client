@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Saved input bindings are kept on Sunrise and Original** (host setting `KeepBindings`, default on, applies at the next start). Both games reset every binding (keyboard and pads) to the defaults when they load the profiles at start: a flag in the profile (+0x128) that should skip it is never saved, so the reset runs at every start and the next save writes the defaults. ESWC never had it. The host redirects that one call (Sunrise 0x00821335, Original 0x0081F815) to the defaults pass alone, which is what ESWC runs: saved bindings stay, devices without bindings get the defaults. The bytes are checked first (otherwise nothing changes); if the profiles are loaded already, nothing changes either. One log line says which. Unit tests for the byte check. Static analysis only, not tested in the game yet.
 - Controller fix: log only, nothing changed: once the game has loaded a profile (3 s after the controller fix starts, retried up to 3 min), one line per pad the game found at start with its bindings in the current profile's bindings config (`bindings at start: <name> (device n, id X, guid ...): in the profile ..., k binding(s): Accelerate=800, ...`) and how many device ids the config lists. For a player whose pad bindings seem to reset at every start. `GameBackend::startPads()` gives the pads and their GUID text to the standalone Legacy Essentials (its profile check). Unit tests on the fake game: report once, nothing changed, given up without a profile, GUID text.
 
 ## 0.3.2 (2026-11-14)

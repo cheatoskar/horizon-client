@@ -251,4 +251,10 @@ bool patchImport(HMODULE module, const char* dll, const char* function, void* re
 // iatSlot: link address of the exe's HttpOpenRequestA import slot.
 void onlineFixInstall(uintptr_t exeBase, uintptr_t iatSlot);
 
+// ------------------------------------------------------------------ keep bindings, Sunrise and Original (keepbindings.cpp)
+// The game resets all input bindings when it loads the profiles at start; this redirects that one call to the
+// defaults pass (keepbindings_sites.h). Before the profiles are loaded; logs what it did. original: TM Original, else
+// TM Sunrise.
+bool keepBindingsInstall(uintptr_t exeBase, bool original);
+
 } // namespace horizon

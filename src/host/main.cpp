@@ -129,6 +129,10 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
         if (hostSettingInt("OnlineFix", 1)) onlineFixInstall(s.game.base, slot);
         else HLOG("online: OnlineFix=0 in host.json, login left as it is");
     }
+    if (s.game.game == HORIZON_GAME_SUNRISE || s.game.game == HORIZON_GAME_ORIGINAL) {
+        if (hostSettingInt("KeepBindings", 1)) keepBindingsInstall(s.game.base, s.game.game == HORIZON_GAME_ORIGINAL);
+        else HLOG("bindings: KeepBindings=0 in host.json, the game resets the bindings at every start as before");
+    }
     // Forever: keyboard only, installed when the game's device exists (Competition Patch is known by then)
     if (adapter->directInputBlock() == GameAdapter::InputBlock::Full) dinputInstall(false);
     overlayCreateContext();
