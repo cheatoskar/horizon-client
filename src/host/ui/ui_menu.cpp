@@ -920,7 +920,7 @@ void drawGeneral(const Model& model, const Actions& actions) {
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
 
-        // online login fix (ESWC and Original)
+        // online login fix (ESWC, Sunrise, Original)
         bool loginFixGrouped = false; // shown in its group (Legacy Essentials) instead
         for (const GroupView& gv : model.groups)
             for (const GroupFeatureView& fv : gv.features) loginFixGrouped = loginFixGrouped || fv.hostFeature == "login-fix";

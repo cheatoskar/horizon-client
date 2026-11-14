@@ -165,6 +165,15 @@ Nur eine Testkopie des Spiels mit der `TMORIGINAL.EXE` aus dem Online Patch v2 v
 7. Start mit Shift gehalten: keine Plugins (Safe-Modus). Start mit Strg+Shift: Horizon wird gar nicht geladen. Beides im Log nachsehen.
 8. Wenn etwas hängt oder abstürzt: die neueste Log-Datei schicken.
 
+## Login-Fix auf Sunrise (Branch `sunrise-login`)
+
+Nur eine Testkopie von Sunrise. Die Hosts-Einträge für game./www.trackmaniasunrise.com dürfen bleiben oder raus (beides muss gehen); in den Windows-Internetoptionen TLS 1.0 und Sperrprüfung wieder auf den Standard stellen.
+
+1. Spiel starten. Im Log (`horizon\logs\`, neueste Datei): `online: fix active ...` und `online: Sunrise master names (game./www.trackmaniasunrise.com) go to 91.121.54.245, Host header kept`.
+2. Online anmelden. Im Log: einmal `online: Sunrise master name -> 91.121.54.245 (Host header kept)`, danach `online: HTTPS GET /online_game/... -> revocation check off`. Kein `Host header ... NOT set`.
+3. Serverliste öffnen und einem Server beitreten. Klappt es nicht: Fehlernummer aus dem Spiel und die Log-Datei schicken.
+4. Login-Fix im Menü (Legacy Essentials) aus, Neustart: im Log `OnlineFix=0`, der Login scheitert wieder mit 12031 (ohne Hosts-Einträge) oder 12157 (mit).
+
 ## Autosave auf Sunrise und Original (0.3.0, Modul `eswc-autosave` 2.1.0)
 
 Nur Testkopien. Das Modul ist auf Sunrise und Original neu, alles nur aus den Adressen gelesen, noch nie im Spiel gelaufen. Was es tut: `docs/plugins/eswc-autosave.md`.

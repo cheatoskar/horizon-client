@@ -36,7 +36,7 @@ menu changes:
   feature on. The row says "2 of 4 on" when only some are.
 - The group's page: a switch per feature (the label from `members`), then the members' own pages as tabs.
 - A member module is not listed alone. Opening a member's page (`open_page`, the bar) opens the group on its tab.
-- `"host": "login-fix"` is the host's login fix (`OnlineFix` in host.json, ESWC and Original, applies on the next
+- `"host": "login-fix"` is the host's login fix (`OnlineFix` in host.json, ESWC, Sunrise and Original, applies on the next
   start). It is shown in the group instead of General.
 - Only the features that apply to the running game are shown; a group without any (TMNF/TMUF for Legacy
   Essentials) is left out.
