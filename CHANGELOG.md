@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Controller fix: log only, nothing changed: once the game has loaded a profile (3 s after the controller fix starts, retried up to 3 min), one line per pad the game found at start with its bindings in the current profile's bindings config (`bindings at start: <name> (device n, id X, guid ...): in the profile ..., k binding(s): Accelerate=800, ...`) and how many device ids the config lists. For a player whose pad bindings seem to reset at every start. `GameBackend::startPads()` gives the pads and their GUID text to the standalone Legacy Essentials (its profile check). Unit tests on the fake game: report once, nothing changed, given up without a profile, GUID text.
+
 ## 0.3.2 (2026-11-14)
 
 - Horizon Performance: row **Cpu/Gpu synchro** under Smoothing. Shows what the game runs with and switches between Immediate, Half a frame and 1 Frame (tooltip: more FPS, about one frame more input delay). All five games default to Immediate: the CPU waits after every frame until the GPU has finished it, so shader mods cost their full GPU time (TMNF with TMVS: Immediate 50-70 fps, 1 Frame 90-105 fps). The switch calls the game's own `SyncGpuInit` between frames and only on exes whose viewport, method table slot and function bytes match the checked ones. ESWC, Sunrise, Original also keep it for the next start: the engine's config value and one character in `Default.SystemConfig.Gbx` next to the exe (backup once, refused on any other layout). TMNF/TMUF: this session only (their config is a compressed file in Documents; TM Horizon or TmForeverLauncher > Advanced keep it), and nothing at all with Competition Patch loaded. Every change is logged. Unit tests for the file edit (round trip, only that value changes, other layouts refused).

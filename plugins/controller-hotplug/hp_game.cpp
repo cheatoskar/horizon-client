@@ -241,9 +241,37 @@ GameBackend::GameBackend(const GameTable* table, uintptr_t exeBase, LogFn log, v
 
 GameBackend::~GameBackend() { delete binder_; }
 
-bool GameBackend::poll() {
+std::string guidText(const Guid& g) {
+    GUID x = fromGuid(g);
+    char b[40];
+    sprintf_s(b, "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", static_cast<unsigned long>(x.Data1), x.Data2, x.Data3,
+              x.Data4[0], x.Data4[1], x.Data4[2], x.Data4[3], x.Data4[4], x.Data4[5], x.Data4[6], x.Data4[7]);
+    return b;
+}
+
+bool GameBackend::poll() { return pollAt(GetTickCount()); }
+
+bool GameBackend::pollAt(uint32_t now) {
     uint8_t* p = verified_ ? port() : nullptr;
-    return p && binder_ ? binder_->raceCheck(p) : false;
+    if (!p || !binder_) return false;
+    const bool race = binder_->raceCheck(p);
+    if (startDone_) return race;
+    if (!startFirst_) startFirst_ = now ? now : 1;
+    const uint32_t waited = now - startFirst_;
+    if (waited >= kStartReportMs) {
+        std::vector<Slot> pads;
+        slots(pads);
+        startPads_.clear();
+        for (const auto& s : pads) startPads_.push_back(StartPad{static_cast<uint32_t>(s.index), toUtf8(s.name), guidText(s.instance)});
+        if (binder_->reportStart(p, startPads_)) {
+            startDone_ = true;
+            startLogged_ = true;
+        } else if (waited >= kStartGiveUpMs) {
+            startDone_ = true;
+            logf(1, "bindings at start: no bindings config of a profile after %u s, not reported", waited / 1000);
+        }
+    }
+    return race || !startDone_;
 }
 
 void GameBackend::logf(int level, const char* fmt, ...) {
