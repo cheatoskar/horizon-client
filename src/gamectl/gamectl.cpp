@@ -117,6 +117,7 @@ const Spec* g_spec = nullptr;
 Game g_game = Game::Unknown;
 LogFn g_log = nullptr;
 wchar_t g_lastPath[MAX_PATH] = {};
+void* g_lastCollection = nullptr; // last environment collection seen in the menus (Sunrise, Original)
 bool g_experimental = false;
 // Image base minus the link base 0x400000: TMLoader's TmForever 2.12.0 is relocated (ASLR), 2.12.0-compat and the
 // original exes load at 0x400000 (delta 0). Every link address of a Spec is moved by it.
@@ -339,7 +340,64 @@ bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
 // The game's own "play the selected map" (see the comment above kSpecs): SelectedChallengeInfo = info,
 // ChallengeType 3 (solo), menu mode as MenuPlayChallenge_Solo sets it, menu result 1. The menu fiber hands the
 // result to the app loop within the next frames.
+// Sunrise and Original: the race start (Original 0x806263, Sunrise the same bytes) reads the menus' selected
+// environment collection, CTrackManiaMenus+0x288, and dereferences +0x8C of it without a null check. The game sets
+// it in the collection grid (Original 0x7B5DA0: [menus+0x34C][index], the collections the menu lists, count at
+// +0x348) and the menus' constructor clears it; a map started through SelectedChallengeInfo skips the grid. With
+// the field empty the game crashed in the race start (crash dump 2026-11-22: read of 0x0000008C at 0x0080D410,
+// called from 0x00806292). Any collection works there (maps of other environments loaded fine with the one the
+// menu last had), so an empty field gets the last one seen, else the first one the menu lists.
+constexpr size_t kMenusCollection = 0x288, kMenusCollectionCount = 0x348, kMenusCollections = 0x34C;
+
+bool ensureCollection(void* menus) {
+    if (!g_spec || (g_spec->game != Game::Sunrise && g_spec->game != Game::Original)) return true;
+    void* cur = nullptr;
+    if (!readAt(menus, kMenusCollection, &cur)) return false;
+    if (cur) {
+        g_lastCollection = cur;
+        return true;
+    }
+    int count = 0;
+    void** items = nullptr;
+    const bool list = readAt(menus, kMenusCollectionCount, &count) && readAt(menus, kMenusCollections, &items) &&
+                      items && count > 0 && count <= 64;
+    void* pick = nullptr;
+    const char* how = "";
+    if (list && g_lastCollection) {
+        for (int i = 0; i < count && !pick; i++) {
+            void* c = nullptr;
+            if (readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) && c == g_lastCollection) pick = c;
+        }
+        if (pick) how = "the last one seen";
+    }
+    if (!pick && list) {
+        for (int i = 0; i < count && !pick; i++) {
+            void* c = nullptr;
+            if (readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) && c) pick = c;
+        }
+        if (pick) how = "the first one the menu lists";
+    }
+    if (!pick && g_lastCollection) {
+        pick = g_lastCollection;
+        how = "the last one seen (the menu lists none)";
+    }
+    if (!pick) {
+        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty, %d listed): not starting "
+             "the map, the game would crash in the race start", list ? count : -1);
+        return false;
+    }
+    __try {
+        *reinterpret_cast<void**>(static_cast<char*>(menus) + kMenusCollection) = pick;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    logf("gamectl: the menu had no environment collection selected (menus+0x288 empty, %d listed): set to %p, %s",
+         list ? count : -1, pick, how);
+    return true;
+}
+
 bool setMenuToPlay(void* app, void* menus, void* info) {
+    if (!ensureCollection(menus)) return false;
     __try {
         char* m = static_cast<char*>(menus);
         *reinterpret_cast<void**>(m + g_spec->menusSelected) = info;
