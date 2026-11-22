@@ -739,11 +739,12 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
     }
     g_backends = ImGui_ImplDX9_Init(dev);
     g_lost = false;
-    static bool s_textures = false;
-    if (!s_textures) {
-        s_textures = true;
-        texturesLoad();
-    }
+    // The menu's pictures belong to the device they were made on. Sunrise (Win10 repack, with its d3d9.dll proxy)
+    // makes a second device 0.1 s after the first; pictures of the first one made the menu draw nothing there and
+    // kept the input held back, so the game looked frozen until the menu was closed again.
+    static int s_devices = 0;
+    if (s_devices++ > 0) HLOG("overlay: a new device: the menu's pictures are made again on it");
+    texturesLoad();
 }
 
 void overlayBeforeReset() {

@@ -348,7 +348,23 @@ bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
 // called from 0x00806292). Any collection works there (maps of other environments loaded fine with the one the
 // menu last had), so an empty field gets the last one seen, else the first one the menu lists. Right after the
 // game starts the field and the list are both empty and maps still load; then nothing is changed.
-constexpr size_t kMenusCollection = 0x288, kMenusCollectionCount = 0x348, kMenusCollections = 0x34C;
+constexpr size_t kMenusCollection = 0x288;
+// Two lists of the same collection pointers: the grid's (+0x348 count, +0x34C items; filled when the collection page
+// is built, Original 0x7B5290 copies it item by item from) the menus' own list (+0x248 count, +0x24C items).
+struct CollectionList { size_t count, items; const char* name; };
+constexpr CollectionList kCollectionLists[] = {{0x348, 0x34C, "the grid"}, {0x248, 0x24C, "the menus' list"}};
+
+int listCount(void* menus, const CollectionList& l, void*** items) {
+    int count = 0;
+    *items = nullptr;
+    if (!readAt(menus, l.count, &count) || !readAt(menus, l.items, items) || !*items || count <= 0 || count > 64) return 0;
+    return count;
+}
+
+void* listItem(void** items, int i) {
+    void* c = nullptr;
+    return readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) ? c : nullptr;
+}
 
 bool ensureCollection(void* menus) {
     if (!g_spec || (g_spec->game != Game::Sunrise && g_spec->game != Game::Original)) return true;
@@ -358,44 +374,44 @@ bool ensureCollection(void* menus) {
         g_lastCollection = cur;
         return true;
     }
-    int count = 0;
-    void** items = nullptr;
-    const bool list = readAt(menus, kMenusCollectionCount, &count) && readAt(menus, kMenusCollections, &items) &&
-                      items && count > 0 && count <= 64;
     void* pick = nullptr;
-    const char* how = "";
-    if (list && g_lastCollection) {
-        for (int i = 0; i < count && !pick; i++) {
-            void* c = nullptr;
-            if (readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) && c == g_lastCollection) pick = c;
-        }
-        if (pick) how = "the last one seen";
+    char how[96] = "";
+    int counts[2] = {};
+    for (int li = 0; li < 2; li++) {
+        void** items = nullptr;
+        counts[li] = listCount(menus, kCollectionLists[li], &items);
+        for (int i = 0; i < counts[li] && !pick && g_lastCollection; i++)
+            if (listItem(items, i) == g_lastCollection) {
+                pick = g_lastCollection;
+                _snprintf_s(how, _TRUNCATE, "the last one seen (in %s)", kCollectionLists[li].name);
+            }
     }
-    if (!pick && list) {
-        for (int i = 0; i < count && !pick; i++) {
-            void* c = nullptr;
-            if (readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) && c) pick = c;
-        }
-        if (pick) how = "the first one the menu lists";
+    for (int li = 0; li < 2 && !pick; li++) {
+        void** items = nullptr;
+        const int n = listCount(menus, kCollectionLists[li], &items);
+        for (int i = 0; i < n && !pick; i++)
+            if (void* c = listItem(items, i)) {
+                pick = c;
+                _snprintf_s(how, _TRUNCATE, "item %d of %s", i, kCollectionLists[li].name);
+            }
     }
     if (!pick && g_lastCollection) {
         pick = g_lastCollection;
-        how = "the last one seen (the menu lists none)";
+        _snprintf_s(how, _TRUNCATE, "the last one seen (no list has items)");
     }
     if (!pick) {
-        // Normal right after the game starts (nothing listed yet) and maps load fine then: the race start reads the
-        // field only in some states. Nothing to fill it with, so the map starts as before.
-        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty, %d listed), none seen "
-             "yet: starting the map as it is", list ? count : -1);
+        // nothing to fill it with: the map starts as before (the first map after the game starts loads fine)
+        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty; grid %d, menus' list %d "
+             "items), none to set: starting the map as it is", counts[0], counts[1]);
         return true;
     }
     __try {
         *reinterpret_cast<void**>(static_cast<char*>(menus) + kMenusCollection) = pick;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        return true;
     }
-    logf("gamectl: the menu had no environment collection selected (menus+0x288 empty, %d listed): set to %p, %s",
-         list ? count : -1, pick, how);
+    logf("gamectl: the menu had no environment collection selected (menus+0x288 empty; grid %d, menus' list %d items): "
+         "set to %p, %s", counts[0], counts[1], pick, how);
     return true;
 }
 
