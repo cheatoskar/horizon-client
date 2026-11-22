@@ -731,11 +731,13 @@ void cleanupCopies(int keep) {
     qsort(names, n, sizeof(names[0]), [](const void* a, const void* b) {
         return wcscmp(static_cast<const wchar_t*>(a), static_cast<const wchar_t*>(b));
     });
+    int removed = 0;
     for (int i = 0; i < n - keep; i++) {
         wchar_t full[MAX_PATH];
         swprintf_s(full, L"%s%s", dir, names[i]);
-        if (_wcsicmp(full, g_lastPath) != 0) DeleteFileW(full);
+        if (_wcsicmp(full, g_lastPath) != 0 && DeleteFileW(full)) removed++;
     }
+    if (removed > 0) logf("gamectl: removed %d old map copies from %ls", removed, dir);
 }
 
 } // namespace gamectl
