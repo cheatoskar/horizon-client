@@ -375,7 +375,7 @@ void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t o
     p->hostFlags = on ? (p->hostFlags | flag) : (p->hostFlags & ~flag);
     if (before != p->hostFlags) logLine(HORIZON_LOG_INFO, p->id.c_str(), "host flags 0x%x", p->hostFlags);
 }
-uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll(); }
+uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll() | (layoutModeOn() ? HORIZON_HOST_FLAG_LAYOUT : 0u); }
 
 // ---- ABI minor 3: toasts, the TM Horizon bridge
 void HORIZON_CALL apiNotify(HorizonPluginHandle h, const HorizonToast* t) {
