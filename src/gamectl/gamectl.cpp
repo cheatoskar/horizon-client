@@ -346,7 +346,8 @@ bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
 // +0x348) and the menus' constructor clears it; a map started through SelectedChallengeInfo skips the grid. With
 // the field empty the game crashed in the race start (crash dump 2026-11-22: read of 0x0000008C at 0x0080D410,
 // called from 0x00806292). Any collection works there (maps of other environments loaded fine with the one the
-// menu last had), so an empty field gets the last one seen, else the first one the menu lists.
+// menu last had), so an empty field gets the last one seen, else the first one the menu lists. Right after the
+// game starts the field and the list are both empty and maps still load; then nothing is changed.
 constexpr size_t kMenusCollection = 0x288, kMenusCollectionCount = 0x348, kMenusCollections = 0x34C;
 
 bool ensureCollection(void* menus) {
@@ -382,9 +383,11 @@ bool ensureCollection(void* menus) {
         how = "the last one seen (the menu lists none)";
     }
     if (!pick) {
-        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty, %d listed): not starting "
-             "the map, the game would crash in the race start", list ? count : -1);
-        return false;
+        // Normal right after the game starts (nothing listed yet) and maps load fine then: the race start reads the
+        // field only in some states. Nothing to fill it with, so the map starts as before.
+        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty, %d listed), none seen "
+             "yet: starting the map as it is", list ? count : -1);
+        return true;
     }
     __try {
         *reinterpret_cast<void**>(static_cast<char*>(menus) + kMenusCollection) = pick;
