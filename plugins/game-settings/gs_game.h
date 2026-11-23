@@ -20,6 +20,19 @@
 //   fullscreen present parameters from the configured fullscreen mode and resets the device through the game's
 //   own reset path (the one it uses after a lost device: resources released and made again); on failure it logs
 //   "-> Fail" and goes back to windowed. StopFullscreen resets to windowed and restores style and rectangle.
+//   The fullscreen size: StartFullscreen takes width and height from the game's own mode list (viewport +0x13c
+//   count, +0x140 entries of 0x18 bytes, width +0 and height +4) at FullScreenModeIndex (viewport +0x5c, a
+//   reflected member of CHmsViewport, id 0x06010024), the refresh rate from FullScreenRefreshRate (+0x64, an
+//   index into that mode's refresh list; -1 = the driver's default, D3DPRESENT_RATE_DEFAULT). The window's
+//   size plays no part, so the switch went fullscreen in whatever mode that index held (my test: 1280x960,
+//   stretched on a 2560x1440 monitor). Since 1.2.0 the switch sets the
+//   index to the monitor's own mode first (found in the game's list; not found: the game's own stays) and puts
+//   the old one back when the game goes windowed again, so the game's own setting is unchanged.
+//   The refresh lists: viewport +0x144 (16 bit) or +0x168 (32 bit, viewport +0x60 set), each {count, per-mode
+//   {first, count} pairs, ..., count, Hz values}; the code reading them (present parameters) is checked too.
+//   Windowed, the back buffer is the window's client area: the game resets the device itself when the window
+//   changes size (between two frames, the same reset as after a lost device), so a size from the menu is just
+//   the window's size (SetWindowPos).
 // So:
 //   at start   applyStart(): the chosen values go into the config the game is about to use (its own init applies
 //              them to the audio port and the Direct3D device);
@@ -79,7 +92,15 @@ struct GameTable {
     uint32_t vpOffset;    // app -> viewport (CHmsViewportDx9)
     uintptr_t vpVtable;   // its vtable; +0x9c StartFullscreen, +0xa0 StopFullscreen
     Part toggle;          // the live switch: both functions' code and the two vtable slots
+    Part fsMode;          // the fullscreen mode list and index (see above); off: fullscreen in the game's own mode
 };
+
+// Windowed sizes offered in the menu (client area). 4:3 first (these games were made for it), then 16:9.
+struct WinSize {
+    int w, h;
+};
+// The sizes that fit into maxW x maxH (the monitor's work area minus the window frame), at most `cap`.
+int windowSizes(int maxW, int maxH, WinSize* out, int cap);
 
 const GameTable& eswcTable();
 const GameTable& sunriseTable();
@@ -128,7 +149,11 @@ public:
     // Game thread, between two frames (not inside BeginScene/EndScene, not inside a Reset): switches with the
     // game's own StartFullscreen / StopFullscreen and writes the config to match. Returns true if the game is in
     // the wanted mode afterwards (false: the game refused or went back; logged).
-    bool switchWindowMode(bool fullscreen);
+    // fsW/fsH/fsHz: the monitor's own mode (0 = the game's own fullscreen mode, as before 1.2.0).
+    bool switchWindowMode(bool fullscreen, int fsW = 0, int fsH = 0, int fsHz = 0);
+    bool fsModeOk();
+    // The game's fullscreen mode now (from its list at FullScreenModeIndex). false: not readable.
+    bool fullscreenModeSize(int* w, int* h);
 
     const GameTable* table() const { return table_; }
 
@@ -139,6 +164,8 @@ private:
     uint8_t* display();
     uint8_t* port();
     uint8_t* viewport();
+    bool selectFullscreenMode(uint8_t* vp, int w, int h, int hz);
+    void restoreFullscreenMode(uint8_t* vp);
     bool readVolume(bool music, float* v);
     bool setVolume(bool music, float v);
     void logf(int level, const char* fmt, ...);
@@ -150,6 +177,9 @@ private:
     bool audioDone_ = false, audioOk_ = false;
     bool displayDone_ = false, displayOk_ = false;
     bool toggleDone_ = false, toggleOk_ = false;
+    bool fsModeDone_ = false, fsModeOk_ = false;
+    bool fsSaved_ = false;          // the game's own FullScreenModeIndex / refresh index, put back when windowed
+    uint32_t fsOldIndex_ = 0, fsOldRefresh_ = 0;
     bool loggedPort_ = false;
 };
 

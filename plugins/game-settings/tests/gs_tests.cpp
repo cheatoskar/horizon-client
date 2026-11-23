@@ -47,7 +47,7 @@ struct Fake {
 
     explicit Fake(const gs::GameTable* table) : t(table) {
         img = static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
-        for (const gs::Part* p : {&t->audio, &t->display, &t->toggle}) {
+        for (const gs::Part* p : {&t->audio, &t->display, &t->toggle, &t->fsMode}) {
             for (int i = 0; i < p->codeCount; i++) memcpy(at(p->code[i].addr), p->code[i].bytes, p->code[i].len);
             for (int i = 0; i < p->ptrCount; i++) put(at(p->ptrs[i].addr), rel(p->ptrs[i].value));
             for (int i = 0; i < p->paramCount; i++) {
@@ -279,6 +279,92 @@ static void toggleTests(const gs::GameTable& t) {
     }
 }
 
+// The game's mode list (0x18 per mode) and the 32 bit refresh lists: 1280x960 (60, 75 Hz), 1920x1080 (60),
+// 2560x1440 (60, 144 Hz); the game's own index on 1280x960 at 75 Hz.
+struct Modes {
+    uint32_t list[3 * 6] = {1280, 960, 0, 0, 0, 0, 1920, 1080, 0, 0, 0, 0, 2560, 1440, 0, 0, 0, 0};
+    uint32_t pairs[6] = {0, 2, 2, 1, 3, 2};
+    uint32_t hz[5] = {60, 75, 60, 60, 144};
+    void put(Fake& f) {
+        Fake::put(f.viewport + 0x13c, 3);
+        Fake::put(f.viewport + 0x140, Fake::ptr(list));
+        Fake::put(f.viewport + 0x5c, 0);
+        Fake::put(f.viewport + 0x60, 1);
+        Fake::put(f.viewport + 0x64, 1);
+        Fake::put(f.viewport + 0x168, 3);
+        Fake::put(f.viewport + 0x168 + 4, Fake::ptr(pairs));
+        Fake::put(f.viewport + 0x168 + 0xc, 5);
+        Fake::put(f.viewport + 0x168 + 0x10, Fake::ptr(hz));
+    }
+};
+
+static void fsModeTests(const gs::GameTable& t) {
+    printf("===== fullscreen in the monitor's mode, %s\n", t.name);
+    {
+        Fake f(&t);
+        Modes m;
+        m.put(f);
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        int w = 0, h = 0;
+        check(g.fsModeOk() && g.fullscreenModeSize(&w, &h) && w == 1280 && h == 960, "fs mode: signatures match, the game's own 1280x960");
+        check(g.switchWindowMode(true, 2560, 1440, 144) && Fake::get(f.viewport + 0x5c) == 2 && Fake::get(f.viewport + 0x64) == 1,
+              "fs mode: the monitor's 2560x1440 at 144 Hz picked before StartFullscreen");
+        check(g.switchWindowMode(false) && Fake::get(f.viewport + 0x5c) == 0 && Fake::get(f.viewport + 0x64) == 1,
+              "fs mode: windowed again -> the game's own mode index and refresh are back");
+        check(g.switchWindowMode(true, 1920, 1080, 165) && Fake::get(f.viewport + 0x5c) == 1 && Fake::get(f.viewport + 0x64) == 0xffffffffu,
+              "fs mode: a refresh rate the mode does not list -> the driver's default (-1)");
+        g.switchWindowMode(false);
+    }
+    {
+        Fake f(&t);
+        Modes m;
+        m.put(f);
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(g.switchWindowMode(true, 3440, 1440, 60) && Fake::get(f.viewport + 0x5c) == 0 && Fake::get(f.viewport + 0x64) == 1,
+              "fs mode: a monitor mode the game does not list -> the game's own mode stays");
+    }
+    {
+        // the game refuses: its own mode is back for its next try
+        Fake f(&t);
+        Modes m;
+        m.put(f);
+        static const uint8_t kRefuse[] = {0xb8, 0x00, 0x00, 0x00, 0x00, 0xc3};
+        memcpy(f.at(t.toggle.ptrs[0].value), kRefuse, sizeof(kRefuse));
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(!g.switchWindowMode(true, 2560, 1440, 60) && Fake::get(f.viewport + 0x5c) == 0 && Fake::get(f.viewport + 0x64) == 1,
+              "fs mode: StartFullscreen refused -> the game's own mode restored");
+    }
+    {
+        // the present-parameter code differs: fullscreen still works, in the game's own mode
+        Fake f(&t);
+        Modes m;
+        m.put(f);
+        f.at(t.fsMode.code[2].addr)[0] ^= 0xff;
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(!g.fsModeOk() && g.switchWindowMode(true, 2560, 1440, 60) && Fake::get(f.viewport + 0x5c) == 0,
+              "fs mode: changed code -> only the monitor mode is off, the switch still works");
+    }
+    {
+        // a list that does not look like one (count 0): nothing written
+        Fake f(&t);
+        Modes m;
+        m.put(f);
+        Fake::put(f.viewport + 0x13c, 0);
+        gs::Game g(&t, f.base(), &logCb, nullptr);
+        check(g.switchWindowMode(true, 2560, 1440, 60) && Fake::get(f.viewport + 0x5c) == 0, "fs mode: empty list -> nothing written");
+    }
+    gs::WinSize sz[16];
+    const int n = gs::windowSizes(2560, 1400, sz, 16);
+    bool has1440 = false, has1080 = false, has1200 = false;
+    for (int i = 0; i < n; i++) {
+        has1440 = has1440 || sz[i].h == 1440;
+        has1080 = has1080 || (sz[i].w == 1920 && sz[i].h == 1080);
+        has1200 = has1200 || sz[i].h == 1200;
+    }
+    check(n == 7 && !has1440 && has1080 && has1200, "window sizes: only sizes that fit (2560x1440 does not fit 2560x1400)");
+    check(gs::windowSizes(1024, 768, sz, 16) == 2 && sz[0].w == 800 && sz[1].w == 1024, "window sizes: a small monitor keeps 4:3 800 and 1024");
+}
+
 static int g_ran = 0;
 static void countRun(void* user) { g_ran += *static_cast<int*>(user); }
 
@@ -325,6 +411,9 @@ int main() {
     toggleTests(gs::eswcTable());
     toggleTests(gs::sunriseTable());
     toggleTests(gs::originalTable());
+    fsModeTests(gs::eswcTable());
+    fsModeTests(gs::sunriseTable());
+    fsModeTests(gs::originalTable());
     betweenFramesTest();
     masterTest();
     printf("gs_tests: %d passed, %d failed\n", g_pass, g_fail);

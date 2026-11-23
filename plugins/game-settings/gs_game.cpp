@@ -44,6 +44,24 @@ const uint8_t kStartFs[] = {0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x86, 0x60, 0x02, 0x00
 const uint8_t kStopFs[] = {0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x86, 0x60, 0x02, 0x00, 0x00, 0x33, 0xdb, 0x3b, 0xc3,
                            0x0f, 0x84, 0x15, 0x01, 0x00, 0x00, 0x89, 0x9e, 0x60, 0x02, 0x00, 0x00};
 constexpr uint32_t kFsNow = 0x260; // viewport: fullscreen now
+// the fullscreen mode (gs_game.h): the same code in the three games
+// StartFullscreen's helper: mov eax,[esi+5c]; mov edx,[esi+140]; lea eax,[eax+eax*2]; lea eax,[edx+eax*8]
+const uint8_t kFsModeRead[] = {0x8b, 0x46, 0x5c, 0x8b, 0x96, 0x40, 0x01, 0x00, 0x00, 0x8d, 0x04, 0x40, 0x8d, 0x04, 0xc2};
+// the present parameters: mov eax,[esi+13c] (mode count) ...
+const uint8_t kFsModeCount[] = {0x8b, 0x86, 0x3c, 0x01, 0x00, 0x00};
+// ... cmp [esi+5c],eax; jb; dec eax; mov [esi+5c],eax; cmp [esi+60],ebx; lea eax,[esi+168]; jne; lea eax,[esi+144];
+// mov ecx,[esi+64]; cmp ecx,-1; jne
+const uint8_t kFsModeClamp[] = {0x39, 0x46, 0x5c, 0x72, 0x04, 0x48, 0x89, 0x46, 0x5c, 0x39, 0x5e, 0x60, 0x8d, 0x86, 0x68, 0x01, 0x00,
+                                0x00, 0x75, 0x06, 0x8d, 0x86, 0x44, 0x01, 0x00, 0x00, 0x8b, 0x4e, 0x64, 0x83, 0xf9, 0xff, 0x75, 0x0e};
+// mov ebx,[eax+4]; mov edi,[esi+5c]; mov edi,[ebx+edi*8]; add edi,ecx; mov ecx,[eax+10]; mov eax,[ecx+edi*4]
+const uint8_t kFsRefresh[] = {0x8b, 0x58, 0x04, 0x8b, 0x7e, 0x5c, 0x8b, 0x3c, 0xfb, 0x03, 0xf9, 0x8b, 0x48, 0x10, 0x8b, 0x04, 0xb9};
+constexpr uint32_t kModeIndex = 0x5c;   // CHmsViewport FullScreenModeIndex
+constexpr uint32_t kModeDepth = 0x60;   // 0 = the 16 bit refresh lists, else the 32 bit ones
+constexpr uint32_t kModeRefresh = 0x64; // index into the mode's refresh list, -1 = default
+constexpr uint32_t kModeCount = 0x13c;
+constexpr uint32_t kModeList = 0x140;
+constexpr uint32_t kModeStride = 0x18;
+constexpr uint32_t kRefresh16 = 0x144, kRefresh32 = 0x168;
 
 // ---- ESWC 1.80 (TmNationsESWC.exe, timestamp 5ce7272f)
 const CodeSig kEswcAudioCode[] = {
@@ -82,12 +100,22 @@ const PtrSig kEswcTogglePtrs[] = {
     {0x00af5d74, 0x007d3f70}, // vtable +0x9c
     {0x00af5d78, 0x007d41b0}, // vtable +0xa0
 };
+const CodeSig kEswcFsModeCode[] = {
+    {0x007d3e64, sizeof(kFsModeRead), kFsModeRead},
+    {0x007d603f, sizeof(kFsModeCount), kFsModeCount},
+    {0x007d606b, sizeof(kFsModeClamp), kFsModeClamp},
+    {0x007d609b, sizeof(kFsRefresh), kFsRefresh},
+};
+const ParamSig kEswcFsModeParams[] = {
+    {0x00bb6d00, 0x0d, 0x06010024, kModeIndex}, // CHmsViewport FullScreenModeIndex
+};
 const GameTable kEswc = {
     "TmNationsESWC 1.80", 0x5ce7272f, 0x00c96140, 0x00c945e0, 0xec, 0xf0,
     {kEswcAudioCode, _countof(kEswcAudioCode), kEswcPtrs, _countof(kEswcPtrs), kEswcAudioParams, _countof(kEswcAudioParams)},
     {kEswcDisplayCode, _countof(kEswcDisplayCode), kEswcPtrs + 1, 1, kEswcDisplayParams, _countof(kEswcDisplayParams)},
     0x3c, 0x00af5cd8,
     {kEswcToggleCode, _countof(kEswcToggleCode), kEswcTogglePtrs, _countof(kEswcTogglePtrs), nullptr, 0},
+    {kEswcFsModeCode, _countof(kEswcFsModeCode), nullptr, 0, kEswcFsModeParams, _countof(kEswcFsModeParams)},
 };
 
 // ---- Sunrise (TmSunrise.exe Win10 community repack, timestamp 5cc8f0cf)
@@ -127,12 +155,22 @@ const PtrSig kTmsTogglePtrs[] = {
     {0x00a31c04, 0x005e4d80},
     {0x00a31c08, 0x005e5040},
 };
+const CodeSig kTmsFsModeCode[] = {
+    {0x005e4c74, sizeof(kFsModeRead), kFsModeRead},
+    {0x005e715f, sizeof(kFsModeCount), kFsModeCount},
+    {0x005e718b, sizeof(kFsModeClamp), kFsModeClamp},
+    {0x005e71bb, sizeof(kFsRefresh), kFsRefresh},
+};
+const ParamSig kTmsFsModeParams[] = {
+    {0x00abf2e0, 0x0d, 0x06010024, kModeIndex},
+};
 const GameTable kTms = {
     "TmSunrise (Win10 repack)", 0x5cc8f0cf, 0x00b8b494, 0x00b8ab60, 0xe0, 0xe4,
     {kTmsAudioCode, _countof(kTmsAudioCode), kTmsPtrs, _countof(kTmsPtrs), kTmsAudioParams, _countof(kTmsAudioParams)},
     {kTmsDisplayCode, _countof(kTmsDisplayCode), kTmsPtrs + 1, 1, kTmsDisplayParams, _countof(kTmsDisplayParams)},
     0x44, 0x00a31b68,
     {kTmsToggleCode, _countof(kTmsToggleCode), kTmsTogglePtrs, _countof(kTmsTogglePtrs), nullptr, 0},
+    {kTmsFsModeCode, _countof(kTmsFsModeCode), nullptr, 0, kTmsFsModeParams, _countof(kTmsFsModeParams)},
 };
 
 // ---- Original (TMORIGINAL.EXE Online Patch v2 community exe, timestamp 5d337477)
@@ -172,12 +210,22 @@ const PtrSig kTmoTogglePtrs[] = {
     {0x00a2dbc4, 0x005e48e0},
     {0x00a2dbc8, 0x005e4ba0},
 };
+const CodeSig kTmoFsModeCode[] = {
+    {0x005e47d4, sizeof(kFsModeRead), kFsModeRead},
+    {0x005e6cbf, sizeof(kFsModeCount), kFsModeCount},
+    {0x005e6ceb, sizeof(kFsModeClamp), kFsModeClamp},
+    {0x005e6d1b, sizeof(kFsRefresh), kFsRefresh},
+};
+const ParamSig kTmoFsModeParams[] = {
+    {0x00abb2e0, 0x0d, 0x06010024, kModeIndex},
+};
 const GameTable kTmo = {
     "TMORIGINAL (Online Patch v2)", 0x5d337477, 0x00b866f4, 0x00b85dc0, 0xe0, 0xe4,
     {kTmoAudioCode, _countof(kTmoAudioCode), kTmoPtrs, _countof(kTmoPtrs), kTmoAudioParams, _countof(kTmoAudioParams)},
     {kTmoDisplayCode, _countof(kTmoDisplayCode), kTmoPtrs + 1, 1, kTmoDisplayParams, _countof(kTmoDisplayParams)},
     0x44, 0x00a2db28,
     {kTmoToggleCode, _countof(kTmoToggleCode), kTmoTogglePtrs, _countof(kTmoTogglePtrs), nullptr, 0},
+    {kTmoFsModeCode, _countof(kTmoFsModeCode), nullptr, 0, kTmoFsModeParams, _countof(kTmoFsModeParams)},
 };
 
 bool rd32(uintptr_t addr, uint32_t* out) { return addr && safeRead(reinterpret_cast<const void*>(addr), out, 4); }
@@ -280,6 +328,19 @@ bool Game::verify(const Part& part, const char* what, bool* done, bool* ok) {
 
 bool Game::toggleOk() {
     return displayOk() && verify(table_ ? table_->toggle : Part{}, "window mode switch", &toggleDone_, &toggleOk_);
+}
+
+bool Game::fsModeOk() {
+    return toggleOk() && verify(table_ ? table_->fsMode : Part{}, "fullscreen in the monitor's mode", &fsModeDone_, &fsModeOk_);
+}
+
+int windowSizes(int maxW, int maxH, WinSize* out, int cap) {
+    static const WinSize kSizes[] = {{800, 600},  {1024, 768}, {1280, 960},  {1600, 1200},
+                                     {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
+    int n = 0;
+    for (const WinSize& s : kSizes)
+        if (s.w <= maxW && s.h <= maxH && n < cap) out[n++] = s;
+    return n;
 }
 
 bool Game::audioOk() { return verify(table_ ? table_->audio : Part{}, "music and sound volume", &audioDone_, &audioOk_); }
@@ -386,7 +447,84 @@ int callViewport(uintptr_t fn, void* vp, bool* faulted) {
 }
 } // namespace
 
-bool Game::switchWindowMode(bool fullscreen) {
+// The game's mode list: count and entries, each {width, height, ...}; false when it does not look like one.
+namespace {
+bool modeList(uint8_t* vp, uint32_t* count, uint32_t* list) {
+    return rd32(reinterpret_cast<uintptr_t>(vp + kModeCount), count) && *count > 0 && *count <= 1024 &&
+           rd32(reinterpret_cast<uintptr_t>(vp + kModeList), list) && *list;
+}
+bool modeSize(uint32_t list, uint32_t i, int* w, int* h) {
+    uint32_t wh[2] = {};
+    if (!safeRead(reinterpret_cast<const void*>(static_cast<uintptr_t>(list + i * kModeStride)), wh, 8)) return false;
+    if (wh[0] < 320 || wh[0] > 16384 || wh[1] < 200 || wh[1] > 16384) return false;
+    *w = static_cast<int>(wh[0]);
+    *h = static_cast<int>(wh[1]);
+    return true;
+}
+} // namespace
+
+bool Game::fullscreenModeSize(int* w, int* h) {
+    if (!fsModeOk()) return false;
+    uint8_t* vp = viewport();
+    uint32_t count = 0, list = 0, idx = 0;
+    if (!vp || !modeList(vp, &count, &list) || !rd32(reinterpret_cast<uintptr_t>(vp + kModeIndex), &idx) || idx >= count) return false;
+    return modeSize(list, idx, w, h);
+}
+
+// FullScreenModeIndex (and the refresh index) to w x h at hz from the game's own lists; the old ones are kept for
+// restoreFullscreenMode. false: not in the list, or a list that does not look right (nothing written).
+bool Game::selectFullscreenMode(uint8_t* vp, int w, int h, int hz) {
+    uint32_t count = 0, list = 0, oldIdx = 0, oldRef = 0, depth = 0;
+    if (!modeList(vp, &count, &list) || !rd32(reinterpret_cast<uintptr_t>(vp + kModeIndex), &oldIdx) || oldIdx >= count ||
+        !rd32(reinterpret_cast<uintptr_t>(vp + kModeRefresh), &oldRef) || !rd32(reinterpret_cast<uintptr_t>(vp + kModeDepth), &depth)) {
+        logf(1, "fullscreen: the game's mode list is not readable: its own mode stays");
+        return false;
+    }
+    int ow = 0, oh = 0;
+    modeSize(list, oldIdx, &ow, &oh);
+    uint32_t pick = count;
+    for (uint32_t i = 0; i < count && pick == count; i++) {
+        int mw = 0, mh = 0;
+        if (modeSize(list, i, &mw, &mh) && mw == w && mh == h) pick = i;
+    }
+    if (pick == count) {
+        logf(1, "fullscreen: %dx%d is not in the game's %u modes: its own %dx%d stays", w, h, count, ow, oh);
+        return false;
+    }
+    // the refresh rate: the monitor's own if the mode lists it, else the driver's default (-1)
+    uint32_t refresh = 0xffffffffu;
+    const uintptr_t t = reinterpret_cast<uintptr_t>(vp + (depth ? kRefresh32 : kRefresh16));
+    uint32_t pairs = 0, pairPtr = 0, hzCount = 0, hzPtr = 0, pair[2] = {};
+    if (hz > 0 && rd32(t, &pairs) && pairs == count && rd32(t + 4, &pairPtr) && pairPtr && rd32(t + 0xc, &hzCount) &&
+        rd32(t + 0x10, &hzPtr) && hzPtr && safeRead(reinterpret_cast<const void*>(static_cast<uintptr_t>(pairPtr + pick * 8)), pair, 8) &&
+        pair[1] <= 64 && pair[0] < hzCount && pair[0] + pair[1] <= hzCount) {
+        for (uint32_t j = 0; j < pair[1]; j++) {
+            uint32_t v = 0;
+            if (rd32(hzPtr + (pair[0] + j) * 4, &v) && static_cast<int>(v) == hz) {
+                refresh = j;
+                break;
+            }
+        }
+    }
+    if (!fsSaved_) { // a second try before going windowed keeps the first saved values
+        fsSaved_ = true;
+        fsOldIndex_ = oldIdx;
+        fsOldRefresh_ = oldRef;
+    }
+    if (!safeWrite(vp + kModeIndex, &pick, 4) || !safeWrite(vp + kModeRefresh, &refresh, 4)) return false;
+    if (refresh == 0xffffffffu) logf(0, "fullscreen: the monitor's %dx%d (game's own %dx%d), refresh: the driver's default", w, h, ow, oh);
+    else logf(0, "fullscreen: the monitor's %dx%d at %d Hz (game's own %dx%d)", w, h, hz, ow, oh);
+    return true;
+}
+
+void Game::restoreFullscreenMode(uint8_t* vp) {
+    if (!fsSaved_ || !vp) return;
+    fsSaved_ = false;
+    safeWrite(vp + kModeIndex, &fsOldIndex_, 4);
+    safeWrite(vp + kModeRefresh, &fsOldRefresh_, 4);
+}
+
+bool Game::switchWindowMode(bool fullscreen, int fsW, int fsH, int fsHz) {
     bool now = false;
     if (!fullscreenNow(&now)) return false;
     if (now == fullscreen) return true;
@@ -397,19 +535,24 @@ bool Game::switchWindowMode(bool fullscreen) {
         fn != rb(fullscreen ? table_->toggle.ptrs[0].value : table_->toggle.ptrs[1].value))
         return false;
     logf(0, "window mode: %s (the game's own %s)", fullscreen ? "fullscreen" : "windowed", fullscreen ? "StartFullscreen" : "StopFullscreen");
+    bool picked = false;
+    if (fullscreen && fsW > 0 && fsH > 0 && fsModeOk()) picked = selectFullscreenMode(vp, fsW, fsH, fsHz);
     bool faulted = false;
     callViewport(fn, vp, &faulted);
     if (faulted) {
         logf(2, "window mode: the game's switch raised an exception: window mode off for this start");
         toggleOk_ = false;
+        if (picked) restoreFullscreenMode(vp);
         return false;
     }
     bool after = !fullscreen;
     fullscreenNow(&after);
     if (after != fullscreen) {
         logf(1, "window mode: the game stayed %s (see the game's own log line \"StartFullscreen ... -> Fail\")", after ? "fullscreen" : "windowed");
+        if (picked) restoreFullscreenMode(vp); // the game's own mode again
         return false;
     }
+    if (!fullscreen) restoreFullscreenMode(vp); // the game's own fullscreen setting stays as it was
     setFullscreen(fullscreen); // the next start the same
     return true;
 }
