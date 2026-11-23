@@ -109,6 +109,24 @@ void onPlayMap(const bridge::Event& e) {
     g_play.push_back(PlayRequest{e.id, title, rel});
 }
 
+// Game thread: Play in TM Horizon means "I want to play this now": the game window comes to the front (restored
+// when minimized). Windows only lets it take the focus because TM Horizon called AllowSetForegroundWindow with this
+// process id (sent as pid with the event poll) right before it sent the map; otherwise the taskbar button flashes.
+void bringGameToFront() {
+    HWND w = overlayWindow();
+    if (!w || !IsWindow(w)) return;
+    if (IsIconic(w)) ShowWindow(w, SW_RESTORE);
+    if (GetForegroundWindow() == w) return;
+    const BOOL ok = SetForegroundWindow(w);
+    if (ok) {
+        BringWindowToTop(w);
+    } else {
+        FLASHWINFO f = {sizeof(f), w, FLASHW_TRAY | FLASHW_TIMERNOFG, 3, 0};
+        FlashWindowEx(&f);
+    }
+    logLine(HORIZON_LOG_INFO, "host", "bridge: game window to the front: %s", ok ? "yes" : "refused by Windows (taskbar flashes)");
+}
+
 // Game thread: the queued play_map, same rules as play_map_file (main menu, not online). In a solo race the race is
 // left first (like Esc > Quit) and the map starts once the main menu is back: Play in TM Horizon means "play this
 // map now". `retry`: the attempt after leaving the race.
@@ -138,6 +156,7 @@ void runPlayMap(const PlayRequest& r, bool retry = false) {
             if (!g_afterRaceUntil) g_afterRaceUntil = 1;
             logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld: leaving the race first", r.id);
             toastPlay(HORIZON_TOAST_INFO, r.title, "Leaving the race, then loading the map.");
+            bringGameToFront();
             return;
         }
         if (res == HORIZON_ERR_WRONG_STATE) why = "Go to the main menu first.";
@@ -149,6 +168,7 @@ void runPlayMap(const PlayRequest& r, bool retry = false) {
             why ? ", " : "", why ? why : "");
     if (why) toastPlay(HORIZON_TOAST_WARN, r.title, why);
     else toastPlay(HORIZON_TOAST_OK, r.title, "Loading map.");
+    if (!why && !retry) bringGameToFront(); // after leaving a race it came to the front already
 }
 
 std::string currentKey() {
@@ -279,7 +299,7 @@ void controlLoop() {
             announced = true;
             logLine(HORIZON_LOG_INFO, "host", "bridge: connected");
         }
-        const std::string path = bridge::eventsPath(haveCursor, last, g_playMap);
+        const std::string path = bridge::eventsPath(haveCursor, last, g_playMap, GetCurrentProcessId());
         const bridge::HttpAnswer a = call(g_port, "GET", path, key, "", 30000, true);
         if (g_stop) break;
         if (a.status == 401) {
