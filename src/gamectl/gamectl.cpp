@@ -117,6 +117,7 @@ const Spec* g_spec = nullptr;
 Game g_game = Game::Unknown;
 LogFn g_log = nullptr;
 wchar_t g_lastPath[MAX_PATH] = {};
+void* g_lastCollection = nullptr; // last environment collection seen in the menus (Sunrise, Original)
 bool g_experimental = false;
 // Image base minus the link base 0x400000: TMLoader's TmForever 2.12.0 is relocated (ASLR), 2.12.0-compat and the
 // original exes load at 0x400000 (delta 0). Every link address of a Spec is moved by it.
@@ -339,7 +340,83 @@ bool infoFileName(void* info, int nameOff, char* out, size_t cap) {
 // The game's own "play the selected map" (see the comment above kSpecs): SelectedChallengeInfo = info,
 // ChallengeType 3 (solo), menu mode as MenuPlayChallenge_Solo sets it, menu result 1. The menu fiber hands the
 // result to the app loop within the next frames.
+// Sunrise and Original: the race start (Original 0x806263, Sunrise the same bytes) reads the menus' selected
+// environment collection, CTrackManiaMenus+0x288, and dereferences +0x8C of it without a null check. The game sets
+// it in the collection grid (Original 0x7B5DA0: [menus+0x34C][index], the collections the menu lists, count at
+// +0x348) and the menus' constructor clears it; a map started through SelectedChallengeInfo skips the grid. With
+// the field empty the game crashed in the race start (crash dump 2026-11-22: read of 0x0000008C at 0x0080D410,
+// called from 0x00806292). Any collection works there (maps of other environments loaded fine with the one the
+// menu last had), so an empty field gets the last one seen, else the first one the menu lists. Right after the
+// game starts the field and the list are both empty and maps still load; then nothing is changed.
+constexpr size_t kMenusCollection = 0x288;
+// Two lists of the same collection pointers: the grid's (+0x348 count, +0x34C items; filled when the collection page
+// is built, Original 0x7B5290 copies it item by item from) the menus' own list (+0x248 count, +0x24C items).
+struct CollectionList { size_t count, items; const char* name; };
+constexpr CollectionList kCollectionLists[] = {{0x348, 0x34C, "the grid"}, {0x248, 0x24C, "the menus' list"}};
+
+int listCount(void* menus, const CollectionList& l, void*** items) {
+    int count = 0;
+    *items = nullptr;
+    if (!readAt(menus, l.count, &count) || !readAt(menus, l.items, items) || !*items || count <= 0 || count > 64) return 0;
+    return count;
+}
+
+void* listItem(void** items, int i) {
+    void* c = nullptr;
+    return readAt(items, static_cast<size_t>(i) * sizeof(void*), &c) ? c : nullptr;
+}
+
+bool ensureCollection(void* menus) {
+    if (!g_spec || (g_spec->game != Game::Sunrise && g_spec->game != Game::Original)) return true;
+    void* cur = nullptr;
+    if (!readAt(menus, kMenusCollection, &cur)) return false;
+    if (cur) {
+        g_lastCollection = cur;
+        return true;
+    }
+    void* pick = nullptr;
+    char how[96] = "";
+    int counts[2] = {};
+    for (int li = 0; li < 2; li++) {
+        void** items = nullptr;
+        counts[li] = listCount(menus, kCollectionLists[li], &items);
+        for (int i = 0; i < counts[li] && !pick && g_lastCollection; i++)
+            if (listItem(items, i) == g_lastCollection) {
+                pick = g_lastCollection;
+                _snprintf_s(how, _TRUNCATE, "the last one seen (in %s)", kCollectionLists[li].name);
+            }
+    }
+    for (int li = 0; li < 2 && !pick; li++) {
+        void** items = nullptr;
+        const int n = listCount(menus, kCollectionLists[li], &items);
+        for (int i = 0; i < n && !pick; i++)
+            if (void* c = listItem(items, i)) {
+                pick = c;
+                _snprintf_s(how, _TRUNCATE, "item %d of %s", i, kCollectionLists[li].name);
+            }
+    }
+    if (!pick && g_lastCollection) {
+        pick = g_lastCollection;
+        _snprintf_s(how, _TRUNCATE, "the last one seen (no list has items)");
+    }
+    if (!pick) {
+        // nothing to fill it with: the map starts as before (the first map after the game starts loads fine)
+        logf("gamectl: the menu has no environment collection selected (menus+0x288 empty; grid %d, menus' list %d "
+             "items), none to set: starting the map as it is", counts[0], counts[1]);
+        return true;
+    }
+    __try {
+        *reinterpret_cast<void**>(static_cast<char*>(menus) + kMenusCollection) = pick;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return true;
+    }
+    logf("gamectl: the menu had no environment collection selected (menus+0x288 empty; grid %d, menus' list %d items): "
+         "set to %p, %s", counts[0], counts[1], pick, how);
+    return true;
+}
+
 bool setMenuToPlay(void* app, void* menus, void* info) {
+    if (!ensureCollection(menus)) return false;
     __try {
         char* m = static_cast<char*>(menus);
         *reinterpret_cast<void**>(m + g_spec->menusSelected) = info;
@@ -731,11 +808,13 @@ void cleanupCopies(int keep) {
     qsort(names, n, sizeof(names[0]), [](const void* a, const void* b) {
         return wcscmp(static_cast<const wchar_t*>(a), static_cast<const wchar_t*>(b));
     });
+    int removed = 0;
     for (int i = 0; i < n - keep; i++) {
         wchar_t full[MAX_PATH];
         swprintf_s(full, L"%s%s", dir, names[i]);
-        if (_wcsicmp(full, g_lastPath) != 0) DeleteFileW(full);
+        if (_wcsicmp(full, g_lastPath) != 0 && DeleteFileW(full)) removed++;
     }
+    if (removed > 0) logf("gamectl: removed %d old map copies from %ls", removed, dir);
 }
 
 } // namespace gamectl

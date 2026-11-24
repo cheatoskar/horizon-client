@@ -716,6 +716,8 @@ static void testBridgeLogic() {
     CHECK(bridge::eventsPath(false, -1, true) == "/v1/client/events?caps=play_map");
     CHECK(bridge::eventsPath(true, 12, true) == "/v1/client/events?since=12&wait=20&caps=play_map");
     CHECK(bridge::eventsPath(true, 12, false) == "/v1/client/events?since=12&wait=20" && bridge::eventsPath(false, 0, false) == "/v1/client/events");
+    CHECK(bridge::eventsPath(true, 12, true, 4242) == "/v1/client/events?since=12&wait=20&caps=play_map&pid=4242");
+    CHECK(bridge::eventsPath(false, -1, true, 7) == "/v1/client/events?caps=play_map&pid=7" && bridge::eventsPath(true, 1, false, 7) == "/v1/client/events?since=1&wait=20");
     // map paths: relative to Tracks, '/' or '\', .Challenge.Gbx in any case
     CHECK(bridge::mapRelPath("Challenges/Downloaded/12345.Challenge.Gbx") == "Challenges\\Downloaded\\12345.Challenge.Gbx");
     CHECK(bridge::mapRelPath("Challenges\\Downloaded\\A01 Race (1).challenge.gbx") == "Challenges\\Downloaded\\A01 Race (1).challenge.gbx");

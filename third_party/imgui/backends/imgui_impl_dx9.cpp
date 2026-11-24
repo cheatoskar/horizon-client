@@ -366,7 +366,9 @@ static bool ImGui_ImplDX9_CreateFontsTexture()
 
     // Upload texture to graphics system
     bd->FontTexture = nullptr;
-    if (bd->pd3dDevice->CreateTexture(width, height, 1, D3DUSAGE_DYNAMIC, rgba_support ? D3DFMT_A8B8G8R8 : D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &bd->FontTexture, nullptr) < 0)
+    // Horizon Client: managed pool, not D3DUSAGE_DYNAMIC + D3DPOOL_DEFAULT. Under dgVoodoo (TM Original) the dynamic
+    // font texture showed game textures after a map load while the menu was open; the host's managed icons did not.
+    if (bd->pd3dDevice->CreateTexture(width, height, 1, 0, rgba_support ? D3DFMT_A8B8G8R8 : D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &bd->FontTexture, nullptr) < 0)
         return false;
     D3DLOCKED_RECT tex_locked_rect;
     if (bd->FontTexture->LockRect(0, &tex_locked_rect, nullptr, 0) != D3D_OK)

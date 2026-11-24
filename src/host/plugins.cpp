@@ -375,7 +375,7 @@ void HORIZON_CALL apiSetHostFlag(HorizonPluginHandle h, uint32_t flag, int32_t o
     p->hostFlags = on ? (p->hostFlags | flag) : (p->hostFlags & ~flag);
     if (before != p->hostFlags) logLine(HORIZON_LOG_INFO, p->id.c_str(), "host flags 0x%x", p->hostFlags);
 }
-uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll(); }
+uint32_t HORIZON_CALL apiHostFlags() { return hostFlagsAll() | (layoutModeOn() ? HORIZON_HOST_FLAG_LAYOUT : 0u); }
 
 // ---- ABI minor 3: toasts, the TM Horizon bridge
 void HORIZON_CALL apiNotify(HorizonPluginHandle h, const HorizonToast* t) {
@@ -570,6 +570,16 @@ Plugin* findPlugin(const std::string& id) {
 
 size_t pluginCount() { return g_plugins.size(); }
 
+// May this plugin load? Without profile.json always. With one: when it lists the plugin as enabled, or when it
+// does not list it at all and the in-game menu switched it on (settings\host.json, which TM Horizon writes too
+// when you switch a module there). A plugin the profile lists as off stays off.
+static bool profileAllows(const std::string& id) {
+    if (!g_profile.present) return true;
+    if (!g_profile.valid) return false;
+    if (const auto* e = g_profile.find(id)) return e->enabled;
+    return hostSettingInt("plugin." + id + ".enabled", 0) != 0;
+}
+
 void pluginsReadProfile() {
     HostState& s = state();
     const std::wstring profilePath = s.baseFolder + L"profile.json";
@@ -665,7 +675,7 @@ void pluginsLoadAll() {
 
     for (auto& up : g_plugins) {
         Plugin* p = up.get();
-        const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
+        const bool inProfile = profileAllows(p->id);
         // default when the menu never switched it: on, unless plugin.json says enabled_by_default false (only
         // without profile.json), "paired" (on once this game is paired with TM Horizon) or modules.json "defaults"
         // says otherwise. The Autosave plugin checks for the standalone ESWC Autosave itself and pauses.
@@ -753,7 +763,7 @@ void pluginSetEnabled(const std::string& id, bool on) {
     // not loaded this start
     p->wanted = on;
     p->loadQueued = false;
-    const bool inProfile = !g_profile.present || (g_profile.valid && g_profile.find(p->id) && g_profile.find(p->id)->enabled);
+    const bool inProfile = profileAllows(p->id); // the menu switch above already counts
     if (on && !inProfile) {
         p->status = ui::PluginStatus::Off;
         p->statusText = "turn it on in TM Horizon";

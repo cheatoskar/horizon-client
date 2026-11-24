@@ -53,6 +53,7 @@ const Known kKnown[] = {{"TM Vibrant Shaders", 110}, {"CenterSpeed", 111}, {"Twi
 // Saturn set). The other file is the fallback, then the coloured initials.
 // "ui.icons" (0.2.x: 0 Saturn, 1 Distinct) is not read any more.
 std::vector<uint64_t> g_pluginIcons; // made here, released when the style changes
+std::vector<uint64_t> g_hostPictures; // logo and other mods' icons, released when a new device comes
 
 int loadPluginIcons() {
     for (uint64_t t : g_pluginIcons) releaseTexture(t);
@@ -99,20 +100,27 @@ void texturesReloadPluginIcons() {
     HLOG("overlay: plugin icons in the %s style (%d loaded)", hostSettingInt("ui.icon_alt", 0) == 1 ? "Saturn" : "Distinct", n);
 }
 
-// After the overlay is ready on the device (game thread).
+// After the overlay is ready on a device (game thread): at every new device, the pictures of the last one released.
 void texturesLoad() {
+    for (uint64_t t : g_hostPictures) releaseTexture(t);
+    g_hostPictures.clear();
     int w = 0, h = 0;
     const uint64_t wordmark = fromResource(101, &w, &h);
     const float aspect = h > 0 ? static_cast<float>(w) / static_cast<float>(h) : 1.0f;
     int mw = 0, mh = 0;
     const uint64_t mark = fromResource(102, &mw, &mh);
     ui::setLogo(wordmark, aspect, mark);
+    for (uint64_t t : {wordmark, mark})
+        if (t) g_hostPictures.push_back(t);
     const int icons = loadPluginIcons();
     for (const auto& o : state().otherMods) {
         for (const auto& k : kKnown) {
             if (o.name != k.name) continue;
             int iw = 0, ih = 0;
-            if (const uint64_t t = fromResource(k.resource, &iw, &ih)) ui::setIcon("other:" + o.name, t);
+            if (const uint64_t t = fromResource(k.resource, &iw, &ih)) {
+                ui::setIcon("other:" + o.name, t);
+                g_hostPictures.push_back(t);
+            }
         }
     }
     HLOG("overlay: logo %s, %d plugin icon(s)", wordmark ? "loaded" : "NOT loaded", icons);

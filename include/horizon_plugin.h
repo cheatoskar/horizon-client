@@ -154,6 +154,8 @@ typedef struct HorizonPanelDef {
 /* Host flags (HorizonHostApi.set_host_flag / host_flags) */
 #define HORIZON_HOST_FLAG_CAPTURE 0x01u /* a photo or video is being taken (set by e.g. TMVS): windows with
                                            "Hide in photos and videos" and the Horizon bar are hidden */
+#define HORIZON_HOST_FLAG_LAYOUT 0x100u /* read only, set by the host (0.3.3+): layout mode is on (Ctrl+Insert).
+                                           A plugin with windows of its own makes them movable then. */
 
 /* ------------------------------------------------------------------ toasts (ABI minor 3) ------- */
 /* A toast is a short note in the corner of the screen ("Upload finished", "Map saved"). The host draws

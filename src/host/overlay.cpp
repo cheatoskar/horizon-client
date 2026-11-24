@@ -516,6 +516,31 @@ bool mouseAtTop() {
     return p.y <= 2 && p.y >= -2 && p.x >= 0 && p.x < rc.right;
 }
 
+// States Dear ImGui's DX9 backend does not set, so the game's values stayed in force for the menu. TM Original left
+// texture coordinate generation / a texture transform set while it loaded a map (the intro camera), and the menu read
+// its font texture at wrong coordinates: see-through panels and stretched glyph strokes. Set here; the caller keeps
+// the game's values in a state block and puts them back after the menu is drawn.
+void cleanStates(IDirect3DDevice9* dev) {
+    dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+    dev->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+    dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    dev->SetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, 0);
+    dev->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 0);
+    dev->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+    for (DWORD st = 1; st < 8; st++) {
+        dev->SetTextureStageState(st, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        dev->SetTextureStageState(st, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        dev->SetTexture(st, nullptr);
+    }
+    dev->SetRenderState(D3DRS_WRAP0, 0);
+    dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    dev->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    dev->SetRenderState(D3DRS_TEXTUREFACTOR, 0xFFFFFFFF);
+}
+
 void render(IDirect3DDevice9* dev) {
     ImDrawData* dd = ImGui::GetDrawData();
     if (!dd || dd->CmdListsCount == 0) return;
@@ -525,9 +550,16 @@ void render(IDirect3DDevice9* dev) {
     if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) && SUCCEEDED(dev->GetRenderTarget(0, &oldRt))) {
         if (oldRt != back) switched = SUCCEEDED(dev->SetRenderTarget(0, back));
     }
+    IDirect3DStateBlock9* game = nullptr; // the game's states, back after the menu (its own state cache trusts them)
+    if (FAILED(dev->CreateStateBlock(D3DSBT_ALL, &game))) game = nullptr;
     if (SUCCEEDED(dev->BeginScene())) {
+        cleanStates(dev);
         ImGui_ImplDX9_RenderDrawData(dd);
         dev->EndScene();
+    }
+    if (game) {
+        game->Apply();
+        game->Release();
     }
     if (switched) dev->SetRenderTarget(0, oldRt);
     if (oldRt) oldRt->Release();
@@ -739,11 +771,12 @@ void overlayDeviceCreated(void* device, HWND window, void* params) {
     }
     g_backends = ImGui_ImplDX9_Init(dev);
     g_lost = false;
-    static bool s_textures = false;
-    if (!s_textures) {
-        s_textures = true;
-        texturesLoad();
-    }
+    // The menu's pictures belong to the device they were made on. Sunrise (Win10 repack, with its d3d9.dll proxy)
+    // makes a second device 0.1 s after the first; pictures of the first one made the menu draw nothing there and
+    // kept the input held back, so the game looked frozen until the menu was closed again.
+    static int s_devices = 0;
+    if (s_devices++ > 0) HLOG("overlay: a new device: the menu's pictures are made again on it");
+    texturesLoad();
 }
 
 void overlayBeforeReset() {

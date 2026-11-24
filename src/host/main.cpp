@@ -106,6 +106,9 @@ int start(LoaderKind loader, bool safeMode, const char* safeWhy) {
     s.info.safe_mode = safeMode ? 1u : 0u;
 
     gamectl::init(&gamectlLog, false);
+    // Copies made by playMapFile (Legacy Randomizer, TMX Browser) are only needed while their map runs. Nothing
+    // removed them before 0.3.3, so every played map stayed in the game's track list and in every rescan.
+    gamectl::cleanupCopies(0);
     hostConfigLoad();
     pluginsReadProfile();
     if (s.safeMode) HLOG("safe mode: %s", s.safeWhy.c_str());

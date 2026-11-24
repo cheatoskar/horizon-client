@@ -157,11 +157,14 @@ constexpr long long kPlayMapMaxAgeMs = 120000; // older requests (e.g. after a r
 // Games whose host advertises and runs play_map: ESWC, Sunrise and Original (gamectl). Forever is never driven from here.
 inline bool playMapGame(uint32_t game) { return game == 0x01u || game == 0x02u || game == 0x04u; }
 
-// The long-poll path: the first call (no cursor) and the cursor calls, with the capability flag when set.
-inline std::string eventsPath(bool haveCursor, long long last, bool playMap) {
+// The long-poll path: the first call (no cursor) and the cursor calls, with the capability flag when set. With
+// play_map the game's process id goes along (pid): TM Horizon calls AllowSetForegroundWindow(pid) before it sends a
+// map, so the game may bring its window to the front (Windows' foreground lock).
+inline std::string eventsPath(bool haveCursor, long long last, bool playMap, unsigned long pid = 0) {
     std::string p = "/v1/client/events";
     if (haveCursor) p += "?since=" + std::to_string(last) + "&wait=20";
     if (playMap) p += std::string(haveCursor ? "&" : "?") + "caps=" + kCaps;
+    if (playMap && pid) p += "&pid=" + std::to_string(pid);
     return p;
 }
 

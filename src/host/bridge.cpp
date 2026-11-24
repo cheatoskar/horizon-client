@@ -60,6 +60,10 @@ struct PlayRequest {
     std::string title, rel; // rel: checked, relative to GameData\Tracks, backslashes
 };
 std::deque<PlayRequest> g_play; // under g_lock; only the newest is kept
+// Game thread: a map from TM Horizon that arrived during a solo race waits here while the race is left.
+PlayRequest g_afterRace;
+DWORD g_afterRaceUntil = 0; // GetTickCount deadline, 0 = nothing waits
+constexpr DWORD kAfterRaceMs = 15000;
 
 long long nowEpochMs() {
     FILETIME ft;
@@ -105,8 +109,28 @@ void onPlayMap(const bridge::Event& e) {
     g_play.push_back(PlayRequest{e.id, title, rel});
 }
 
-// Game thread: the queued play_map, same rules as play_map_file (main menu, not online).
-void runPlayMap(const PlayRequest& r) {
+// Game thread: Play in TM Horizon means "I want to play this now": the game window comes to the front (restored
+// when minimized). Windows only lets it take the focus because TM Horizon called AllowSetForegroundWindow with this
+// process id (sent as pid with the event poll) right before it sent the map; otherwise the taskbar button flashes.
+void bringGameToFront() {
+    HWND w = overlayWindow();
+    if (!w || !IsWindow(w)) return;
+    if (IsIconic(w)) ShowWindow(w, SW_RESTORE);
+    if (GetForegroundWindow() == w) return;
+    const BOOL ok = SetForegroundWindow(w);
+    if (ok) {
+        BringWindowToTop(w);
+    } else {
+        FLASHWINFO f = {sizeof(f), w, FLASHW_TRAY | FLASHW_TIMERNOFG, 3, 0};
+        FlashWindowEx(&f);
+    }
+    logLine(HORIZON_LOG_INFO, "host", "bridge: game window to the front: %s", ok ? "yes" : "refused by Windows (taskbar flashes)");
+}
+
+// Game thread: the queued play_map, same rules as play_map_file (main menu, not online). In a solo race the race is
+// left first (like Esc > Quit) and the map starts once the main menu is back: Play in TM Horizon means "play this
+// map now". `retry`: the attempt after leaving the race.
+void runPlayMap(const PlayRequest& r, bool retry = false) {
     const char* why = nullptr;
     HorizonResult res = HORIZON_ERR_FAILED;
     const std::wstring root = state().game.exeFolder + L"GameData\\Tracks\\";
@@ -124,6 +148,17 @@ void runPlayMap(const PlayRequest& r) {
         why = "Leave the online game first.";
     } else {
         res = game().playMapFile(utf8(full).c_str(), 0);
+        const HorizonGameState gs = game().gameState();
+        if (res == HORIZON_ERR_WRONG_STATE && !retry && (gs == HORIZON_STATE_SOLO_RACE || gs == HORIZON_STATE_END_RACE) &&
+            game().returnToMenu() == HORIZON_OK) {
+            g_afterRace = r;
+            g_afterRaceUntil = GetTickCount() + kAfterRaceMs;
+            if (!g_afterRaceUntil) g_afterRaceUntil = 1;
+            logLine(HORIZON_LOG_INFO, "host", "bridge: play_map %lld: leaving the race first", r.id);
+            toastPlay(HORIZON_TOAST_INFO, r.title, "Leaving the race, then loading the map.");
+            bringGameToFront();
+            return;
+        }
         if (res == HORIZON_ERR_WRONG_STATE) why = "Go to the main menu first.";
         else if (res == HORIZON_ERR_BLOCKED_ONLINE) why = "Leave the online game first.";
         else if (res == HORIZON_ERR_NOT_SUPPORTED) why = "Not supported in this game.";
@@ -133,6 +168,7 @@ void runPlayMap(const PlayRequest& r) {
             why ? ", " : "", why ? why : "");
     if (why) toastPlay(HORIZON_TOAST_WARN, r.title, why);
     else toastPlay(HORIZON_TOAST_OK, r.title, "Loading map.");
+    if (!why && !retry) bringGameToFront(); // after leaving a race it came to the front already
 }
 
 std::string currentKey() {
@@ -263,7 +299,7 @@ void controlLoop() {
             announced = true;
             logLine(HORIZON_LOG_INFO, "host", "bridge: connected");
         }
-        const std::string path = bridge::eventsPath(haveCursor, last, g_playMap);
+        const std::string path = bridge::eventsPath(haveCursor, last, g_playMap, GetCurrentProcessId());
         const bridge::HttpAnswer a = call(g_port, "GET", path, key, "", 30000, true);
         if (g_stop) break;
         if (a.status == 401) {
@@ -475,7 +511,15 @@ void bridgeDeliver() {
         }
     }
     if (persist) hostSetSetting("bridge.key", key);
+    if (!play.empty()) g_afterRaceUntil = 0; // a newer map replaces one waiting for the race to end
     for (const PlayRequest& r : play) runPlayMap(r);
+    if (g_afterRaceUntil) {
+        const bool late = static_cast<LONG>(GetTickCount() - g_afterRaceUntil) >= 0;
+        if (late || game().gameState() == HORIZON_STATE_MAIN_MENU) {
+            g_afterRaceUntil = 0;
+            runPlayMap(g_afterRace, true);
+        }
+    }
     for (Job& j : done) {
         Plugin* p = j.plugin;
         if (!p || !p->running) continue;

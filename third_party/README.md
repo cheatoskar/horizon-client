@@ -2,7 +2,7 @@
 
 | Folder | What | Version | Licence |
 |---|---|---|---|
-| `imgui/` | Dear ImGui core + `backends/imgui_impl_dx9`, `imgui_impl_win32` | 1.91.5 (same as TM Vibrant Shaders) | MIT, `imgui/LICENSE.txt` |
+| `imgui/` | Dear ImGui core + `backends/imgui_impl_dx9`, `imgui_impl_win32`. One change in `imgui_impl_dx9.cpp`: the font texture is made in the managed pool (see the comment there) | 1.91.5 (same as TM Vibrant Shaders) | MIT, `imgui/LICENSE.txt` |
 | `lucide/` | Lucide icon subset (`assets/lucide-subset.ttf`, built by `tools/make_icon_font.py` from lucide-static 1.62.0) | 1.62.0 | ISC, `lucide/LICENSE` (a few icons derived from Feather: MIT, same file) |
 | `stb/` | `stb_image.h` (PNG only) for the logo and icons | 2.30 | public domain or MIT (licence at the end of the file) |
 | `angelscript/` | AngelScript library (`include/`, `source/`) and the add-ons `scriptarray`, `scriptbuilder`, `scriptstdstring` (+ `_utils`), `scriptmath` (without `scriptmathcomplex`), for the Horizon Scripts plugin (`plugins/scripts`). Not edited. | 2.38.0 | zlib, `angelscript/LICENSE.txt` |
